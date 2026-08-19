@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"math/rand"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -11,12 +12,18 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	RequestPath  string
-	Retry        *int
-	resetNextTry bool
+	Ctx                 *gin.Context
+	TokenGroup          string
+	ModelName           string
+	RequestPath         string
+	Retry               *int
+	resetNextTry        bool
+	AttemptedChannelIDs map[int]struct{}
+	OpencodePool        bool
+	// OpencodeIncludeRPMFull is used by the distributor's initial selection so
+	// requests can reach the relay queue when all eligible channels are busy.
+	OpencodeIncludeRPMFull bool
+	OpencodeRPMReserved    bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -80,11 +87,86 @@ func (p *RetryParam) ResetRetryNextTry() {
 //
 //	Retry=3: GroupB, priority1 (startRetryIndex=2, priorityRetry=1)
 //	         分组B, 优先级1
+func selectWeightedOpencodeCandidate(candidates []*model.Channel) *model.Channel {
+	if len(candidates) == 0 {
+		return nil
+	}
+	highestPriority := candidates[0].GetPriority()
+	for _, candidate := range candidates[1:] {
+		if candidate.GetPriority() > highestPriority {
+			highestPriority = candidate.GetPriority()
+		}
+	}
+	priorityCandidates := make([]*model.Channel, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.GetPriority() == highestPriority {
+			priorityCandidates = append(priorityCandidates, candidate)
+		}
+	}
+	if len(priorityCandidates) == 1 {
+		return priorityCandidates[0]
+	}
+	totalWeight := 0
+	for _, candidate := range priorityCandidates {
+		if weight := candidate.GetWeight(); weight > 0 {
+			totalWeight += weight
+		}
+	}
+	if totalWeight == 0 {
+		return priorityCandidates[rand.Intn(len(priorityCandidates))]
+	}
+	randomWeight := rand.Intn(totalWeight)
+	for _, candidate := range priorityCandidates {
+		weight := candidate.GetWeight()
+		if weight <= 0 {
+			continue
+		}
+		randomWeight -= weight
+		if randomWeight < 0 {
+			return candidate
+		}
+	}
+	return priorityCandidates[len(priorityCandidates)-1]
+}
 func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, error) {
 	var channel *model.Channel
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+
+	if param.OpencodePool {
+		groups := []string{param.TokenGroup}
+		if param.TokenGroup == "auto" {
+			if group := common.GetContextKeyString(param.Ctx, constant.ContextKeyAutoGroup); group != "" {
+				groups = []string{group}
+			} else {
+				groups = GetRequestAutoGroups(param.Ctx, userGroup)
+			}
+			if len(groups) == 0 {
+				return nil, "", nil
+			}
+		}
+
+		for _, group := range groups {
+			var candidates []*model.Channel
+			if param.OpencodeIncludeRPMFull {
+				candidates, err = model.GetOpencodeQuotaCandidates(group, param.ModelName, param.AttemptedChannelIDs)
+			} else {
+				candidates, err = model.GetOpencodeCandidates(group, param.ModelName, param.AttemptedChannelIDs)
+			}
+			if err != nil {
+				return nil, group, err
+			}
+			if len(candidates) == 0 {
+				continue
+			}
+			if param.TokenGroup == "auto" {
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
+			}
+			return selectWeightedOpencodeCandidate(candidates), group, nil
+		}
+		return nil, groups[0], nil
+	}
 
 	if param.TokenGroup == "auto" {
 		autoGroups := GetRequestAutoGroups(param.Ctx, userGroup)

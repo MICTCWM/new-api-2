@@ -1,0 +1,95 @@
+package opencode
+
+import (
+	"errors"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+
+	"github.com/gin-gonic/gin"
+)
+
+const (
+	CanonicalURL = "https://opencode.ai/zen/go/v1/chat/completions"
+	Model        = "deepseek-v4-flash"
+)
+
+var ModelList = []string{Model}
+
+var ChannelName = "opencode"
+
+type Adaptor struct {
+	openai.Adaptor
+}
+
+func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if info == nil || info.RelayMode != relayconstant.RelayModeChatCompletions {
+		return "", types.NewError(errors.New("opencode channel: only chat completions is supported"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	return CanonicalURL, nil
+}
+
+func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *relaycommon.RelayInfo) error {
+	channel.SetupApiRequestHeader(info, c, header)
+	if strings.TrimSpace(info.ApiKey) == "" {
+		return types.NewError(errors.New("opencode channel: API key is required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if !strings.EqualFold(header.Get("Authorization"), "Bearer "+strings.TrimSpace(info.ApiKey)) {
+		header.Set("Authorization", "Bearer "+strings.TrimSpace(info.ApiKey))
+	}
+	header.Set("Content-Type", "application/json")
+	if info.IsStream {
+		header.Set("Accept", "text/event-stream")
+	} else {
+		header.Set("Accept", "application/json")
+	}
+	return nil
+}
+
+func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
+	if request == nil {
+		return nil, types.NewError(errors.New("opencode channel: request is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if request.Model != "" && request.Model != Model {
+		return nil, types.NewError(errors.New("opencode channel: unsupported model"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	request.Model = Model
+	return a.Adaptor.ConvertOpenAIRequest(c, info, request)
+}
+
+func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
+	return nil, types.NewError(errors.New("opencode channel: /v1/messages is not supported"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+}
+
+func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
+	return nil, types.NewError(errors.New("opencode channel: Gemini endpoint is not supported"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+}
+
+func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
+	return nil, types.NewError(errors.New("opencode channel: audio endpoint is not supported"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+}
+
+func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
+	return nil, types.NewError(errors.New("opencode channel: image endpoint is not supported"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+}
+
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	return channel.DoApiRequest(a, c, info, requestBody)
+}
+
+func (a *Adaptor) GetModelList() []string {
+	return ModelList
+}
+
+func (a *Adaptor) GetChannelName() string {
+	return ChannelName
+}
+
+var _ channel.Adaptor = (*Adaptor)(nil)

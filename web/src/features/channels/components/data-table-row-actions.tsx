@@ -36,6 +36,7 @@ import {
 } from 'lucide-react'
 import { useContext, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -59,7 +60,8 @@ import {
 } from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { MODEL_FETCHABLE_TYPES } from '../constants'
+import { resetOpencodeUsage } from '../api'
+import { CHANNEL_TYPE_OPENCODE, MODEL_FETCHABLE_TYPES } from '../constants'
 import {
   channelsQueryKeys,
   handleDeleteChannel,
@@ -85,8 +87,10 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const queryClient = useQueryClient()
   const currentUser = useAuthStore((s) => s.auth.user)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [resetUsageConfirmOpen, setResetUsageConfirmOpen] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
+  const [isResettingUsage, setIsResettingUsage] = useState(false)
 
   const isEnabled = isChannelEnabled(channel)
   const isMultiKey = isMultiKeyChannel(channel)
@@ -94,6 +98,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     currentUser,
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+  )
+  const canOperate = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.OPERATE
   )
 
   const handleEdit = () => {
@@ -152,6 +161,24 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       await handleToggleChannelStatus(channel.id, channel.status, queryClient)
     } finally {
       setIsTogglingStatus(false)
+    }
+  }
+
+  const handleResetOpencodeUsage = async () => {
+    if (!canOperate) return
+    setIsResettingUsage(true)
+    try {
+      const response = await resetOpencodeUsage()
+      if (response.success) {
+        toast.success(t('OpenCode quotas reset'))
+        await queryClient.invalidateQueries({ queryKey: ['opencode-usage'] })
+      } else {
+        toast.error(response.message || t('Failed to reset OpenCode quotas'))
+      }
+    } catch {
+      toast.error(t('Failed to reset OpenCode quotas'))
+    } finally {
+      setIsResettingUsage(false)
     }
   }
 
@@ -364,6 +391,25 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
           <DropdownMenuSeparator />
 
+          {channel.type === CHANNEL_TYPE_OPENCODE && (
+            <DropdownMenuItem
+              disabled={!canOperate || isResettingUsage}
+              onSelect={(event) => {
+                event.preventDefault()
+                if (canOperate) setResetUsageConfirmOpen(true)
+              }}
+            >
+              {t('Reset all OpenCode channel quotas')}
+              <DropdownMenuShortcut>
+                {isResettingUsage ? (
+                  <Loader2 className='size-4 animate-spin' />
+                ) : (
+                  <RefreshCw size={16} />
+                )}
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
+
           {/* Delete */}
           <DropdownMenuItem
             disabled={!canEditSensitive}
@@ -381,6 +427,21 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <ConfirmDialog
+        open={resetUsageConfirmOpen}
+        onOpenChange={setResetUsageConfirmOpen}
+        title={t('Reset all OpenCode channel quotas?')}
+        desc={t(
+          'This clears the 5-hour, weekly, monthly, idle, and busy allowances for every OpenCode channel.'
+        )}
+        confirmText={t('Reset')}
+        destructive
+        handleConfirm={() => {
+          setResetUsageConfirmOpen(false)
+          void handleResetOpencodeUsage()
+        }}
+      />
 
       <ConfirmDialog
         open={deleteConfirmOpen}

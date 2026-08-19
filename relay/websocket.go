@@ -15,7 +15,7 @@ import (
 func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 
-	adaptor := GetAdaptor(info.ApiType)
+	adaptor := GetAdaptorForChannel(info.ApiType, info.ChannelType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}

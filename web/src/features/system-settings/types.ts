@@ -339,6 +339,7 @@ export type OperationsSettings = {
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean
+  OpencodeRPMLimit: number
   QuotaRemindThreshold: string
   SMTPServer: string
   SMTPPort: string

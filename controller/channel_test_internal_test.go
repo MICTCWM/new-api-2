@@ -95,6 +95,29 @@ func TestNewAPIChannelRegistration(t *testing.T) {
 	assert.Empty(t, constant.ChannelBaseURLs[constant.ChannelTypeNewAPI])
 }
 
+func TestValidateOpencodeChannelNormalizesFixedConfiguration(t *testing.T) {
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeOpencode,
+		Key:    "opencode-key",
+		Models: "",
+	}
+
+	require.NoError(t, validateChannel(channel, true))
+	assert.Equal(t, "deepseek-v4-flash", channel.Models)
+	require.NotNil(t, channel.BaseURL)
+	assert.Equal(t, "https://opencode.ai/zen/go/v1/chat/completions", *channel.BaseURL)
+}
+
+func TestValidateOpencodeUpdateAllowsExistingKeyOmission(t *testing.T) {
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeOpencode,
+		Models: "deepseek-v4-flash",
+	}
+
+	require.NoError(t, validateChannel(channel, false))
+	require.NotNil(t, channel.BaseURL)
+	assert.Equal(t, "deepseek-v4-flash", channel.Models)
+}
 func TestResponsesCompactChannelSupport(t *testing.T) {
 	tests := []struct {
 		name        string

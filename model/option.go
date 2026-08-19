@@ -167,6 +167,7 @@ func InitOptionMap() {
 	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(setting.CheckSensitiveEnabled)
 	common.OptionMap["DemoSiteEnabled"] = strconv.FormatBool(operation_setting.DemoSiteEnabled)
 	common.OptionMap["SelfUseModeEnabled"] = strconv.FormatBool(operation_setting.SelfUseModeEnabled)
+	common.OptionMap[operation_setting.OpencodeRPMLimitOptionKey] = strconv.Itoa(operation_setting.GetOpencodeRPMLimit())
 	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.ModelRequestRateLimitEnabled)
 	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
 	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
@@ -211,6 +212,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
+	}
+	if key == operation_setting.OpencodeRPMLimitOptionKey {
+		return operation_setting.ValidateOpencodeRPMLimit(value)
 	}
 	return nil
 }
@@ -392,6 +396,8 @@ func updateOptionMap(key string, value string) (err error) {
 		}
 	}
 	switch key {
+	case operation_setting.OpencodeRPMLimitOptionKey:
+		err = operation_setting.SetOpencodeRPMLimit(value)
 	case "EmailDomainWhitelist":
 		common.EmailDomainWhitelist = strings.Split(value, ",")
 	case "SMTPServer":

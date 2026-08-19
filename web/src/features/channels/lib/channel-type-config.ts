@@ -164,6 +164,18 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'Models',
     },
   },
+  61: {
+    id: 61,
+    name: CHANNEL_TYPES[61],
+    icon: 'OpenAI',
+    defaultBaseUrl: 'https://opencode.ai/zen/go/v1/chat/completions',
+    supportedModels: ['deepseek-v4-flash'],
+    hints: {
+      baseUrl: 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions',
+      key: 'Opencode API key',
+      models: 'deepseek-v4-flash',
+    },
+  },
 }
 
 /**

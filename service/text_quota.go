@@ -448,6 +448,25 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
+	if relayInfo.ChannelType == constant.ChannelTypeOpencode {
+		opencodeCost := int64(0)
+		settleAt := time.Now().UTC()
+		pricingPeriod := model.OpencodePricingPeriodAt(settleAt)
+		if billingUsage != nil {
+			calculatedCost, err := model.CalculateOpencodeCostMicroUSD(billingUsage, settleAt)
+			if err != nil {
+				logger.LogError(ctx, "failed to calculate opencode provider usage: "+err.Error())
+			} else {
+				opencodeCost = calculatedCost
+				if err := model.SettleOpencodeCost(relayInfo.ChannelId, opencodeCost, settleAt); err != nil {
+					logger.LogError(ctx, "failed to settle opencode provider usage: "+err.Error())
+				}
+			}
+		}
+		relayInfo.OpencodeUpstreamCostMicroUSD = &opencodeCost
+		relayInfo.OpencodePricingPeriod = &pricingPeriod
+	}
+
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}

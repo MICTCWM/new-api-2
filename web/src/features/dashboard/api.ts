@@ -20,6 +20,7 @@ import { api } from '@/lib/api'
 
 import type {
   FlowQuotaDataItem,
+  OpencodeQueueSnapshot,
   QuotaDataItem,
   UptimeGroupResult,
 } from './types'
@@ -89,5 +90,13 @@ export async function getUptimeStatus() {
   const res = await api.get<{ success: boolean; data: UptimeGroupResult[] }>(
     '/api/uptime/status'
   )
+  return res.data
+}
+
+export async function getOpencodeQueue() {
+  const res = await api.get<{
+    success: boolean
+    data: OpencodeQueueSnapshot
+  }>('/api/opencode/queue')
   return res.data
 }

@@ -1,0 +1,568 @@
+package model
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
+)
+
+const (
+	OpencodeModel                       = "deepseek-v4-flash"
+	OpencodeFiveHourLimitMicroUSD int64 = 12_000_000
+	OpencodeWeekLimitMicroUSD     int64 = 30_000_000
+	OpencodeMonthLimitMicroUSD    int64 = 60_000_000
+	// Each OpenCode channel has independent 30 USD pools for peak and off-peak pricing.
+	OpencodePoolLimitMicroUSD        int64 = 30_000_000
+	OpencodeMinimumRemainingMicroUSD int64 = 200_000
+	OpencodePoolKeyPrefix                  = "opencode"
+	// OpencodeRPMLimit is kept as the default for compatibility with existing callers.
+	// Runtime checks use operation_setting.GetOpencodeRPMLimit().
+	OpencodeRPMLimit = operation_setting.DefaultOpencodeRPMLimit
+)
+
+const (
+	OpencodePricingPeak    = "peak"
+	OpencodePricingOffPeak = "off_peak"
+)
+
+type OpencodeChannelUsage struct {
+	ID             int   `json:"id"`
+	ChannelID      int   `json:"channel_id" gorm:"uniqueIndex"`
+	FiveHourUsed   int64 `json:"five_hour_used"`
+	FiveHourStart  int64 `json:"five_hour_start"`
+	WeekUsed       int64 `json:"week_used"`
+	WeekStart      int64 `json:"week_start"`
+	MonthUsed      int64 `json:"month_used"`
+	MonthStart     int64 `json:"month_start"`
+	RPMWindowStart int64 `json:"rpm_window_start"`
+	RPMCount       int   `json:"rpm_count"`
+}
+
+type OpencodePoolUsage struct {
+	ID        int    `json:"id"`
+	PoolKey   string `json:"pool_key" gorm:"uniqueIndex;size:128"`
+	Used      int64  `json:"used"`
+	ResetTime int64  `json:"reset_time"`
+}
+
+type OpencodeUsageWindow struct {
+	UsedMicroUSD      int64   `json:"used_micro_usd"`
+	LimitMicroUSD     int64   `json:"limit_micro_usd"`
+	RemainingMicroUSD int64   `json:"remaining_micro_usd"`
+	UsedUSD           float64 `json:"used_usd"`
+	LimitUSD          float64 `json:"limit_usd"`
+	RemainingUSD      float64 `json:"remaining_usd"`
+	Percent           float64 `json:"percent"`
+	ResetAt           int64   `json:"reset_at"`
+}
+
+type OpencodeUsageSnapshot struct {
+	ChannelID     int                 `json:"channel_id"`
+	FiveHour      OpencodeUsageWindow `json:"five_hour"`
+	Week          OpencodeUsageWindow `json:"week"`
+	Month         OpencodeUsageWindow `json:"month"`
+	Pool          OpencodeUsageWindow `json:"pool"`
+	PeakPool      OpencodeUsageWindow `json:"peak_pool"`
+	OffPeakPool   OpencodeUsageWindow `json:"off_peak_pool"`
+	PricingPeriod string              `json:"pricing_period"`
+	RPMCount      int                 `json:"rpm_count"`
+	RPMLimit      int                 `json:"rpm_limit"`
+	RPMResetAt    int64               `json:"rpm_reset_at"`
+}
+
+type OpencodeCapacitySnapshot struct {
+	TotalCapacity     int `json:"total_capacity"`
+	AvailableCapacity int `json:"available_capacity"`
+}
+
+func IsOpencodePeak(t time.Time) bool {
+	hour := t.UTC().Hour()
+	return (hour >= 1 && hour < 4) || (hour >= 6 && hour < 10)
+}
+
+func OpencodePricingPeriodAt(t time.Time) string {
+	if IsOpencodePeak(t) {
+		return OpencodePricingPeak
+	}
+	return OpencodePricingOffPeak
+}
+
+func OpencodePoolKeyAt(channelID int, t time.Time) string {
+	return opencodePoolKeyForPeriod(channelID, OpencodePricingPeriodAt(t))
+}
+
+func OpencodePoolKeysForChannel(channelID int) []string {
+	return []string{
+		opencodePoolKeyForPeriod(channelID, OpencodePricingPeak),
+		opencodePoolKeyForPeriod(channelID, OpencodePricingOffPeak),
+	}
+}
+
+func opencodePoolKeyForPeriod(channelID int, pricingPeriod string) string {
+	return fmt.Sprintf("%s:%d:%s", OpencodePoolKeyPrefix, channelID, pricingPeriod)
+}
+
+func GetOpencodeCapacitySnapshot(now int64) (*OpencodeCapacitySnapshot, error) {
+	var channels []*Channel
+	if err := DB.Where("type = ? AND status = ?", constant.ChannelTypeOpencode, common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+
+	limit := operation_setting.GetOpencodeRPMLimit()
+	snapshot := &OpencodeCapacitySnapshot{TotalCapacity: len(channels) * limit}
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		quotaAvailable, err := OpencodeChannelHasQuotaCapacity(channel.Id, now)
+		if err != nil {
+			return nil, err
+		}
+		if !quotaAvailable {
+			continue
+		}
+		usage, err := getOrCreateOpencodeChannelUsage(channel.Id, now)
+		if err != nil {
+			return nil, err
+		}
+		resetOpencodeChannelWindows(usage, now)
+		available := limit - normalizeOpencodeRPM(usage.RPMCount)
+		if available > 0 {
+			snapshot.AvailableCapacity += available
+		}
+	}
+	return snapshot, nil
+}
+
+func OpencodeChannelHasCapacity(channelID int, now int64) (bool, error) {
+	usage, err := getOrCreateOpencodeChannelUsage(channelID, now)
+	if err != nil {
+		return false, err
+	}
+	pool, err := getOrCreateOpencodePoolUsage(channelID, now)
+	if err != nil {
+		return false, err
+	}
+	resetOpencodeChannelWindows(usage, now)
+	return remainingOpencode(usage.FiveHourUsed, OpencodeFiveHourLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
+		remainingOpencode(usage.WeekUsed, OpencodeWeekLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
+		remainingOpencode(usage.MonthUsed, OpencodeMonthLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
+		remainingOpencode(pool.Used, OpencodePoolLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
+		usage.RPMCount < operation_setting.GetOpencodeRPMLimit(), nil
+}
+
+func OpencodeChannelHasQuotaCapacity(channelID int, now int64) (bool, error) {
+	usage, err := getOrCreateOpencodeChannelUsage(channelID, now)
+	if err != nil {
+		return false, err
+	}
+	pool, err := getOrCreateOpencodePoolUsage(channelID, now)
+	if err != nil {
+		return false, err
+	}
+	resetOpencodeChannelWindows(usage, now)
+	return remainingOpencode(usage.FiveHourUsed, OpencodeFiveHourLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
+		remainingOpencode(usage.WeekUsed, OpencodeWeekLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
+		remainingOpencode(usage.MonthUsed, OpencodeMonthLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
+		remainingOpencode(pool.Used, OpencodePoolLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD, nil
+}
+
+func CalculateOpencodeCostMicroUSD(usage *dto.Usage, now time.Time) (int64, error) {
+	if usage == nil {
+		return 0, errors.New("opencode usage is missing")
+	}
+	prompt := int64(maxNonNegative(usage.PromptTokens))
+	completion := int64(maxNonNegative(usage.CompletionTokens))
+	cachedTokens := usage.PromptCacheHitTokens
+	if cachedTokens <= 0 {
+		cachedTokens = usage.PromptTokensDetails.CachedTokens
+	}
+	cached := int64(maxNonNegative(cachedTokens))
+	if cached > prompt {
+		cached = prompt
+	}
+	uncached := prompt - cached
+	inputPrice := decimal.RequireFromString("0.22")
+	outputPrice := decimal.RequireFromString("0.66")
+	cachePrice := decimal.RequireFromString("0.007")
+	if IsOpencodePeak(now) {
+		inputPrice = decimal.RequireFromString("0.44")
+		outputPrice = decimal.RequireFromString("1.32")
+		cachePrice = decimal.RequireFromString("0.014")
+	}
+	// Prices are dollars per million tokens. Converting the resulting dollars to micro-dollars cancels the million-token denominator.
+	costMicroUSD := decimal.NewFromInt(uncached).Mul(inputPrice).
+		Add(decimal.NewFromInt(completion).Mul(outputPrice)).
+		Add(decimal.NewFromInt(cached).Mul(cachePrice))
+	if costMicroUSD.IsNegative() || costMicroUSD.GreaterThan(decimal.NewFromInt(math.MaxInt64)) {
+		return math.MaxInt64, errors.New("opencode usage cost exceeded accounting bounds")
+	}
+	return costMicroUSD.Round(0).IntPart(), nil
+}
+
+func SettleOpencodeUsage(channelID int, usage *dto.Usage, now time.Time) error {
+	if channelID <= 0 || usage == nil {
+		return errors.New("invalid opencode settlement input")
+	}
+	cost, err := CalculateOpencodeCostMicroUSD(usage, now)
+	if err != nil {
+		return err
+	}
+	return SettleOpencodeCost(channelID, cost, now)
+}
+
+// SettleOpencodeCost applies one already-calculated provider charge to the
+// channel windows and the pool for the current pricing period. Keeping
+// calculation outside the mutation lets the request log and quota state use
+// exactly the same peak/off-peak price when a request crosses a UTC boundary.
+func SettleOpencodeCost(channelID int, costMicroUSD int64, now time.Time) error {
+	if channelID <= 0 || costMicroUSD < 0 {
+		return errors.New("invalid opencode settlement input")
+	}
+	if costMicroUSD <= 0 {
+		return nil
+	}
+	ts := now.Unix()
+	return DB.Transaction(func(tx *gorm.DB) error {
+		channelUsage, err := getOrCreateOpencodeChannelUsageTx(tx, channelID, ts)
+		if err != nil {
+			return err
+		}
+		poolUsage, err := getOrCreateOpencodePoolUsageTx(tx, OpencodePoolKeyAt(channelID, now), ts)
+		if err != nil {
+			return err
+		}
+		resetOpencodeChannelWindows(channelUsage, ts)
+		channelUsage.FiveHourUsed = addCapped(channelUsage.FiveHourUsed, costMicroUSD, OpencodeFiveHourLimitMicroUSD)
+		channelUsage.WeekUsed = addCapped(channelUsage.WeekUsed, costMicroUSD, OpencodeWeekLimitMicroUSD)
+		channelUsage.MonthUsed = addCapped(channelUsage.MonthUsed, costMicroUSD, OpencodeMonthLimitMicroUSD)
+		poolUsage.Used = addCapped(poolUsage.Used, costMicroUSD, OpencodePoolLimitMicroUSD)
+		if err := tx.Save(channelUsage).Error; err != nil {
+			return err
+		}
+		return tx.Save(poolUsage).Error
+	})
+}
+
+func GetOpencodeUsageSnapshot(channelID int, now int64) (*OpencodeUsageSnapshot, error) {
+	if channelID <= 0 {
+		return nil, errors.New("invalid channel id")
+	}
+	channelUsage, err := getOrCreateOpencodeChannelUsage(channelID, now)
+	if err != nil {
+		return nil, err
+	}
+	poolUsage, err := getOrCreateOpencodePoolUsage(channelID, now)
+	if err != nil {
+		return nil, err
+	}
+	peakPoolUsage, err := getOrCreateOpencodePoolUsageByKey(opencodePoolKeyForPeriod(channelID, OpencodePricingPeak), now)
+	if err != nil {
+		return nil, err
+	}
+	offPeakPoolUsage, err := getOrCreateOpencodePoolUsageByKey(opencodePoolKeyForPeriod(channelID, OpencodePricingOffPeak), now)
+	if err != nil {
+		return nil, err
+	}
+	resetOpencodeChannelWindows(channelUsage, now)
+	return &OpencodeUsageSnapshot{
+		ChannelID:     channelID,
+		FiveHour:      makeOpencodeWindow(channelUsage.FiveHourUsed, OpencodeFiveHourLimitMicroUSD, channelUsage.FiveHourStart+5*60*60),
+		Week:          makeOpencodeWindow(channelUsage.WeekUsed, OpencodeWeekLimitMicroUSD, channelUsage.WeekStart+7*24*60*60),
+		Month:         makeOpencodeWindow(channelUsage.MonthUsed, OpencodeMonthLimitMicroUSD, channelUsage.MonthStart+30*24*60*60),
+		Pool:          makeOpencodeWindow(poolUsage.Used, OpencodePoolLimitMicroUSD, poolUsage.ResetTime),
+		PeakPool:      makeOpencodeWindow(peakPoolUsage.Used, OpencodePoolLimitMicroUSD, peakPoolUsage.ResetTime),
+		OffPeakPool:   makeOpencodeWindow(offPeakPoolUsage.Used, OpencodePoolLimitMicroUSD, offPeakPoolUsage.ResetTime),
+		PricingPeriod: OpencodePricingPeriodAt(time.Unix(now, 0).UTC()),
+		RPMCount:      normalizeOpencodeRPM(channelUsage.RPMCount),
+		RPMLimit:      operation_setting.GetOpencodeRPMLimit(),
+		RPMResetAt:    channelUsage.RPMWindowStart + 60,
+	}, nil
+}
+
+func ResetAllOpencodeUsage() error {
+	now := time.Now().Unix()
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var channelUsages []OpencodeChannelUsage
+		if err := lockForUpdate(tx).Find(&channelUsages).Error; err != nil {
+			return err
+		}
+		for index := range channelUsages {
+			usage := &channelUsages[index]
+			usage.FiveHourUsed = 0
+			usage.FiveHourStart = now
+			usage.WeekUsed = 0
+			usage.WeekStart = now
+			usage.MonthUsed = 0
+			usage.MonthStart = now
+			usage.RPMCount = 0
+			usage.RPMWindowStart = now
+			if err := tx.Save(usage).Error; err != nil {
+				return err
+			}
+		}
+
+		var pools []OpencodePoolUsage
+		if err := lockForUpdate(tx).Find(&pools).Error; err != nil {
+			return err
+		}
+		for index := range pools {
+			pool := &pools[index]
+			pool.Used = 0
+			pool.ResetTime = now
+			if err := tx.Save(pool).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func ResetOpencodePoolUsage() error {
+	return ResetAllOpencodeUsage()
+}
+
+// EnsureOpencodePoolUsageRows creates both pricing lanes during startup so
+// concurrent settlements can acquire an existing row lock on every database.
+func EnsureOpencodePoolUsageRows() error {
+	now := time.Now().Unix()
+	var channels []Channel
+	if err := DB.Where("type = ?", constant.ChannelTypeOpencode).Find(&channels).Error; err != nil {
+		return err
+	}
+	for _, channel := range channels {
+		for _, poolKey := range OpencodePoolKeysForChannel(channel.Id) {
+			var usage OpencodePoolUsage
+			err := DB.Where("pool_key = ?", poolKey).First(&usage).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if err := DB.Create(&OpencodePoolUsage{PoolKey: poolKey, ResetTime: now}).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func getOrCreateOpencodeChannelUsage(channelID int, now int64) (*OpencodeChannelUsage, error) {
+	var usage OpencodeChannelUsage
+	err := DB.Where("channel_id = ?", channelID).First(&usage).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		usage = OpencodeChannelUsage{ChannelID: channelID, FiveHourStart: now, WeekStart: now, MonthStart: now, RPMWindowStart: now}
+		err = DB.Create(&usage).Error
+	}
+	return &usage, err
+}
+
+func getOrCreateOpencodeChannelUsageTx(tx *gorm.DB, channelID int, now int64) (*OpencodeChannelUsage, error) {
+	var usage OpencodeChannelUsage
+	err := lockForUpdate(tx).Where("channel_id = ?", channelID).First(&usage).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		usage = OpencodeChannelUsage{ChannelID: channelID, FiveHourStart: now, WeekStart: now, MonthStart: now, RPMWindowStart: now}
+		err = tx.Create(&usage).Error
+	}
+	return &usage, err
+}
+
+func getOrCreateOpencodePoolUsage(channelID int, now int64) (*OpencodePoolUsage, error) {
+	return getOrCreateOpencodePoolUsageByKey(OpencodePoolKeyAt(channelID, time.Unix(now, 0).UTC()), now)
+}
+
+func getOrCreateOpencodePoolUsageByKey(poolKey string, now int64) (*OpencodePoolUsage, error) {
+	var usage OpencodePoolUsage
+	err := DB.Where("pool_key = ?", poolKey).First(&usage).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		usage = OpencodePoolUsage{PoolKey: poolKey, ResetTime: now}
+		err = DB.Create(&usage).Error
+	}
+	return &usage, err
+}
+
+func getOrCreateOpencodePoolUsageTx(tx *gorm.DB, poolKey string, now int64) (*OpencodePoolUsage, error) {
+	var usage OpencodePoolUsage
+	err := lockForUpdate(tx).Where("pool_key = ?", poolKey).First(&usage).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		usage = OpencodePoolUsage{PoolKey: poolKey, ResetTime: now}
+		err = tx.Create(&usage).Error
+	}
+	return &usage, err
+}
+
+func resetOpencodeChannelWindows(usage *OpencodeChannelUsage, now int64) {
+	if now-usage.FiveHourStart >= 5*60*60 {
+		usage.FiveHourUsed, usage.FiveHourStart = 0, now
+	}
+	if now-usage.WeekStart >= 7*24*60*60 {
+		usage.WeekUsed, usage.WeekStart = 0, now
+	}
+	if now-usage.MonthStart >= 30*24*60*60 {
+		usage.MonthUsed, usage.MonthStart = 0, now
+	}
+	if now-usage.RPMWindowStart >= 60 {
+		usage.RPMCount, usage.RPMWindowStart = 0, now
+	}
+}
+
+func remainingOpencode(used, limit int64) int64 {
+	if used <= 0 {
+		return limit
+	}
+	if used >= limit {
+		return 0
+	}
+	return limit - used
+}
+
+func addCapped(current, amount, limit int64) int64 {
+	current = minMaxOpencode(current, 0, limit)
+	if amount <= 0 {
+		return current
+	}
+	if current >= limit || amount >= limit-current {
+		return limit
+	}
+	return current + amount
+}
+
+func makeOpencodeWindow(used, limit, resetAt int64) OpencodeUsageWindow {
+	used = minMaxOpencode(used, 0, limit)
+	remaining := remainingOpencode(used, limit)
+	percent := float64(used) * 100 / float64(limit)
+	if percent > 100 {
+		percent = 100
+	}
+	return OpencodeUsageWindow{
+		UsedMicroUSD: used, LimitMicroUSD: limit, RemainingMicroUSD: remaining,
+		UsedUSD: float64(used) / 1_000_000, LimitUSD: float64(limit) / 1_000_000,
+		RemainingUSD: float64(remaining) / 1_000_000, Percent: percent, ResetAt: resetAt,
+	}
+}
+
+func maxNonNegative(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func ReserveOpencodeRPM(channelID int, now int64) (bool, int64, error) {
+	if channelID <= 0 {
+		return false, 0, errors.New("invalid channel id")
+	}
+	var allowed bool
+	var resetAt int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		usage, err := getOrCreateOpencodeChannelUsageTx(tx, channelID, now)
+		if err != nil {
+			return err
+		}
+		resetOpencodeChannelWindows(usage, now)
+		resetAt = usage.RPMWindowStart + 60
+		if usage.RPMCount >= operation_setting.GetOpencodeRPMLimit() {
+			return nil
+		}
+		usage.RPMCount++
+		allowed = true
+		return tx.Save(usage).Error
+	})
+	return allowed, resetAt, err
+}
+
+func ReleaseOpencodeRPM(channelID int, now int64) error {
+	if channelID <= 0 {
+		return errors.New("invalid channel id")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		usage, err := getOrCreateOpencodeChannelUsageTx(tx, channelID, now)
+		if err != nil {
+			return err
+		}
+		wasInWindow := now-usage.RPMWindowStart < 60
+		resetOpencodeChannelWindows(usage, now)
+		if !wasInWindow || usage.RPMCount <= 0 {
+			return nil
+		}
+		usage.RPMCount--
+		return tx.Save(usage).Error
+	})
+}
+
+func normalizeOpencodeRPM(count int) int {
+	return int(minMaxOpencode(int64(count), 0, int64(operation_setting.GetOpencodeRPMLimit())))
+}
+
+func minMaxOpencode(value, minimum, maximum int64) int64 {
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func GetOpencodeCandidates(group, modelName string, attempted map[int]struct{}) ([]*Channel, error) {
+	return getOpencodeCandidates(group, modelName, attempted, true)
+}
+
+func GetOpencodeQuotaCandidates(group, modelName string, attempted map[int]struct{}) ([]*Channel, error) {
+	return getOpencodeCandidates(group, modelName, attempted, false)
+}
+
+func getOpencodeCandidates(group, modelName string, attempted map[int]struct{}, checkRPM bool) ([]*Channel, error) {
+	if modelName != OpencodeModel {
+		return nil, nil
+	}
+	var channels []*Channel
+	query := DB.Table("channels").
+		Select("channels.*").
+		Joins("JOIN abilities ON abilities.channel_id = channels.id").
+		Where("channels.type = ? AND channels.status = ?", constant.ChannelTypeOpencode, common.ChannelStatusEnabled).
+		Where("abilities."+commonGroupCol+" = ? AND abilities.model = ? AND abilities.enabled = ?", group, OpencodeModel, true).
+		Where("channels.models = ?", OpencodeModel)
+	if err := query.Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	available := make([]*Channel, 0, len(channels))
+	now := time.Now().Unix()
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		if _, ok := attempted[channel.Id]; ok {
+			continue
+		}
+		ok, err := OpencodeChannelHasCapacity(channel.Id, now)
+		if !checkRPM {
+			ok, err = OpencodeChannelHasQuotaCapacity(channel.Id, now)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			available = append(available, channel)
+		}
+	}
+	return available, nil
+}
+func ValidateOpencodeChannel(channel *Channel) error {
+	if channel == nil || channel.Type != constant.ChannelTypeOpencode {
+		return fmt.Errorf("not an opencode channel")
+	}
+	if channel.Key == "" || channel.Models != OpencodeModel {
+		return fmt.Errorf("invalid opencode channel configuration")
+	}
+	return nil
+}

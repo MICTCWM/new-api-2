@@ -34,6 +34,7 @@ import type {
   GetChannelsParams,
   GetChannelsResponse,
   MultiKeyManageParams,
+  OpencodeUsageResponse,
   MultiKeyStatusResponse,
   SearchChannelsParams,
   SearchChannelsResponse,
@@ -353,9 +354,27 @@ export async function resetCodexUsage(
   return res.data
 }
 
-// ============================================================================
-// Multi-Key Management
-// ============================================================================
+export async function getOpencodeUsage(
+  channelId: number
+): Promise<OpencodeUsageResponse> {
+  const res = await api.get(
+    `/api/channel/${channelId}/opencode/usage`,
+    channelActionConfig({ disableDuplicate: true })
+  )
+  return res.data
+}
+
+export async function resetOpencodeUsage(): Promise<{
+  success: boolean
+  message?: string
+}> {
+  const res = await api.post(
+    '/api/channel/opencode/usage/reset',
+    {},
+    channelActionConfig()
+  )
+  return res.data
+}
 
 /**
  * Manage multi-key channel operations

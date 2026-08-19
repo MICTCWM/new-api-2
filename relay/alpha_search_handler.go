@@ -68,7 +68,7 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError
 	}
 	defer closer.Close()
 
-	adaptor := GetAdaptor(info.ApiType)
+	adaptor := GetAdaptorForChannel(info.ApiType, info.ChannelType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}

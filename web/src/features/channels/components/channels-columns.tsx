@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 /* eslint-disable react-refresh/only-export-components */
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
 import {
   AlertTriangle,
@@ -55,8 +55,12 @@ import {
 import { formatTimestampToDate } from '@/lib/format'
 import { truncateText } from '@/lib/utils'
 
-import { getCodexUsage } from '../api'
-import { CHANNEL_STATUS_CONFIG, MODEL_FETCHABLE_TYPES } from '../constants'
+import { getCodexUsage, getOpencodeUsage } from '../api'
+import {
+  CHANNEL_STATUS_CONFIG,
+  CHANNEL_TYPE_OPENCODE,
+  MODEL_FETCHABLE_TYPES,
+} from '../constants'
 import {
   formatRelativeTime,
   formatResponseTime,
@@ -325,6 +329,179 @@ const SENSITIVE_MASK = '••••'
 /**
  * Balance cell component with click to update
  */
+function OpencodeUsageCell({ channel }: { channel: Channel }) {
+  const { t } = useTranslation()
+  const { data } = useQuery({
+    queryKey: ['opencode-usage', channel.id],
+    queryFn: () => getOpencodeUsage(channel.id),
+    enabled: channel.type === CHANNEL_TYPE_OPENCODE,
+    refetchInterval: 15_000,
+  })
+  if (channel.type !== CHANNEL_TYPE_OPENCODE || !data?.data) return null
+
+  const usage = data.data
+  const windows = [
+    [t('5 hours'), usage.five_hour],
+    [t('Weekly'), usage.week],
+    [t('Monthly'), usage.month],
+  ] as const
+  const poolWindows = [
+    [t('Idle'), usage.off_peak_pool ?? usage.pool, 'off_peak'],
+    [t('Busy'), usage.peak_pool ?? usage.pool, 'peak'],
+  ] as const
+  return (
+    <div className='flex min-w-52 items-center gap-2'>
+      <div className='min-w-40 flex-1 space-y-1'>
+        {windows.map(([label, window]) => {
+          const percent = Math.min(100, Math.max(0, window.percent))
+          let color = 'bg-green-500'
+          if (percent > 90) {
+            color = 'bg-red-500'
+          } else if (percent >= 50) {
+            color = 'bg-yellow-500'
+          }
+          return (
+            <TooltipProvider key={label}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <div className='flex items-center gap-1 text-[10px]' />
+                  }
+                >
+                  <span className='w-10 truncate'>{label}</span>
+                  <span className='bg-muted h-1.5 flex-1 overflow-hidden rounded-full'>
+                    <span
+                      className={`block h-full ${color}`}
+                      style={{ width: `${percent}%` }}
+                    />
+                  </span>
+                  <span className='w-8 text-right tabular-nums'>
+                    {Math.round(percent)}%
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {window.used_usd.toFixed(4)} / {window.limit_usd.toFixed(2)}{' '}
+                  USD
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )
+        })}
+      </div>
+      <div className='flex h-16 w-16 items-end justify-center gap-2'>
+        {poolWindows.map(([label, window, period]) => {
+          const percent = Math.min(100, Math.max(0, window.percent))
+          let color = 'bg-green-500'
+          if (percent > 90) {
+            color = 'bg-red-500'
+          } else if (percent >= 50) {
+            color = 'bg-yellow-500'
+          }
+          const isCurrent = usage.pricing_period === period
+          return (
+            <TooltipProvider key={period}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <div
+                      className={`flex h-16 w-6 flex-col items-center justify-between text-[9px] ${isCurrent ? 'font-semibold' : 'text-muted-foreground'}`}
+                      role='img'
+                      aria-label={`${label}: ${Math.round(percent)}%`}
+                    />
+                  }
+                >
+                  <span className='truncate'>{label}</span>
+                  <span className='bg-muted flex h-10 w-2 items-end overflow-hidden rounded-full'>
+                    <span
+                      className={`block w-full ${color}`}
+                      style={{ height: `${percent}%` }}
+                    />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {window.used_usd.toFixed(4)} / {window.limit_usd.toFixed(2)}{' '}
+                  USD
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function OpencodeLoadCell({ channel }: { channel: Channel }) {
+  const { t } = useTranslation()
+  const { data } = useQuery({
+    queryKey: ['opencode-usage', channel.id],
+    queryFn: () => getOpencodeUsage(channel.id),
+    enabled: channel.type === CHANNEL_TYPE_OPENCODE,
+    refetchInterval: 15_000,
+  })
+  if (channel.type !== CHANNEL_TYPE_OPENCODE || !data?.data) return null
+  const usage = data.data
+  const count = Math.min(usage.rpm_limit, Math.max(0, usage.rpm_count))
+  const ratio = count / Math.max(1, usage.rpm_limit)
+  let color = 'text-green-500'
+  if (ratio >= 1) {
+    color = 'text-red-500'
+  } else if (ratio >= 0.5) {
+    color = 'text-yellow-500'
+  }
+  const radius = 15
+  const circumference = 2 * Math.PI * radius
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <div
+              className={`relative size-10 ${color}`}
+              role='img'
+              aria-label={t('Opencode load: {{count}} of {{limit}} RPM', {
+                count,
+                limit: usage.rpm_limit,
+              })}
+            />
+          }
+        >
+          <svg className='size-10 -rotate-90' viewBox='0 0 40 40'>
+            <circle
+              cx='20'
+              cy='20'
+              r={radius}
+              fill='none'
+              className='text-muted stroke-current'
+              strokeWidth='4'
+            />
+            <circle
+              cx='20'
+              cy='20'
+              r={radius}
+              fill='none'
+              className='stroke-current transition-all'
+              strokeWidth='4'
+              strokeLinecap='round'
+              strokeDasharray={circumference}
+              strokeDashoffset={circumference * (1 - ratio)}
+            />
+          </svg>
+          <span className='absolute inset-0 flex items-center justify-center text-[10px] font-medium tabular-nums'>
+            {count}/{usage.rpm_limit}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {t('Current load: {{count}} / {{limit}} RPM', {
+            count,
+            limit: usage.rpm_limit,
+          })}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 function BalanceCell({ channel }: { channel: Channel }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
@@ -1092,8 +1269,16 @@ export function useChannelsColumns(
       {
         accessorKey: 'balance',
         header: t('Used / Remaining'),
-        cell: ({ row }) => <BalanceCell channel={row.original} />,
-        size: 180,
+        cell: ({ row }) =>
+          row.original.type === CHANNEL_TYPE_OPENCODE ? (
+            <div className='flex items-center gap-3'>
+              <OpencodeUsageCell channel={row.original} />
+              <OpencodeLoadCell channel={row.original} />
+            </div>
+          ) : (
+            <BalanceCell channel={row.original} />
+          ),
+        size: 300,
       },
 
       // Response Time column

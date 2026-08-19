@@ -58,9 +58,12 @@ const (
 	ChannelTypeAdvancedCustom = 58
 	ChannelTypeSub2API        = 59
 	ChannelTypeNewAPI         = 60
+	ChannelTypeOpencode       = 61
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
+
+const OpencodeUpstreamExhaustedMessage = "上游已超额"
 
 var ChannelBaseURLs = []string{
 	"",                                    // 0
@@ -124,6 +127,7 @@ var ChannelBaseURLs = []string{
 	"",                                          //58
 	"",                                          //59
 	"",                                          //60
+	"https://opencode.ai/zen/go/v1/chat/completions", //61
 }
 
 var ChannelTypeNames = map[int]string{
@@ -184,6 +188,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeAdvancedCustom: "Advanced Custom",
 	ChannelTypeSub2API:        "Sub2API",
 	ChannelTypeNewAPI:         "New API",
+	ChannelTypeOpencode:       "Opencode",
 }
 
 func GetChannelTypeName(channelType int) string {

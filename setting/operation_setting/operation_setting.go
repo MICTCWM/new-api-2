@@ -1,9 +1,48 @@
 package operation_setting
 
-import "strings"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"sync/atomic"
+)
 
 var DemoSiteEnabled = false
 var SelfUseModeEnabled = false
+
+const (
+	OpencodeRPMLimitOptionKey = "OpencodeRPMLimit"
+	DefaultOpencodeRPMLimit   = 3
+	MinOpencodeRPMLimit       = 1
+	MaxOpencodeRPMLimit       = 1000
+)
+
+var opencodeRPMLimit atomic.Int64
+
+func init() {
+	opencodeRPMLimit.Store(DefaultOpencodeRPMLimit)
+}
+
+func GetOpencodeRPMLimit() int {
+	return int(opencodeRPMLimit.Load())
+}
+
+func ValidateOpencodeRPMLimit(value string) error {
+	limit, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || limit < MinOpencodeRPMLimit || limit > MaxOpencodeRPMLimit {
+		return fmt.Errorf("OpenCode RPM must be an integer from %d to %d", MinOpencodeRPMLimit, MaxOpencodeRPMLimit)
+	}
+	return nil
+}
+
+func SetOpencodeRPMLimit(value string) error {
+	if err := ValidateOpencodeRPMLimit(value); err != nil {
+		return err
+	}
+	limit, _ := strconv.Atoi(strings.TrimSpace(value))
+	opencodeRPMLimit.Store(int64(limit))
+	return nil
+}
 
 var AutomaticDisableKeywords = []string{
 	"Your credit balance is too low",

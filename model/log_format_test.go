@@ -15,6 +15,8 @@ func TestFormatUserLogsStripsQuotaSaturation(t *testing.T) {
 	other := common.MapToJsonStr(map[string]interface{}{
 		"model_price": 0.004,
 		"admin_info": map[string]interface{}{
+			"opencode_upstream_cost_usd":       0.000061,
+			"opencode_upstream_cost_micro_usd": 61,
 			"quota_saturation": map[string]interface{}{
 				"op":      "QuotaFromDecimal",
 				"kind":    "overflow",

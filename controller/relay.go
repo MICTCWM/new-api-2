@@ -92,7 +92,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
-			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+			if newAPIError.Error() == constant.OpencodeUpstreamExhaustedMessage {
+				// Keep the public exhaustion message exact; request IDs remain in logs.
+				newAPIError.SetMessage(constant.OpencodeUpstreamExhaustedMessage)
+			} else {
+				newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+			}
+
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
 				helper.WssError(c, ws, newAPIError.ToOpenAIError())
@@ -182,25 +188,71 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
-		Retry:       common.GetPointer(0),
+		Ctx:                 c,
+		TokenGroup:          relayInfo.TokenGroup,
+		ModelName:           relayInfo.OriginModelName,
+		RequestPath:         c.Request.URL.Path,
+		Retry:               common.GetPointer(0),
+		OpencodePool:        common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeOpencode,
+		AttemptedChannelIDs: make(map[int]struct{}),
 	}
-	relayInfo.RetryIndex = 0
+
 	relayInfo.LastError = nil
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+	opencodeAttempts := 0
+	maxAttempts := common.RetryTimes + 1
+	if retryParam.OpencodePool {
+		maxAttempts = 4
+	}
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			retryParam.IncreaseRetry()
+		}
+		if retryParam.OpencodePool && opencodeAttempts >= 4 {
+			newAPIError = types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			break
+		}
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
+
 		if channelErr != nil {
-			logger.LogError(c, channelErr.Error())
-			newAPIError = channelErr
+			if retryParam.OpencodePool {
+				newAPIError = types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			} else {
+				logger.LogError(c, channelErr.Error())
+				newAPIError = channelErr
+			}
 			break
+		}
+
+		rpmReserved := false
+		if channel.Type == constant.ChannelTypeOpencode {
+			retryParam.OpencodePool = true
+			if retryParam.AttemptedChannelIDs == nil {
+				retryParam.AttemptedChannelIDs = make(map[int]struct{})
+			}
+			retryParam.AttemptedChannelIDs[channel.Id] = struct{}{}
+			if retryParam.OpencodeRPMReserved {
+				retryParam.OpencodeRPMReserved = false
+			} else {
+				allowed, _, rpmErr := model.ReserveOpencodeRPM(channel.Id, common.GetTimestamp())
+				if rpmErr != nil {
+					newAPIError = types.NewError(rpmErr, types.ErrorCodeDoRequestFailed)
+					break
+				}
+				if !allowed {
+					newAPIError = types.NewErrorWithStatusCode(errors.New("opencode channel rate limit exceeded"), types.ErrorCodeDoRequestFailed, http.StatusTooManyRequests)
+					continue
+				}
+			}
+			opencodeAttempts++
+			rpmReserved = true
 		}
 		addUsedChannel(c, channel.Id)
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
+			if rpmReserved {
+				releaseOpencodeRPMOnFailure(c, channel.Id)
+			}
 			newAPIError = billingErr
 			break
 		}
@@ -212,6 +264,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
 			} else {
 				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+			if rpmReserved {
+				releaseOpencodeRPMOnFailure(c, channel.Id)
 			}
 			break
 		}
@@ -232,18 +287,26 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			relayInfo.LastError = nil
 			return
 		}
+		if rpmReserved {
+			releaseOpencodeRPMOnFailure(c, channel.Id)
+		}
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		if retryParam.OpencodePool && opencodeAttempts >= 4 {
+			newAPIError = types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			break
+		}
+		if !shouldRetry(c, newAPIError, maxAttempts-attempt-1) {
 			break
 		}
 	}
 
 	useChannel := c.GetStringSlice("use_channel")
+
 	if len(useChannel) > 1 {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
@@ -266,6 +329,13 @@ func addUsedChannel(c *gin.Context, channelId int) {
 	useChannel := c.GetStringSlice("use_channel")
 	useChannel = append(useChannel, fmt.Sprintf("%d", channelId))
 	c.Set("use_channel", useChannel)
+}
+
+func releaseOpencodeRPMOnFailure(c *gin.Context, channelID int) {
+	if err := model.ReleaseOpencodeRPM(channelID, common.GetTimestamp()); err != nil {
+		logger.LogError(c, fmt.Sprintf("failed to release opencode RPM reservation for channel %d: %s", channelID, err.Error()))
+	}
+	service.NotifyOpencodeQueue()
 }
 
 func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
@@ -298,6 +368,23 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+	if retryParam.OpencodePool {
+		channel, _, err := service.WaitForOpencodeChannel(retryParam, info.GetEstimatePromptTokens())
+		if err != nil {
+			return nil, types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
+		if channel == nil {
+			return nil, types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
+		info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+		newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
+		if newAPIError != nil {
+			retryParam.OpencodeRPMReserved = false
+			releaseOpencodeRPMOnFailure(c, channel.Id)
+			return nil, newAPIError
+		}
+		return channel, nil
+	}
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
@@ -313,9 +400,15 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
+		if retryParam.OpencodePool {
+			return nil, types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
+		if retryParam.OpencodePool {
+			return nil, types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 

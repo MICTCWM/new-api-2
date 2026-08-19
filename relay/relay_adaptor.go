@@ -27,6 +27,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/newapi"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
+	"github.com/QuantumNous/new-api/relay/channel/opencode"
 	"github.com/QuantumNous/new-api/relay/channel/palm"
 	"github.com/QuantumNous/new-api/relay/channel/perplexity"
 	"github.com/QuantumNous/new-api/relay/channel/replicate"
@@ -129,8 +130,21 @@ func GetAdaptor(apiType int) channel.Adaptor {
 		return &sub2api.Adaptor{}
 	case constant.APITypeNewAPI:
 		return &newapi.Adaptor{}
+	case constant.APITypeOpencode:
+		return &opencode.Adaptor{}
 	}
 	return nil
+}
+
+// GetAdaptorForChannel prefers the channel-specific adaptor when an API type
+// can otherwise fall back to a compatible adaptor. Opencode owns a canonical
+// endpoint, so selecting it by channel type prevents OpenAI URL composition
+// from appending another relay path.
+func GetAdaptorForChannel(apiType, channelType int) channel.Adaptor {
+	if channelType == constant.ChannelTypeOpencode {
+		return &opencode.Adaptor{}
+	}
+	return GetAdaptor(apiType)
 }
 
 func GetTaskPlatform(c *gin.Context) constant.TaskPlatform {

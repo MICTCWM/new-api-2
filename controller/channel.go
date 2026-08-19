@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
+	"github.com/QuantumNous/new-api/relay/channel/opencode"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
@@ -95,6 +96,38 @@ func GetChannelOps(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{
 		"retry_times": common.RetryTimes,
 	})
+}
+
+func GetOpencodeChannelUsage(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	channel, err := model.GetChannelById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if channel.Type != constant.ChannelTypeOpencode {
+		common.ApiError(c, fmt.Errorf("channel is not opencode"))
+		return
+	}
+	usage, err := model.GetOpencodeUsageSnapshot(id, common.GetTimestamp())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, usage)
+}
+
+func ResetOpencodeUsage(c *gin.Context) {
+	if err := model.ResetAllOpencodeUsage(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "channel.opencode.reset_all_usage", nil)
+	common.ApiSuccess(c, nil)
 }
 
 func GetAllChannels(c *gin.Context) {
@@ -476,6 +509,18 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("channel cannot be empty")
 	}
 
+	if channel.Type == constant.ChannelTypeOpencode {
+		if isAdd && strings.TrimSpace(channel.Key) == "" {
+			return fmt.Errorf("opencode API key cannot be empty")
+		}
+		if channel.Models != "" && strings.TrimSpace(channel.Models) != opencode.Model {
+			return fmt.Errorf("opencode only supports model %s", opencode.Model)
+		}
+		channel.Models = opencode.Model
+		canonicalURL := opencode.CanonicalURL
+		channel.BaseURL = &canonicalURL
+	}
+
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
@@ -630,6 +675,13 @@ func AddChannel(c *gin.Context) {
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
 	case "multi_to_single":
+		if addChannelRequest.Channel.Type == constant.ChannelTypeOpencode {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "opencode requires one channel per API key; use batch mode",
+			})
+			return
+		}
 		addChannelRequest.Channel.ChannelInfo.IsMultiKey = true
 		addChannelRequest.Channel.ChannelInfo.MultiKeyMode = addChannelRequest.MultiKeyMode
 		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
@@ -980,6 +1032,16 @@ func UpdateChannel(c *gin.Context) {
 			"message": err.Error(),
 		})
 		return
+	}
+	if channel.Type == constant.ChannelTypeOpencode && strings.TrimSpace(channel.Key) == "" {
+		if originChannel.Type != constant.ChannelTypeOpencode || strings.TrimSpace(originChannel.Key) == "" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "opencode API key cannot be empty",
+			})
+			return
+		}
+		channel.Key = originChannel.Key
 	}
 	originProxy := originChannel.GetSetting().Proxy
 	proxyChanged := false

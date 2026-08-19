@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
@@ -73,6 +74,25 @@ func TestAttachQuotaSaturationNoClampNoMarker(t *testing.T) {
 
 	_, hasAdmin := other["admin_info"]
 	require.False(t, hasAdmin, "no admin_info should be added when there is no clamp")
+}
+
+func TestGenerateTextOtherInfoRecordsOpencodeUpstreamCostForAdmins(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(nil)
+	cost := int64(61)
+	pricingPeriod := "peak"
+	relayInfo := &relaycommon.RelayInfo{
+		ChannelMeta:                  &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpencode},
+		OpencodeUpstreamCostMicroUSD: &cost,
+		OpencodePricingPeriod:        &pricingPeriod,
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, cost, adminInfo["opencode_upstream_cost_micro_usd"])
+	require.Equal(t, 0.000061, adminInfo["opencode_upstream_cost_usd"])
+	require.Equal(t, pricingPeriod, adminInfo["opencode_pricing_period"])
 }
 
 func TestPreConsumeBillingRejectsSaturatedQuotaBeforeDeduction(t *testing.T) {

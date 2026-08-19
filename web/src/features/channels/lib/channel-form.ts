@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
+  CHANNEL_TYPE_OPENCODE,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_STATUS,
   ERROR_MESSAGES,
@@ -331,6 +332,23 @@ export const channelFormSchema = z
       )
     }
 
+    if (data.type === CHANNEL_TYPE_OPENCODE) {
+      if (data.multi_key_mode === 'multi_to_single') {
+        addRequiredIssue(
+          ctx,
+          'multi_key_mode',
+          'Opencode requires batch mode for multiple API keys'
+        )
+      }
+      if (data.models.trim() !== 'deepseek-v4-flash') {
+        addRequiredIssue(
+          ctx,
+          'models',
+          'Opencode only supports deepseek-v4-flash'
+        )
+      }
+    }
+
     if (data.type === 57) {
       if (data.multi_key_mode && data.multi_key_mode !== 'single') {
         addRequiredIssue(
@@ -487,8 +505,7 @@ export function transformChannelToFormDefaults(
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
-        http2_connection_shards:
-          protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
+        http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
@@ -556,12 +573,18 @@ export function transformChannelToFormDefaults(
     base_url: channel.base_url || '',
     key: '', // Never populate key from backend for security
     openai_organization: channel.openai_organization || '',
-    models: channel.models || '',
+    models:
+      channel.type === CHANNEL_TYPE_OPENCODE
+        ? 'deepseek-v4-flash'
+        : channel.models || '',
+    test_model:
+      channel.type === CHANNEL_TYPE_OPENCODE
+        ? 'deepseek-v4-flash'
+        : channel.test_model || '',
     group: parseGroups(channel.group || 'default'),
     model_mapping: channel.model_mapping || '',
     priority: channel.priority || 0,
     weight: channel.weight || 0,
-    test_model: channel.test_model || '',
     auto_ban: channel.auto_ban ?? 1,
     status: channel.status,
     status_code_mapping: channel.status_code_mapping || '',
@@ -779,10 +802,16 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
   const channel: Partial<Channel> = {
     name: formData.name,
     type: formData.type,
-    base_url: normalizeBaseUrl(formData.base_url) || null,
+    base_url:
+      formData.type === CHANNEL_TYPE_OPENCODE
+        ? 'https://opencode.ai/zen/go/v1/chat/completions'
+        : normalizeBaseUrl(formData.base_url) || null,
     key: formData.key,
     openai_organization: formData.openai_organization || null,
-    models: formData.models,
+    models:
+      formData.type === CHANNEL_TYPE_OPENCODE
+        ? 'deepseek-v4-flash'
+        : formData.models,
     group: formatGroups(formData.group),
     model_mapping: formData.model_mapping || null,
     priority: formData.priority || null,
@@ -828,14 +857,19 @@ export function transformFormDataToUpdatePayload(
     id: channelId,
     name: formData.name,
     type: formData.type,
-    base_url: normalizeBaseUrl(formData.base_url) || null,
+    base_url:
+      formData.type === CHANNEL_TYPE_OPENCODE
+        ? 'https://opencode.ai/zen/go/v1/chat/completions'
+        : normalizeBaseUrl(formData.base_url) || null,
     openai_organization: formData.openai_organization || null,
-    models: formData.models,
-    group: formatGroups(formData.group),
-    model_mapping: formData.model_mapping || null,
-    priority: formData.priority ?? 0,
-    weight: formData.weight ?? 0,
-    test_model: formData.test_model || null,
+    models:
+      formData.type === CHANNEL_TYPE_OPENCODE
+        ? 'deepseek-v4-flash'
+        : formData.models,
+    test_model:
+      formData.type === CHANNEL_TYPE_OPENCODE
+        ? 'deepseek-v4-flash'
+        : formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,

@@ -106,6 +106,18 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		adminInfo["local_count_tokens"] = isLocalCountTokens
 	}
 
+	if relayInfo.OpencodeUpstreamCostMicroUSD != nil {
+		costMicroUSD := *relayInfo.OpencodeUpstreamCostMicroUSD
+		if costMicroUSD < 0 {
+			costMicroUSD = 0
+		}
+		adminInfo["opencode_upstream_cost_usd"] = float64(costMicroUSD) / 1_000_000
+		adminInfo["opencode_upstream_cost_micro_usd"] = costMicroUSD
+	}
+	if relayInfo.OpencodePricingPeriod != nil {
+		adminInfo["opencode_pricing_period"] = *relayInfo.OpencodePricingPeriod
+	}
+
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo

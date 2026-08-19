@@ -26,8 +26,11 @@ import {
   FormControl,
   FormDescription,
   FormField,
+  FormItem,
   FormLabel,
+  FormMessage,
 } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 
 import {
@@ -44,6 +47,7 @@ const behaviorSchema = z.object({
   DefaultCollapseSidebar: z.boolean(),
   DemoSiteEnabled: z.boolean(),
   SelfUseModeEnabled: z.boolean(),
+  OpencodeRPMLimit: z.number().int().min(1).max(1000),
 })
 
 type BehaviorFormValues = z.infer<typeof behaviorSchema>
@@ -58,7 +62,7 @@ export function SystemBehaviorSection({
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
 
-  const form = useForm({
+  const form = useForm<BehaviorFormValues>({
     resolver: zodResolver(behaviorSchema),
     defaultValues,
   })
@@ -143,6 +147,35 @@ export function SystemBehaviorSection({
                   />
                 </FormControl>
               </SettingsSwitchItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='OpencodeRPMLimit'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('OpenCode RPM per channel')}</FormLabel>
+                <FormDescription>
+                  {t('Maximum requests per minute for each OpenCode channel')}
+                </FormDescription>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={1}
+                    max={1000}
+                    step={1}
+                    value={field.value}
+                    onChange={(event) =>
+                      field.onChange(event.target.valueAsNumber)
+                    }
+                    onBlur={field.onBlur}
+                    name={field.name}
+                    ref={field.ref}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
             )}
           />
         </SettingsForm>

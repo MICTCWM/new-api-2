@@ -145,6 +145,37 @@ export type AdvancedCustomAuthType = 'none' | 'header' | 'query'
 // API Response Types
 // ============================================================================
 
+export interface OpencodeUsageWindow {
+  used_micro_usd: number
+  limit_micro_usd: number
+  remaining_micro_usd: number
+  used_usd: number
+  limit_usd: number
+  remaining_usd: number
+  percent: number
+  reset_at: number
+}
+
+export interface OpencodeUsageSnapshot {
+  channel_id: number
+  five_hour: OpencodeUsageWindow
+  week: OpencodeUsageWindow
+  month: OpencodeUsageWindow
+  pool: OpencodeUsageWindow
+  peak_pool: OpencodeUsageWindow
+  off_peak_pool: OpencodeUsageWindow
+  pricing_period: 'peak' | 'off_peak'
+  rpm_count: number
+  rpm_limit: number
+  rpm_reset_at: number
+}
+
+export interface OpencodeUsageResponse {
+  success: boolean
+  message?: string
+  data?: OpencodeUsageSnapshot
+}
+
 export interface GetChannelsResponse {
   success: boolean
   message?: string

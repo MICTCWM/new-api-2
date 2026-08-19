@@ -272,3 +272,21 @@ export interface FAQItem {
   question: string
   answer: string
 }
+
+export interface OpencodeQueueItem {
+  id: string
+  user_id: number
+  username: string
+  model: string
+  input_tokens: number
+  queued_at: number
+  position: number
+}
+
+export interface OpencodeQueueSnapshot {
+  total_capacity: number
+  available_capacity: number
+  queued_count: number
+  estimated_wait_minutes: number
+  items: OpencodeQueueItem[]
+}
