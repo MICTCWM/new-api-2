@@ -874,6 +874,9 @@ export function transformFormDataToUpdatePayload(
       formData.type === CHANNEL_TYPE_OPENCODE
         ? 'deepseek-v4-flash'
         : formData.models,
+    group: formatGroups(formData.group),
+    priority: formData.priority || null,
+    weight: formData.weight || null,
     test_model:
       formData.type === CHANNEL_TYPE_OPENCODE
         ? 'deepseek-v4-flash'

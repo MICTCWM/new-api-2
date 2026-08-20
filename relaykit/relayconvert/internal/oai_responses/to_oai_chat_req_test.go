@@ -416,6 +416,55 @@ func TestResponsesRequestToChatCompletionsRequestRejectsMalformedPenalty(t *test
 	assert.Contains(t, err.Error(), "frequency_penalty")
 }
 
+func TestResponsesRequestToChatCompletionsRequestDropsNonFunctionTools(t *testing.T) {
+	tools := mustRawMessage(t, []map[string]any{
+		{
+			"type":        "function",
+			"name":        "lookup",
+			"description": "Lookup data",
+		},
+		{"type": "namespace", "name": "codex", "parameters": map[string]any{"type": "object"}},
+		{"type": "web_search"},
+	})
+
+	t.Run("keeps only function tools", func(t *testing.T) {
+		got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+			Model:      "gpt-test",
+			Input:      mustRawMessage(t, "hello"),
+			Tools:      tools,
+			ToolChoice: mustRawMessage(t, map[string]any{"type": "function", "name": "codex"}),
+		})
+		require.NoError(t, err)
+
+		require.Len(t, got.Tools, 1)
+		assert.Equal(t, "function", got.Tools[0].Type)
+		assert.Equal(t, "lookup", got.Tools[0].Function.Name)
+
+		// 指向被过滤工具的 tool_choice 应回退为自动选择。
+		assert.Nil(t, got.ToolChoice)
+
+		encoded, err := kitutil.Marshal(got)
+		require.NoError(t, err)
+		assert.NotContains(t, string(encoded), "namespace")
+	})
+
+	t.Run("keeps tool_choice for surviving function", func(t *testing.T) {
+		got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+			Model:      "gpt-test",
+			Input:      mustRawMessage(t, "hello"),
+			Tools:      tools,
+			ToolChoice: mustRawMessage(t, map[string]any{"type": "function", "name": "lookup"}),
+		})
+		require.NoError(t, err)
+
+		require.Len(t, got.Tools, 1)
+		assert.Equal(t, map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": "lookup"},
+		}, got.ToolChoice)
+	})
+}
+
 func mustRawMessage(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := kitutil.Marshal(value)

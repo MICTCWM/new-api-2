@@ -56,6 +56,25 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 	if err != nil {
 		return nil, err
 	}
+	// tool_choice 点名的 function 若因非 function 工具过滤而不在 tools 中，
+	// 回退为自动选择，避免上游因工具缺失报 400。
+	if choice, ok := toolChoice.(map[string]any); ok {
+		if fn, ok := choice["function"].(map[string]any); ok {
+			if name, ok := fn["name"].(string); ok {
+				target := strings.TrimSpace(name)
+				found := false
+				for _, t := range tools {
+					if t.Function.Name == target {
+						found = true
+						break
+					}
+				}
+				if !found {
+					toolChoice = nil
+				}
+			}
+		}
+	}
 
 	responseFormat, err := responsesRequestTextToChatResponseFormat(req.Text)
 	if err != nil {
@@ -682,25 +701,19 @@ func responsesRequestToolsToChat(raw json.RawMessage) ([]dto.ToolCallRequest, er
 	out := make([]dto.ToolCallRequest, 0, len(tools))
 	for _, tool := range tools {
 		toolType := strings.TrimSpace(kitutil.Interface2String(tool["type"]))
-		if toolType == "function" {
-			out = append(out, dto.ToolCallRequest{
-				Type: "function",
-				Function: dto.FunctionRequest{
-					Name:        strings.TrimSpace(kitutil.Interface2String(tool["name"])),
-					Description: kitutil.Interface2String(tool["description"]),
-					Parameters:  tool["parameters"],
-				},
-			})
+		if toolType != "function" {
+			// Chat 上游只认 function 工具：Responses 的 host/Codex 工具
+			// （namespace、web_search、file_search 等）转 chat 时一律丢弃，
+			// 否则上游以未知 type 400 拒收。
 			continue
 		}
-
-		rawTool, err := kitutil.Marshal(tool)
-		if err != nil {
-			return nil, err
-		}
 		out = append(out, dto.ToolCallRequest{
-			Type:   toolType,
-			Custom: rawTool,
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:        strings.TrimSpace(kitutil.Interface2String(tool["name"])),
+				Description: kitutil.Interface2String(tool["description"]),
+				Parameters:  tool["parameters"],
+			},
 		})
 	}
 	return out, nil
