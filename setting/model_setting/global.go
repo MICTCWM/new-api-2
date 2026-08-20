@@ -32,10 +32,41 @@ func (p ChatCompletionsToResponsesPolicy) IsChannelEnabled(channelID int, channe
 	return false
 }
 
+// ResponsesToChatPolicy controls the Responses→Chat downgrade: when enabled,
+// a downstream OpenAI Responses request is converted to a Chat Completions
+// request before relaying to a chat-only upstream. Per channel, the default is
+// that upstreams speak only chat/completions, so this policy defaults to
+// enabled for all channels; admins may opt specific channels or models out.
+type ResponsesToChatPolicy struct {
+	Enabled       bool     `json:"enabled"`
+	AllChannels   bool     `json:"all_channels"`
+	ChannelIDs    []int    `json:"channel_ids,omitempty"`
+	ChannelTypes  []int    `json:"channel_types,omitempty"`
+	ModelPatterns []string `json:"model_patterns,omitempty"`
+}
+
+func (p ResponsesToChatPolicy) IsChannelEnabled(channelID int, channelType int) bool {
+	if !p.Enabled {
+		return false
+	}
+	if p.AllChannels {
+		return true
+	}
+
+	if channelID > 0 && len(p.ChannelIDs) > 0 && slices.Contains(p.ChannelIDs, channelID) {
+		return true
+	}
+	if channelType > 0 && len(p.ChannelTypes) > 0 && slices.Contains(p.ChannelTypes, channelType) {
+		return true
+	}
+	return false
+}
+
 type GlobalSettings struct {
 	PassThroughRequestEnabled        bool                             `json:"pass_through_request_enabled"`
 	ThinkingModelBlacklist           []string                         `json:"thinking_model_blacklist"`
 	ChatCompletionsToResponsesPolicy ChatCompletionsToResponsesPolicy `json:"chat_completions_to_responses_policy"`
+	ResponsesToChatPolicy            ResponsesToChatPolicy            `json:"responses_to_chat_policy"`
 }
 
 // 默认配置
@@ -47,6 +78,11 @@ var defaultOpenaiSettings = GlobalSettings{
 	},
 	ChatCompletionsToResponsesPolicy: ChatCompletionsToResponsesPolicy{
 		Enabled:     false,
+		AllChannels: true,
+	},
+	// 默认所有上游均为 chat 协议：把下游 Responses 请求转换为上游 chat 请求。
+	ResponsesToChatPolicy: ResponsesToChatPolicy{
+		Enabled:     true,
 		AllChannels: true,
 	},
 }

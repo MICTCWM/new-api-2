@@ -1,9 +1,12 @@
 package openai
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -77,6 +80,10 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	streamErr := (*types.NewAPIError)(nil)
+	// 标记是否已向客户端写过 SSE 数据：一旦写过，HTTP 200 即已提交，
+	// 之后任何提前退出都必须先补发终止事件，否则客户端会报
+	// "stream disconnected before completion"。
+	streamBegan := false
 
 	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {
 		data, err := common.Marshal(event.Payload)
@@ -85,6 +92,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return false
 		}
 		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data))
+		streamBegan = true
 		return true
 	}
 
@@ -131,6 +139,12 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	})
 
 	if streamErr != nil {
+		// 流已经写过数据时（HTTP 200 已提交，无法再改状态码/错误体），必须先
+		// 补发 response.failed 终止事件，否则客户端会报 "stream disconnected
+		// before completion" 而不是看到真实错误。
+		if streamBegan {
+			_ = emitFailureTerminalEvent(c, info, state, streamErr)
+		}
 		return nil, streamErr
 	}
 
@@ -142,6 +156,9 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	finalResults, err := relayconvert.FinalizeStreamResponse(c, info, state)
 	if err != nil {
+		if streamBegan {
+			_ = emitFailureTerminalEvent(c, info, state, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError))
+		}
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, result := range finalResults {
@@ -154,5 +171,174 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	}
 
+	return usage, nil
+}
+
+// emitFailureTerminalEvent 在流已向客户端写过数据、但后续出错要提前退出时，
+// 先补发一个 response.failed 终止事件：尽量复用 FinalizeStreamResponse 把已
+// 累积内容的 done 事件与最终 response 对象生成出来，再把终止事件从
+// completed/incomplete 改为 failed（status 置 "failed" 并携带真实错误），
+// 保证 codex/OpenAI SDK 总能收到终止信号；若复用 finalize 失败，则退回最小
+// response.failed 事件。这样客户端看到的是真实错误而不是 "stream disconnected
+// before completion"。
+func emitFailureTerminalEvent(c *gin.Context, info *relaycommon.RelayInfo, state *relayconvert.ResponseStreamState, streamErr *types.NewAPIError) error {
+	if streamErr == nil {
+		return nil
+	}
+	oaiErr := streamErr.ToOpenAIError()
+
+	// 复用 finalize：已累积内容的事件（含 done 事件）全部照常补发。
+	if finalResults, err := relayconvert.FinalizeStreamResponse(c, info, state); err == nil {
+		terminalSent := false
+		for _, result := range finalResults {
+			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
+			if !ok {
+				continue
+			}
+			payload := event.Payload
+			switch payload.Type {
+			case "response.completed", "response.incomplete":
+				payload.Type = "response.failed"
+				if payload.Response != nil {
+					payload.Response.Status = []byte(`"failed"`)
+					payload.Response.Error = oaiErr
+				}
+				terminalSent = true
+			}
+			data, err := common.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: payload.Type}, string(data))
+		}
+		if terminalSent {
+			return nil
+		}
+	}
+
+	// 兜底：直接补发最小 response.failed 终止事件。
+	minimal := dto.ResponsesStreamResponse{
+		Type: "response.failed",
+		Response: &dto.OpenAIResponsesResponse{
+			ID:        helper.GetResponseID(c),
+			CreatedAt: int(time.Now().Unix()),
+			Model:     info.UpstreamModelName,
+			Status:    []byte(`"failed"`),
+			Error:     oaiErr,
+		},
+	}
+	data, err := common.Marshal(minimal)
+	if err != nil {
+		return err
+	}
+	helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: minimal.Type}, string(data))
+	return nil
+}
+
+// OaiChatToResponsesBufferedStreamHandler converts an upstream OpenAI Chat
+// Completions SSE stream into a single (non-streamed) OpenAI Responses JSON
+// response. It is used when the client asked for a non-streaming responses
+// response but the chat-only upstream streamed anyway.
+func OaiChatToResponsesBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	if resp == nil || resp.Body == nil {
+		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
+	defer service.CloseResponseBodyGracefully(resp)
+
+	responseID := helper.GetResponseID(c)
+	state, err := relayconvert.NewResponseStreamState(types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
+		ID:    responseID,
+		Model: info.UpstreamModelName,
+	})
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
+	accumulator := relayconvert.NewResponsesBufferedAccumulator()
+	var streamErr *types.NewAPIError
+
+	scanner := helper.NewStreamScanner(resp.Body)
+	scanner.Split(bufio.ScanLines)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(line) < 6 || line[:5] != "data:" {
+			continue
+		}
+		data := strings.TrimSpace(line[5:])
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+
+		var chunk dto.ChatCompletionsStreamResponse
+		if err := common.UnmarshalJsonStr(data, &chunk); err != nil {
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			break
+		}
+
+		var errorResp dto.OpenAITextResponse
+		if err := common.UnmarshalJsonStr(data, &errorResp); err == nil {
+			if oaiError := errorResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+				streamErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
+				break
+			}
+		}
+
+		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, &chunk)
+		if err != nil {
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			break
+		}
+		for _, result := range results {
+			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
+			if !ok {
+				streamErr = types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				break
+			}
+			accumulator.ProcessEvent(&event.Payload)
+		}
+		if streamErr != nil {
+			break
+		}
+	}
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
+
+	finalResults, err := relayconvert.FinalizeStreamResponse(c, info, state)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
+	for _, result := range finalResults {
+		event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
+		if !ok {
+			return nil, types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		}
+		accumulator.ProcessEvent(&event.Payload)
+	}
+
+	usage := state.Usage()
+	if usage == nil || usage.TotalTokens == 0 {
+		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		state.SetUsage(usage)
+	}
+
+	responsesResp := &dto.OpenAIResponsesResponse{
+		ID:        responseID,
+		CreatedAt: int(time.Now().Unix()),
+		Model:     info.UpstreamModelName,
+		Status:    []byte(`"completed"`),
+	}
+	accumulator.SupplementResponseOutput(responsesResp)
+	if usage != nil {
+		responsesResp.Usage = relayconvert.UsageFromChatUsage(usage)
+	}
+
+	responseBody, err := common.Marshal(responsesResp)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+	}
+	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return usage, nil
 }

@@ -76,6 +76,26 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+
+	// 默认所有上游均为 chat 协议：把下游 OpenAI Responses 请求转换为上游
+	// chat/completions 请求转发，再把上游 chat 响应转换回 Responses 返回客户端。
+	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	if info.RelayMode == relayconstant.RelayModeResponses &&
+		!passThroughGlobal &&
+		!info.ChannelSetting.PassThroughBodyEnabled &&
+		service.ShouldResponsesUseChatGlobal(info.ChannelId, info.ChannelType, info.ApiType, info.OriginModelName) {
+		usage, newApiErr := responsesCompletionsViaChat(c, info, adaptor, request)
+		if newApiErr != nil {
+			return newApiErr
+		}
+		if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
+			service.PostAudioConsumeQuota(c, info, usage, "")
+		} else {
+			service.PostTextConsumeQuota(c, info, usage, nil)
+		}
+		return nil
+	}
+
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)

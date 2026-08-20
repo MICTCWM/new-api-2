@@ -31,6 +31,7 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 		User:                 mustRawMessage(t, "user-1"),
 		Store:                mustRawMessage(t, false),
 		Metadata:             mustRawMessage(t, map[string]any{"trace": "abc"}),
+		Tools:                mustRawMessage(t, []map[string]any{{"type": "function", "name": "lookup"}}),
 		ParallelToolCalls:    mustRawMessage(t, parallelToolCalls),
 		PromptCacheKey:       mustRawMessage(t, "cache-key"),
 		PromptCacheRetention: mustRawMessage(t, "24h"),
@@ -45,7 +46,7 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 	assert.Same(t, &stream, got.Stream)
 	require.NotNil(t, got.StreamOptions)
 	assert.True(t, got.StreamOptions.IncludeUsage)
-	assert.Equal(t, maxOutputTokens, lo.FromPtr(got.MaxCompletionTokens))
+	assert.Equal(t, maxOutputTokens, lo.FromPtr(got.MaxTokens))
 	assert.Equal(t, 0.0, lo.FromPtr(got.Temperature))
 	assert.Equal(t, 0.9, lo.FromPtr(got.TopP))
 	assert.True(t, lo.FromPtr(got.ParallelTooCalls))
@@ -54,6 +55,34 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 	assert.Equal(t, `"user-1"`, string(got.User))
 	assert.Equal(t, `false`, string(got.Store))
 	assert.Equal(t, "abc", gjson.GetBytes(got.Metadata, "trace").String())
+}
+
+func TestResponsesRequestToChatCompletionsRequestDropsToolChoiceWithoutTools(t *testing.T) {
+	toolChoice := mustRawMessage(t, map[string]any{"type": "function", "name": "lookup"})
+	parallel := mustRawMessage(t, true)
+
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model:             "gpt-test",
+		Input:             mustRawMessage(t, "hello"),
+		ToolChoice:        toolChoice,
+		ParallelToolCalls: parallel,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got.ToolChoice)
+	assert.Nil(t, got.ParallelTooCalls)
+
+	// 提供非空 tools 时 tool_choice / parallel_tool_calls 应保留。
+	got, err = ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model:             "gpt-test",
+		Input:             mustRawMessage(t, "hello"),
+		Tools:             mustRawMessage(t, []map[string]any{{"type": "function", "name": "lookup"}}),
+		ToolChoice:        toolChoice,
+		ParallelToolCalls: parallel,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Tools, 1)
+	require.NotNil(t, got.ToolChoice)
+	assert.True(t, lo.FromPtr(got.ParallelTooCalls))
 }
 
 func TestResponsesRequestToChatCompletionsRequestPreservesQwenThinkingBudget(t *testing.T) {
@@ -147,18 +176,55 @@ func TestResponsesRequestToChatCompletionsRequestAssistantTextAndFunctionCallCoe
 	})
 	require.NoError(t, err)
 
-	require.Len(t, got.Messages, 2)
+	require.Len(t, got.Messages, 3)
 	assert.Equal(t, "assistant", got.Messages[0].Role)
 	assert.Equal(t, "I will call.", got.Messages[0].StringContent())
-	toolCalls := got.Messages[0].ParseToolCalls()
+	toolCalls := got.Messages[1].ParseToolCalls()
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "call_1", toolCalls[0].ID)
 	assert.Equal(t, "function", toolCalls[0].Type)
 	assert.Equal(t, "lookup", toolCalls[0].Function.Name)
 	assert.JSONEq(t, `{"q":"x"}`, toolCalls[0].Function.Arguments)
-	assert.Equal(t, "tool", got.Messages[1].Role)
-	assert.Equal(t, "call_1", got.Messages[1].ToolCallId)
-	assert.JSONEq(t, `{"ok":true}`, got.Messages[1].StringContent())
+	assert.Equal(t, "tool", got.Messages[2].Role)
+	assert.Equal(t, "call_1", got.Messages[2].ToolCallId)
+	assert.JSONEq(t, `{"ok":true}`, got.Messages[2].StringContent())
+}
+
+func TestResponsesRequestToChatCompletionsRequestMaxOutputTokensRouting(t *testing.T) {
+	tests := []struct {
+		name   string
+		model  string
+		oModel bool
+	}{
+		{name: "plain chat model uses max_tokens", model: "gpt-test"},
+		{name: "gpt-4o uses max_tokens", model: "gpt-4o"},
+		{name: "o1 series uses max_completion_tokens", model: "o1-mini", oModel: true},
+		{name: "o3 series uses max_completion_tokens", model: "o3-mini", oModel: true},
+		{name: "o4 series uses max_completion_tokens", model: "o4-mini", oModel: true},
+		{name: "gpt-5 uses max_completion_tokens", model: "gpt-5.1", oModel: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := uint(512)
+			got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+				Model:           tt.model,
+				Input:           mustRawMessage(t, "hello"),
+				MaxOutputTokens: &tokens,
+			})
+			require.NoError(t, err)
+
+			if tt.oModel {
+				assert.Nil(t, got.MaxTokens)
+				require.NotNil(t, got.MaxCompletionTokens)
+				assert.Equal(t, tokens, *got.MaxCompletionTokens)
+			} else {
+				assert.Nil(t, got.MaxCompletionTokens)
+				require.NotNil(t, got.MaxTokens)
+				assert.Equal(t, tokens, *got.MaxTokens)
+			}
+		})
+	}
 }
 
 func TestResponsesRequestToChatCompletionsRequestOnlyFunctionCallCreatesAssistant(t *testing.T) {
