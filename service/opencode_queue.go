@@ -34,7 +34,13 @@ type OpencodeQueueSnapshot struct {
 }
 
 type opencodeQueueEntry struct {
-	item OpencodeQueueItem
+	item     OpencodeQueueItem
+	queueKey opencodeQueueKey
+}
+
+type opencodeQueueKey struct {
+	group string
+	model string
 }
 
 var (
@@ -48,11 +54,14 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 	if param == nil || param.Ctx == nil || param.Ctx.Request == nil {
 		return nil, "", errors.New("opencode queue request context is missing")
 	}
-	if param.ModelName != model.OpencodeModel {
-		return nil, "", errors.New("unsupported opencode model")
+	if param.ModelName == "" {
+		return nil, "", errors.New("unsupported code provider model")
 	}
 
-	entry := &opencodeQueueEntry{item: newOpencodeQueueItem(param, inputTokens)}
+	entry := &opencodeQueueEntry{
+		item:     newOpencodeQueueItem(param, inputTokens),
+		queueKey: opencodeQueueKey{group: param.TokenGroup, model: param.ModelName},
+	}
 	opencodeQueueMu.Lock()
 	entry.item.Position = len(opencodeQueue) + 1
 	opencodeQueue = append(opencodeQueue, entry)
@@ -61,7 +70,7 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 	ctx := param.Ctx.Request.Context()
 	for {
 		opencodeQueueMu.Lock()
-		if len(opencodeQueue) > 0 && opencodeQueue[0] == entry {
+		if isOpencodeQueueTurnLocked(entry) {
 			if err := ctx.Err(); err != nil {
 				removeOpencodeQueueEntryLocked(entry)
 				opencodeQueueMu.Unlock()
@@ -116,6 +125,18 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 	}
 }
 
+func isOpencodeQueueTurnLocked(entry *opencodeQueueEntry) bool {
+	for _, current := range opencodeQueue {
+		if current == entry {
+			return true
+		}
+		if current.queueKey == entry.queueKey {
+			return false
+		}
+	}
+	return false
+}
+
 func newOpencodeQueueItem(param *RetryParam, inputTokens int) OpencodeQueueItem {
 	userID := common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId)
 	username := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserName)
@@ -148,7 +169,7 @@ func tryReserveOpencodeChannel(param *RetryParam) (*model.Channel, string, error
 		if err != nil || channel == nil {
 			return channel, group, err
 		}
-		allowed, _, err := model.ReserveOpencodeRPM(channel.Id, common.GetTimestamp())
+		allowed, _, err := model.ReserveCodeProviderRPM(channel.Type, channel.Id, common.GetTimestamp())
 		if err != nil {
 			return nil, group, err
 		}
@@ -195,7 +216,7 @@ func GetOpencodeQueueSnapshot() (*OpencodeQueueSnapshot, error) {
 	queuedCount := len(items)
 	opencodeQueueMu.Unlock()
 
-	capacity, err := model.GetOpencodeCapacitySnapshot(common.GetTimestamp())
+	capacity, err := model.GetCodeProviderCapacitySnapshot(common.GetTimestamp())
 	if err != nil {
 		return nil, err
 	}

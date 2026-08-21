@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
+	"github.com/QuantumNous/new-api/relay/channel/command"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	"github.com/QuantumNous/new-api/relay/channel/opencode"
@@ -362,7 +363,10 @@ func getFetchModelsResponseBody(method string, requestURL string, channel *model
 }
 
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
-	if channel != nil && channel.Type == constant.ChannelTypeOpencode {
+	if channel != nil && (channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand) {
+		if channel.Type == constant.ChannelTypeCommand {
+			return []string{command.Model}, nil
+		}
 		return []string{opencode.Model}, nil
 	}
 	baseURL := constant.ChannelBaseURLs[channel.Type]

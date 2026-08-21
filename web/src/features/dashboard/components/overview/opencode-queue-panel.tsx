@@ -49,10 +49,10 @@ export function OpencodeQueuePanel() {
           <IconBadge tone='info' size='sm'>
             <ListOrdered />
           </IconBadge>
-          {t('OpenCode request queue')}
+          {t('Code provider request queue')}
         </span>
       }
-      description={t('Live capacity and waiting requests for OpenCode')}
+      description={t('Live capacity and waiting requests for code providers')}
       loading={queueQuery.isLoading}
       height='h-auto'
       contentClassName='p-0'
@@ -79,7 +79,7 @@ export function OpencodeQueuePanel() {
         </div>
       ) : (
         <>
-          <div className='grid grid-cols-2 gap-px border-b bg-border sm:grid-cols-4'>
+          <div className='bg-border grid grid-cols-2 gap-px border-b sm:grid-cols-4'>
             <QueueMetric
               label={t('Total capacity')}
               value={formatInteger(snapshot.total_capacity)}
@@ -111,12 +111,15 @@ export function OpencodeQueuePanel() {
                   className='grid gap-2 px-4 py-3 sm:grid-cols-[3rem_minmax(0,1fr)_10rem_7rem] sm:items-center sm:px-5'
                 >
                   <div className='text-muted-foreground flex items-center gap-1.5 text-xs tabular-nums'>
-                    <ListOrdered className='size-3.5' aria-hidden='true' />
-                    #{item.position}
+                    <ListOrdered className='size-3.5' aria-hidden='true' />#
+                    {item.position}
                   </div>
                   <div className='min-w-0'>
                     <div className='flex items-center gap-1.5 text-sm font-medium'>
-                      <Users className='text-muted-foreground size-3.5' aria-hidden='true' />
+                      <Users
+                        className='text-muted-foreground size-3.5'
+                        aria-hidden='true'
+                      />
                       <span className='truncate'>
                         {item.username || `#${item.user_id}`}
                       </span>

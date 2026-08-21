@@ -95,6 +95,7 @@ func isOpenAIChatUpstream(apiType int) bool {
 		constant.APITypeOpenRouter,
 		constant.APITypeXinference,
 		constant.APITypeOpencode,
+		constant.APITypeCommand,
 		constant.APITypeXai,
 		constant.APITypeCoze,
 		constant.APITypeJimeng,

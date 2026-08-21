@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/glebarez/sqlite"
@@ -44,6 +45,55 @@ func TestCalculateOpencodeCostMicroUSDUsesPeakPricingAndCache(t *testing.T) {
 	peak, err := CalculateOpencodeCostMicroUSD(usage, time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	require.Equal(t, int64(1_987_000), peak)
+}
+
+func TestGetCodeProviderCandidatesIncludesModelMappingSource(t *testing.T) {
+	previousDB := DB
+	previousType := common.MainDatabaseType()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Channel{}, &Ability{}, &OpencodeChannelUsage{}, &OpencodePoolUsage{}, &CommandChannelUsage{}, &CommandPoolUsage{}))
+	DB = db
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	t.Cleanup(func() {
+		DB = previousDB
+		common.SetMainDatabaseType(previousType)
+	})
+
+	channel := &Channel{
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    "command-key",
+		Models: CommandModel + ",client-model",
+		Group:  "default",
+	}
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&Ability{
+		Group:     "default",
+		Model:     "client-model",
+		ChannelId: channel.Id,
+		Enabled:   true,
+	}).Error)
+
+	openCodeChannel := &Channel{
+		Type:   constant.ChannelTypeOpencode,
+		Status: common.ChannelStatusEnabled,
+		Key:    "opencode-key",
+		Models: OpencodeModel,
+		Group:  "default",
+	}
+	require.NoError(t, db.Create(openCodeChannel).Error)
+	require.NoError(t, db.Create(&Ability{
+		Group:     "default",
+		Model:     "client-model",
+		ChannelId: openCodeChannel.Id,
+		Enabled:   true,
+	}).Error)
+
+	candidates, err := GetCodeProviderCandidates("default", "client-model", nil)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	require.Equal(t, channel.Id, candidates[0].Id)
 }
 
 func TestOpencodePeakWindowBoundaries(t *testing.T) {

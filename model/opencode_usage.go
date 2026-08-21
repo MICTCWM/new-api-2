@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -519,6 +520,163 @@ func GetOpencodeCandidates(group, modelName string, attempted map[int]struct{}) 
 
 func GetOpencodeQuotaCandidates(group, modelName string, attempted map[int]struct{}) ([]*Channel, error) {
 	return getOpencodeCandidates(group, modelName, attempted, false)
+}
+
+// IsCodeProviderModel identifies fixed OpenCode/Command models and Command
+// model-mapping sources. The latter need the same queue so mapped requests do
+// not bypass the provider-specific quota checks.
+func IsCodeProviderModel(modelName string) bool {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == OpencodeModel || modelName == CommandFlashModel || modelName == CommandProModel {
+		return true
+	}
+	if DB == nil || modelName == "" || !DB.Migrator().HasTable("channels") {
+		return false
+	}
+	var count int64
+	err := DB.Table("abilities").
+		Joins("JOIN channels ON channels.id = abilities.channel_id").
+		Where("abilities.model = ? AND channels.type = ? AND channels.status = ?", modelName, constant.ChannelTypeCommand, common.ChannelStatusEnabled).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
+func GetCodeProviderCandidates(group, modelName string, attempted map[int]struct{}) ([]*Channel, error) {
+	return getCodeProviderCandidates(group, modelName, attempted, true)
+}
+
+func GetCodeProviderQuotaCandidates(group, modelName string, attempted map[int]struct{}) ([]*Channel, error) {
+	return getCodeProviderCandidates(group, modelName, attempted, false)
+}
+
+func getCodeProviderCandidates(group, modelName string, attempted map[int]struct{}, checkRPM bool) ([]*Channel, error) {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return nil, nil
+	}
+	channelTypes := []int{constant.ChannelTypeCommand}
+	if modelName == OpencodeModel {
+		channelTypes = []int{constant.ChannelTypeOpencode}
+	}
+	var channels []*Channel
+	query := DB.Table("channels").
+		Select("channels.*").
+		Joins("JOIN abilities ON abilities.channel_id = channels.id").
+		Where("channels.type IN ? AND channels.status = ?", channelTypes, common.ChannelStatusEnabled).
+		Where("abilities."+commonGroupCol+" = ? AND abilities.model = ? AND abilities.enabled = ?", group, modelName, true)
+	if modelName == OpencodeModel {
+		query = query.Where("channels.models = ?", OpencodeModel)
+	}
+	if err := query.Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	available := make([]*Channel, 0, len(channels))
+	now := time.Now().Unix()
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		if _, ok := attempted[channel.Id]; ok {
+			continue
+		}
+		var ok bool
+		var err error
+		switch channel.Type {
+		case constant.ChannelTypeOpencode:
+			if checkRPM {
+				ok, err = OpencodeChannelHasCapacity(channel.Id, now)
+			} else {
+				ok, err = OpencodeChannelHasQuotaCapacity(channel.Id, now)
+			}
+		case constant.ChannelTypeCommand:
+			if checkRPM {
+				ok, err = CommandChannelHasCapacityForModel(channel, modelName, now)
+			} else {
+				ok, err = CommandChannelHasQuotaCapacityForModel(channel, modelName, now)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			available = append(available, channel)
+		}
+	}
+	return available, nil
+}
+
+// GetCodeProviderCapacitySnapshot backs the shared request queue. A split
+// Command channel contributes capacity when either of its model pools is open.
+func GetCodeProviderCapacitySnapshot(now int64) (*OpencodeCapacitySnapshot, error) {
+	var channels []*Channel
+	if err := DB.Where("type IN ? AND status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+
+	limit := operation_setting.GetOpencodeRPMLimit()
+	snapshot := &OpencodeCapacitySnapshot{TotalCapacity: len(channels) * limit}
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		var quotaAvailable bool
+		var err error
+		var rpmCount int
+		switch channel.Type {
+		case constant.ChannelTypeOpencode:
+			quotaAvailable, err = OpencodeChannelHasQuotaCapacity(channel.Id, now)
+			if err != nil {
+				return nil, err
+			}
+			usage, usageErr := getOrCreateOpencodeChannelUsage(channel.Id, now)
+			if usageErr != nil {
+				return nil, usageErr
+			}
+			resetOpencodeChannelWindows(usage, now)
+			rpmCount = normalizeOpencodeRPM(usage.RPMCount)
+		case constant.ChannelTypeCommand:
+			quotaAvailable, err = CommandChannelHasAnyQuotaCapacity(channel, now)
+			if err != nil {
+				return nil, err
+			}
+			usage, usageErr := getOrCreateCommandChannelUsage(channel.Id, now)
+			if usageErr != nil {
+				return nil, usageErr
+			}
+			resetCommandChannelWindows(usage, now)
+			rpmCount = normalizeCommandRPM(usage.RPMCount)
+		}
+		if !quotaAvailable {
+			continue
+		}
+		available := limit - rpmCount
+		if available > 0 {
+			snapshot.AvailableCapacity += available
+		}
+	}
+	return snapshot, nil
+}
+
+func ReserveCodeProviderRPM(channelType, channelID int, now int64) (bool, int64, error) {
+	switch channelType {
+	case constant.ChannelTypeOpencode:
+		return ReserveOpencodeRPM(channelID, now)
+	case constant.ChannelTypeCommand:
+		return ReserveCommandRPM(channelID, now)
+	default:
+		return false, 0, fmt.Errorf("unsupported code provider channel type: %d", channelType)
+	}
+}
+
+func ReleaseCodeProviderRPM(channelType, channelID int, now int64) error {
+	switch channelType {
+	case constant.ChannelTypeOpencode:
+		return ReleaseOpencodeRPM(channelID, now)
+	case constant.ChannelTypeCommand:
+		return ReleaseCommandRPM(channelID, now)
+	default:
+		return fmt.Errorf("unsupported code provider channel type: %d", channelType)
+	}
 }
 
 func getOpencodeCandidates(group, modelName string, attempted map[int]struct{}, checkRPM bool) ([]*Channel, error) {

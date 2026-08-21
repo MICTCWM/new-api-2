@@ -193,7 +193,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		ModelName:           relayInfo.OriginModelName,
 		RequestPath:         c.Request.URL.Path,
 		Retry:               common.GetPointer(0),
-		OpencodePool:        common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeOpencode,
+		OpencodePool:        common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeOpencode || common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeCommand,
 		AttemptedChannelIDs: make(map[int]struct{}),
 	}
 
@@ -226,7 +226,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		rpmReserved := false
-		if channel.Type == constant.ChannelTypeOpencode {
+		if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand {
 			retryParam.OpencodePool = true
 			if retryParam.AttemptedChannelIDs == nil {
 				retryParam.AttemptedChannelIDs = make(map[int]struct{})
@@ -235,7 +235,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if retryParam.OpencodeRPMReserved {
 				retryParam.OpencodeRPMReserved = false
 			} else {
-				allowed, _, rpmErr := model.ReserveOpencodeRPM(channel.Id, common.GetTimestamp())
+				allowed, _, rpmErr := model.ReserveCodeProviderRPM(channel.Type, channel.Id, common.GetTimestamp())
 				if rpmErr != nil {
 					newAPIError = types.NewError(rpmErr, types.ErrorCodeDoRequestFailed)
 					break
@@ -332,8 +332,12 @@ func addUsedChannel(c *gin.Context, channelId int) {
 }
 
 func releaseOpencodeRPMOnFailure(c *gin.Context, channelID int) {
-	if err := model.ReleaseOpencodeRPM(channelID, common.GetTimestamp()); err != nil {
-		logger.LogError(c, fmt.Sprintf("failed to release opencode RPM reservation for channel %d: %s", channelID, err.Error()))
+	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
+	if channelType == 0 {
+		channelType = constant.ChannelTypeOpencode
+	}
+	if err := model.ReleaseCodeProviderRPM(channelType, channelID, common.GetTimestamp()); err != nil {
+		logger.LogError(c, fmt.Sprintf("failed to release code provider RPM reservation for channel %d: %s", channelID, err.Error()))
 	}
 	service.NotifyOpencodeQueue()
 }

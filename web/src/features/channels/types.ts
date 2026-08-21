@@ -176,6 +176,29 @@ export interface OpencodeUsageResponse {
   data?: OpencodeUsageSnapshot
 }
 
+export interface CommandUsageSnapshot {
+  channel_id: number
+  five_hour: OpencodeUsageWindow
+  week: OpencodeUsageWindow
+  month: OpencodeUsageWindow
+  pool: OpencodeUsageWindow
+  flash_pool?: OpencodeUsageWindow
+  pro_pool?: OpencodeUsageWindow
+  split_pools?: boolean
+  peak_pool?: OpencodeUsageWindow
+  off_peak_pool?: OpencodeUsageWindow
+  pricing_period: 'peak' | 'off_peak'
+  rpm_count: number
+  rpm_limit: number
+  rpm_reset_at: number
+}
+
+export interface CommandUsageResponse {
+  success: boolean
+  message?: string
+  data?: CommandUsageSnapshot
+}
+
 export interface GetChannelsResponse {
   success: boolean
   message?: string

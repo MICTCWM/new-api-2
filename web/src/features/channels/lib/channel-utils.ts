@@ -55,6 +55,7 @@ export function getChannelTypeIcon(type: number): string {
     59: 'Sub2API', // Sub2API
     60: 'NewAPI', // New API
     61: 'OpenAI', // Opencode
+    62: 'OpenAI', // Command
     3: 'Azure', // Azure
 
     // Anthropic

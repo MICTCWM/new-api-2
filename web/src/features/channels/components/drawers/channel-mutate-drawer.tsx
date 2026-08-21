@@ -140,15 +140,18 @@ import {
   ADD_MODE_OPTIONS,
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_STATUS_LABELS,
-  CHANNEL_TYPE_OPENCODE,
+  CHANNEL_TYPE_COMMAND,
   CHANNEL_TYPE_OPTIONS,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
   FIELD_PASSTHROUGH_TYPES,
   FIELD_DESCRIPTIONS,
   FIELD_PLACEHOLDERS,
+  getFixedCodeChannelModel,
+  getFixedCodeChannelModels,
   MODEL_FETCHABLE_TYPES,
   OPENAI_FIELD_PASSTHROUGH_TYPES,
+  isFixedCodeChannelType,
 } from '../../constants'
 import { useChannelMutateForm } from '../../hooks/use-channel-mutate-form'
 import {
@@ -864,7 +867,7 @@ export function ChannelMutateDrawer({
       supportsMultiKeyAddMode
         ? ADD_MODE_OPTIONS.filter(
             (option) =>
-              currentType !== CHANNEL_TYPE_OPENCODE ||
+              !isFixedCodeChannelType(currentType) ||
               option.value !== 'multi_to_single'
           )
         : ADD_MODE_OPTIONS.filter((option) => option.value === 'single'),
@@ -896,8 +899,8 @@ export function ChannelMutateDrawer({
 
   // Get basic models for the current channel type
   const basicModels = useMemo(() => {
-    if (currentType === CHANNEL_TYPE_OPENCODE) {
-      return ['deepseek-v4-flash']
+    if (isFixedCodeChannelType(currentType)) {
+      return [...getFixedCodeChannelModels(currentType)]
     }
     if (!allModelsList.length) return []
     if (currentType === 1) {
@@ -1155,15 +1158,26 @@ export function ChannelMutateDrawer({
 
   // Transform models to multi-select options
   const modelOptions = useMemo(() => {
-    if (currentType === CHANNEL_TYPE_OPENCODE) {
-      return [{ value: 'deepseek-v4-flash', label: 'deepseek-v4-flash' }]
+    if (isFixedCodeChannelType(currentType)) {
+      const nativeModels = getFixedCodeChannelModels(currentType)
+      const models =
+        currentType === CHANNEL_TYPE_COMMAND
+          ? [
+              ...new Set([
+                ...nativeModels,
+                ...currentModelsArray,
+                ...redirectModelKeyList,
+              ]),
+            ]
+          : [...nativeModels]
+      return models.map((model) => ({ value: model, label: model }))
     }
     const allModels = new Set([...allModelsList, ...currentModelsArray])
     return [...allModels].map((model) => ({
       value: model,
       label: model,
     }))
-  }, [allModelsList, currentModelsArray, currentType])
+  }, [allModelsList, currentModelsArray, currentType, redirectModelKeyList])
 
   const modelMappingGuardrail = useMemo<ModelMappingGuardrail>(() => {
     if (!currentModelMapping?.trim()) {
@@ -1283,14 +1297,36 @@ export function ChannelMutateDrawer({
   }, [isEditing, channelData, form])
 
   useEffect(() => {
-    if (currentType !== CHANNEL_TYPE_OPENCODE) return
-    if (currentModels !== 'deepseek-v4-flash') {
-      form.setValue('models', 'deepseek-v4-flash', {
+    if (!isFixedCodeChannelType(currentType)) return
+    const nativeModels = getFixedCodeChannelModels(currentType)
+    const fixedModel = nativeModels[0]
+    let nextModels = [fixedModel]
+    if (currentType === CHANNEL_TYPE_COMMAND) {
+      const mappingSources = new Set(
+        extractMappingSourceModels(currentModelMapping || '')
+      )
+      const validModels = currentModelsArray.filter(
+        (model) => nativeModels.includes(model) || mappingSources.has(model)
+      )
+      if (validModels.length > 0) {
+        nextModels = validModels
+      }
+    }
+    const nextModelsValue = formatModelsArray(nextModels)
+    if (currentModels !== nextModelsValue) {
+      form.setValue('models', nextModelsValue, {
         shouldDirty: isEditing,
         shouldValidate: true,
       })
     }
-  }, [currentModels, currentType, form, isEditing])
+  }, [
+    currentModelMapping,
+    currentModels,
+    currentModelsArray,
+    currentType,
+    form,
+    isEditing,
+  ])
 
   // Handle type change - set default values for specific types
   useEffect(() => {
@@ -1323,7 +1359,7 @@ export function ChannelMutateDrawer({
   }, [currentBaseUrl, currentType, form])
 
   useEffect(() => {
-    if (currentType === CHANNEL_TYPE_OPENCODE) {
+    if (isFixedCodeChannelType(currentType)) {
       if (multiKeyMode === 'multi_to_single') {
         form.setValue('multi_key_mode', 'batch', {
           shouldDirty: !isEditing,
@@ -1451,17 +1487,25 @@ export function ChannelMutateDrawer({
   // Unified function to update models
   const updateModels = useCallback(
     (newModels: string[], merge: boolean = false) => {
-      const constrainedModels =
-        currentType === CHANNEL_TYPE_OPENCODE
-          ? ['deepseek-v4-flash']
-          : newModels
+      let constrainedModels = newModels
+      if (currentType === CHANNEL_TYPE_COMMAND) {
+        const nativeModels = getFixedCodeChannelModels(currentType)
+        const mappingSources = new Set(
+          extractMappingSourceModels(currentModelMapping || '')
+        )
+        constrainedModels = newModels.filter(
+          (model) => nativeModels.includes(model) || mappingSources.has(model)
+        )
+      } else if (isFixedCodeChannelType(currentType)) {
+        constrainedModels = [getFixedCodeChannelModel(currentType)]
+      }
       const finalModels = merge
         ? formatModelsArray([...currentModelsArray, ...constrainedModels])
         : formatModelsArray(constrainedModels)
       form.setValue('models', finalModels)
       return constrainedModels.length
     },
-    [currentModelsArray, currentType, form]
+    [currentModelMapping, currentModelsArray, currentType, form]
   )
 
   // Handle fetching models from upstream
@@ -1517,8 +1561,14 @@ export function ChannelMutateDrawer({
 
   // Handle model operations
   const handleFillRelatedModels = useCallback(() => {
-    if (currentType === CHANNEL_TYPE_OPENCODE) {
-      toast.info(t('Opencode only supports deepseek-v4-flash'))
+    if (isFixedCodeChannelType(currentType)) {
+      toast.info(
+        t(
+          currentType === CHANNEL_TYPE_COMMAND
+            ? 'This channel supports Flash, Pro, and model mapping source models'
+            : 'This channel only supports deepseek-v4-flash'
+        )
+      )
       return
     }
     if (!basicModels.length) {
@@ -1532,8 +1582,14 @@ export function ChannelMutateDrawer({
   }, [basicModels, currentType, updateModels, t])
 
   const handleFillAllModels = useCallback(() => {
-    if (currentType === CHANNEL_TYPE_OPENCODE) {
-      toast.info(t('Opencode only supports deepseek-v4-flash'))
+    if (isFixedCodeChannelType(currentType)) {
+      toast.info(
+        t(
+          currentType === CHANNEL_TYPE_COMMAND
+            ? 'This channel supports Flash, Pro, and model mapping source models'
+            : 'This channel only supports deepseek-v4-flash'
+        )
+      )
       return
     }
     if (!allModelsList.length) {
@@ -1547,9 +1603,15 @@ export function ChannelMutateDrawer({
   }, [allModelsList, currentType, updateModels, t])
 
   const handleClearModels = useCallback(() => {
-    if (currentType === CHANNEL_TYPE_OPENCODE) {
-      form.setValue('models', 'deepseek-v4-flash')
-      toast.info(t('Opencode only supports deepseek-v4-flash'))
+    if (isFixedCodeChannelType(currentType)) {
+      form.setValue('models', getFixedCodeChannelModel(currentType))
+      toast.info(
+        t(
+          currentType === CHANNEL_TYPE_COMMAND
+            ? 'This channel supports Flash, Pro, and model mapping source models'
+            : 'This channel only supports deepseek-v4-flash'
+        )
+      )
       return
     }
     form.setValue('models', '')
@@ -1594,11 +1656,21 @@ export function ChannelMutateDrawer({
   // Handle model selection change from MultiSelect
   const handleModelsChange = useCallback(
     (selected: string[]) => {
-      const nextModels =
-        currentType === CHANNEL_TYPE_OPENCODE ? ['deepseek-v4-flash'] : selected
+      let nextModels = selected
+      if (currentType === CHANNEL_TYPE_COMMAND) {
+        const nativeModels = getFixedCodeChannelModels(currentType)
+        const mappingSources = new Set(
+          extractMappingSourceModels(currentModelMapping || '')
+        )
+        nextModels = selected.filter(
+          (model) => nativeModels.includes(model) || mappingSources.has(model)
+        )
+      } else if (isFixedCodeChannelType(currentType)) {
+        nextModels = [getFixedCodeChannelModel(currentType)]
+      }
       form.setValue('models', nextModels.join(','))
     },
-    [currentType, form]
+    [currentModelMapping, currentType, form]
   )
 
   // Handle successful submission
@@ -2821,7 +2893,9 @@ export function ChannelMutateDrawer({
                             )}
 
                             {/* General base_url for other types */}
-                            {![3, 8, 22, 36, 45, 61].includes(currentType) && (
+                            {![3, 8, 22, 36, 45, 61, 62].includes(
+                              currentType
+                            ) && (
                               <FormField
                                 control={form.control}
                                 name='base_url'
@@ -2847,11 +2921,13 @@ export function ChannelMutateDrawer({
                               />
                             )}
 
-                            {currentType === 61 && (
+                            {isFixedCodeChannelType(currentType) && (
                               <Alert>
                                 <AlertDescription>
                                   {t(
-                                    'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Only deepseek-v4-flash is supported.'
+                                    currentType === CHANNEL_TYPE_COMMAND
+                                      ? 'Fixed endpoint: https://api.commandcode.ai/provider/v1. Supports deepseek/deepseek-v4-flash and deepseek/deepseek-v4-pro.'
+                                      : 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Only deepseek-v4-flash is supported.'
                                   )}
                                 </AlertDescription>
                               </Alert>
@@ -3342,7 +3418,7 @@ export function ChannelMutateDrawer({
                                         'Select models or add custom ones'
                                       )}
                                       allowCreate={
-                                        currentType !== CHANNEL_TYPE_OPENCODE
+                                        !isFixedCodeChannelType(currentType)
                                       }
                                       createLabel='Add custom model "{{value}}"'
                                       maxVisibleChips={8}
@@ -3408,7 +3484,7 @@ export function ChannelMutateDrawer({
                                   size='sm'
                                   onClick={handleFillRelatedModels}
                                   disabled={
-                                    currentType === CHANNEL_TYPE_OPENCODE ||
+                                    isFixedCodeChannelType(currentType) ||
                                     !basicModels.length
                                   }
                                 >
@@ -3424,7 +3500,7 @@ export function ChannelMutateDrawer({
                                   size='sm'
                                   onClick={handleFillAllModels}
                                   disabled={
-                                    currentType === CHANNEL_TYPE_OPENCODE ||
+                                    isFixedCodeChannelType(currentType) ||
                                     !allModelsList.length
                                   }
                                 >

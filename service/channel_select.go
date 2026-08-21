@@ -150,9 +150,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		for _, group := range groups {
 			var candidates []*model.Channel
 			if param.OpencodeIncludeRPMFull {
-				candidates, err = model.GetOpencodeQuotaCandidates(group, param.ModelName, param.AttemptedChannelIDs)
+				candidates, err = model.GetCodeProviderQuotaCandidates(group, param.ModelName, param.AttemptedChannelIDs)
 			} else {
-				candidates, err = model.GetOpencodeCandidates(group, param.ModelName, param.AttemptedChannelIDs)
+				candidates, err = model.GetCodeProviderCandidates(group, param.ModelName, param.AttemptedChannelIDs)
 			}
 			if err != nil {
 				return nil, group, err

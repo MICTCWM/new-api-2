@@ -19,14 +19,17 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
+  CHANNEL_TYPE_COMMAND,
   CHANNEL_TYPE_NEW_API,
-  CHANNEL_TYPE_OPENCODE,
   CHANNEL_STATUS,
+  getFixedCodeChannelModels,
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   ERROR_MESSAGES,
   FIELD_PASSTHROUGH_TYPES,
+  getFixedCodeChannelModel,
   MODEL_FETCHABLE_TYPES,
   OPENAI_FIELD_PASSTHROUGH_TYPES,
+  isFixedCodeChannelType,
 } from '../constants'
 import type { Channel } from '../types'
 import {
@@ -37,6 +40,11 @@ import {
   stringifyAdvancedCustomConfig,
   validateAdvancedCustomConfig,
 } from './advanced-custom'
+import {
+  extractMappingSourceModels,
+  formatModelsArray,
+  parseModelsString,
+} from './model-mapping-validation'
 
 // ============================================================================
 // Form Validation Schema
@@ -48,6 +56,33 @@ const SUPPORTED_PROXY_PROTOCOLS = new Set([
   'socks5:',
   'socks5h:',
 ])
+
+function fixedCodeChannelBaseUrl(type: number): string {
+  return type === CHANNEL_TYPE_COMMAND
+    ? 'https://api.commandcode.ai/provider/v1'
+    : 'https://opencode.ai/zen/go/v1/chat/completions'
+}
+
+function fixedCodeChannelModels(
+  type: number,
+  models: string,
+  modelMapping: string | undefined
+): string {
+  const nativeModels = getFixedCodeChannelModels(type)
+  const fixedModel = nativeModels[0]
+  if (type !== CHANNEL_TYPE_COMMAND) return fixedModel
+
+  const mappingSources = new Set(extractMappingSourceModels(modelMapping || ''))
+  const allowedModels = new Set([...nativeModels, ...mappingSources])
+  const selectedModels = parseModelsString(models).filter((model) =>
+    allowedModels.has(model)
+  )
+  const normalizedModels = [
+    fixedModel,
+    ...selectedModels.filter((model) => model !== fixedModel),
+  ]
+  return formatModelsArray(normalizedModels)
+}
 
 function isOptionalProxyURL(value: string | undefined): boolean {
   const trimmedValue = value?.trim() || ''
@@ -335,20 +370,33 @@ export const channelFormSchema = z
       )
     }
 
-    if (data.type === CHANNEL_TYPE_OPENCODE) {
+    if (isFixedCodeChannelType(data.type)) {
       if (data.multi_key_mode === 'multi_to_single') {
         addRequiredIssue(
           ctx,
           'multi_key_mode',
-          'Opencode requires batch mode for multiple API keys'
+          'Fixed code channels require batch mode for multiple API keys'
         )
       }
-      if (data.models.trim() !== 'deepseek-v4-flash') {
-        addRequiredIssue(
-          ctx,
-          'models',
-          'Opencode only supports deepseek-v4-flash'
-        )
+      const fixedModel = getFixedCodeChannelModel(data.type)
+      const configuredModels = parseModelsString(data.models)
+      const mappingSources = new Set(
+        extractMappingSourceModels(data.model_mapping || '')
+      )
+      const invalidModels =
+        data.type === CHANNEL_TYPE_COMMAND
+          ? configuredModels.filter(
+              (model) =>
+                !getFixedCodeChannelModels(data.type).includes(model) &&
+                !mappingSources.has(model)
+            )
+          : configuredModels.filter((model) => model !== fixedModel)
+      const fixedModelError =
+        data.type === CHANNEL_TYPE_COMMAND
+          ? 'Command supports Flash, Pro, and model mapping source models'
+          : 'Fixed code channels only support deepseek-v4-flash'
+      if (invalidModels.length > 0) {
+        addRequiredIssue(ctx, 'models', fixedModelError)
       }
     }
 
@@ -576,14 +624,16 @@ export function transformChannelToFormDefaults(
     base_url: channel.base_url || '',
     key: '', // Never populate key from backend for security
     openai_organization: channel.openai_organization || '',
-    models:
-      channel.type === CHANNEL_TYPE_OPENCODE
-        ? 'deepseek-v4-flash'
-        : channel.models || '',
-    test_model:
-      channel.type === CHANNEL_TYPE_OPENCODE
-        ? 'deepseek-v4-flash'
-        : channel.test_model || '',
+    models: isFixedCodeChannelType(channel.type)
+      ? fixedCodeChannelModels(
+          channel.type,
+          channel.models || '',
+          channel.model_mapping || ''
+        )
+      : channel.models || '',
+    test_model: isFixedCodeChannelType(channel.type)
+      ? channel.test_model || getFixedCodeChannelModel(channel.type)
+      : channel.test_model || '',
     group: parseGroups(channel.group || 'default'),
     model_mapping: channel.model_mapping || '',
     priority: channel.priority || 0,
@@ -810,16 +860,18 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
   const channel: Partial<Channel> = {
     name: formData.name,
     type: formData.type,
-    base_url:
-      formData.type === CHANNEL_TYPE_OPENCODE
-        ? 'https://opencode.ai/zen/go/v1/chat/completions'
-        : normalizeBaseUrl(formData.base_url) || null,
+    base_url: isFixedCodeChannelType(formData.type)
+      ? fixedCodeChannelBaseUrl(formData.type)
+      : normalizeBaseUrl(formData.base_url) || null,
     key: formData.key,
     openai_organization: formData.openai_organization || null,
-    models:
-      formData.type === CHANNEL_TYPE_OPENCODE
-        ? 'deepseek-v4-flash'
-        : formData.models,
+    models: isFixedCodeChannelType(formData.type)
+      ? fixedCodeChannelModels(
+          formData.type,
+          formData.models,
+          formData.model_mapping
+        )
+      : formData.models,
     group: formatGroups(formData.group),
     model_mapping: formData.model_mapping || null,
     priority: formData.priority || null,
@@ -865,22 +917,21 @@ export function transformFormDataToUpdatePayload(
     id: channelId,
     name: formData.name,
     type: formData.type,
-    base_url:
-      formData.type === CHANNEL_TYPE_OPENCODE
-        ? 'https://opencode.ai/zen/go/v1/chat/completions'
-        : normalizeBaseUrl(formData.base_url) || null,
+    base_url: isFixedCodeChannelType(formData.type)
+      ? fixedCodeChannelBaseUrl(formData.type)
+      : normalizeBaseUrl(formData.base_url) || null,
     openai_organization: formData.openai_organization || null,
-    models:
-      formData.type === CHANNEL_TYPE_OPENCODE
-        ? 'deepseek-v4-flash'
-        : formData.models,
+    models: isFixedCodeChannelType(formData.type)
+      ? fixedCodeChannelModels(
+          formData.type,
+          formData.models,
+          formData.model_mapping
+        )
+      : formData.models,
     group: formatGroups(formData.group),
     priority: formData.priority || null,
     weight: formData.weight || null,
-    test_model:
-      formData.type === CHANNEL_TYPE_OPENCODE
-        ? 'deepseek-v4-flash'
-        : formData.test_model || null,
+    test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,

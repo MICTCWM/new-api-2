@@ -163,6 +163,11 @@ type RelayInfo struct {
 	// OpencodePricingPeriod records the UTC pricing lane used for the provider
 	// charge. It is admin-only in generated consume logs.
 	OpencodePricingPeriod *string
+	// CommandUpstreamCostMicroUSD records the Command provider-side charge
+	// calculated from upstream token usage and the shared peak/off-peak price.
+	CommandUpstreamCostMicroUSD *int64
+	// CommandPricingPeriod records the UTC pricing period used for Command.
+	CommandPricingPeriod *string
 
 	// TieredBillingSnapshot captures tiered billing rules at pre-consume time.
 	// Auto-group retries refresh its group-dependent fields before each attempt

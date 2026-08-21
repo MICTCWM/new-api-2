@@ -27,6 +27,7 @@ import type {
   ChannelBalanceResponse,
   ChannelOpsResponse,
   ChannelTestResponse,
+  CommandUsageResponse,
   CopyChannelParams,
   CopyChannelResponse,
   FetchModelsResponse,
@@ -364,12 +365,34 @@ export async function getOpencodeUsage(
   return res.data
 }
 
+export async function getCommandUsage(
+  channelId: number
+): Promise<CommandUsageResponse> {
+  const res = await api.get(
+    `/api/channel/${channelId}/command/usage`,
+    channelActionConfig({ disableDuplicate: true })
+  )
+  return res.data
+}
+
 export async function resetOpencodeUsage(): Promise<{
   success: boolean
   message?: string
 }> {
   const res = await api.post(
     '/api/channel/opencode/usage/reset',
+    {},
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function resetCommandUsage(): Promise<{
+  success: boolean
+  message?: string
+}> {
+  const res = await api.post(
+    '/api/channel/command/usage/reset',
     {},
     channelActionConfig()
   )

@@ -23,6 +23,34 @@ For commercial licensing, please contact support@quantumnous.com
 
 export const CHANNEL_TYPE_NEW_API = 60
 export const CHANNEL_TYPE_OPENCODE = 61
+export const CHANNEL_TYPE_COMMAND = 62
+
+export const FIXED_CODE_CHANNEL_MODELS: Record<number, string> = {
+  [CHANNEL_TYPE_OPENCODE]: 'deepseek-v4-flash',
+  [CHANNEL_TYPE_COMMAND]: 'deepseek/deepseek-v4-flash',
+}
+
+export const COMMAND_NATIVE_MODELS = [
+  'deepseek/deepseek-v4-flash',
+  'deepseek/deepseek-v4-pro',
+] as const
+
+export function getFixedCodeChannelModel(type: number): string {
+  return (
+    FIXED_CODE_CHANNEL_MODELS[type] ||
+    FIXED_CODE_CHANNEL_MODELS[CHANNEL_TYPE_OPENCODE]
+  )
+}
+
+export function getFixedCodeChannelModels(type: number): readonly string[] {
+  return type === CHANNEL_TYPE_COMMAND
+    ? COMMAND_NATIVE_MODELS
+    : [getFixedCodeChannelModel(type)]
+}
+
+export function isFixedCodeChannelType(type: number): boolean {
+  return type === CHANNEL_TYPE_OPENCODE || type === CHANNEL_TYPE_COMMAND
+}
 
 export const CHANNEL_TYPES = {
   0: 'Unknown',
@@ -83,12 +111,13 @@ export const CHANNEL_TYPES = {
   59: 'Sub2API',
   60: 'New API',
   61: 'Opencode',
+  62: 'Command',
 } as const
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
-  1, 14, 33, 24, 43, 3, 41, 48, 61, 60, 58, 42, 34, 20, 4, 40, 27, 25, 17, 26,
-  15, 46, 23, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 59, 22, 21, 44,
-  2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
+  1, 14, 33, 24, 43, 3, 41, 48, 61, 62, 60, 58, 42, 34, 20, 4, 40, 27, 25, 17,
+  26, 15, 46, 23, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 59, 22, 21,
+  44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
 ]
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
@@ -430,10 +459,12 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   59: 'Enter API key for this channel',
   60: 'Enter API key for this channel',
   61: 'Enter Opencode API key(s), one per line for batch creation',
+  62: 'Enter Command API key(s), one per line for batch creation',
 }
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {
   61: 'Opencode uses a fixed endpoint and only supports deepseek-v4-flash. Batch mode creates one channel per API key.',
+  62: 'Command uses a fixed endpoint and supports deepseek/deepseek-v4-flash and deepseek/deepseek-v4-pro. Batch mode creates one channel per API key.',
   3: 'For channels added after May 10, 2025, no need to remove "." from model names during deployment',
   8: 'If connecting to upstream One API or New API relay projects, use OpenAI type instead unless you know what you are doing',
   37: 'Dify channels only support chatflow and agent, and agent does not support images',

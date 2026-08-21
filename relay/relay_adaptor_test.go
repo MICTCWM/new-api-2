@@ -19,3 +19,14 @@ func TestGetAdaptorForChannelUsesOpencodeCanonicalURL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://opencode.ai/zen/go/v1/chat/completions", requestURL)
 }
+
+func TestGetAdaptorForChannelUsesCommandChatEndpoint(t *testing.T) {
+	adaptor := GetAdaptorForChannel(constant.APITypeOpenAI, constant.ChannelTypeCommand)
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeChatCompletions,
+	}
+
+	requestURL, err := adaptor.GetRequestURL(info)
+	require.NoError(t, err)
+	require.Equal(t, "https://api.commandcode.ai/provider/v1/chat/completions", requestURL)
+}

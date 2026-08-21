@@ -55,11 +55,17 @@ import {
 import { formatTimestampToDate } from '@/lib/format'
 import { truncateText } from '@/lib/utils'
 
-import { getCodexUsage, getOpencodeUsage, updateChannelBalance } from '../api'
+import {
+  getCodexUsage,
+  getCommandUsage,
+  getOpencodeUsage,
+  updateChannelBalance,
+} from '../api'
 import {
   CHANNEL_STATUS_CONFIG,
-  CHANNEL_TYPE_OPENCODE,
+  CHANNEL_TYPE_COMMAND,
   MODEL_FETCHABLE_TYPES,
+  isFixedCodeChannelType,
 } from '../constants'
 import {
   formatRelativeTime,
@@ -80,7 +86,7 @@ import {
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
-import type { Channel } from '../types'
+import type { Channel, CommandUsageSnapshot } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
@@ -330,26 +336,40 @@ const SENSITIVE_MASK = '••••'
 /**
  * Balance cell component with click to update
  */
-function OpencodeUsageCell({ channel }: { channel: Channel }) {
+function CodeProviderUsageCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
+  const isCommand = channel.type === CHANNEL_TYPE_COMMAND
   const { data } = useQuery({
-    queryKey: ['opencode-usage', channel.id],
-    queryFn: () => getOpencodeUsage(channel.id),
-    enabled: channel.type === CHANNEL_TYPE_OPENCODE,
+    queryKey: ['code-provider-usage', channel.id],
+    queryFn: () =>
+      isCommand ? getCommandUsage(channel.id) : getOpencodeUsage(channel.id),
+    enabled: isFixedCodeChannelType(channel.type),
     refetchInterval: 15_000,
   })
-  if (channel.type !== CHANNEL_TYPE_OPENCODE || !data?.data) return null
+  if (!isFixedCodeChannelType(channel.type) || !data?.data) return null
 
   const usage = data.data
+  const commandUsage = isCommand ? (usage as CommandUsageSnapshot) : undefined
   const windows = [
     [t('5 hours'), usage.five_hour],
     [t('Weekly'), usage.week],
     [t('Monthly'), usage.month],
   ] as const
-  const poolWindows = [
-    [t('Idle'), usage.off_peak_pool ?? usage.pool, 'off_peak'],
-    [t('Busy'), usage.peak_pool ?? usage.pool, 'peak'],
-  ] as const
+  const poolWindows = isCommand
+    ? commandUsage?.split_pools
+      ? ([
+          [
+            t('Flash pool'),
+            commandUsage.flash_pool ?? commandUsage.pool,
+            'flash',
+          ],
+          [t('Pro pool'), commandUsage.pro_pool ?? commandUsage.pool, 'pro'],
+        ] as const)
+      : ([[t('Total pool'), usage.pool, 'combined']] as const)
+    : ([
+        [t('Idle'), usage.off_peak_pool ?? usage.pool, 'off_peak'],
+        [t('Busy'), usage.peak_pool ?? usage.pool, 'peak'],
+      ] as const)
   return (
     <div className='flex min-w-52 items-center gap-2'>
       <div className='min-w-40 flex-1 space-y-1'>
@@ -398,7 +418,7 @@ function OpencodeUsageCell({ channel }: { channel: Channel }) {
           } else if (percent >= 50) {
             color = 'bg-yellow-500'
           }
-          const isCurrent = usage.pricing_period === period
+          const isCurrent = isCommand || usage.pricing_period === period
           return (
             <TooltipProvider key={period}>
               <Tooltip>
@@ -432,15 +452,17 @@ function OpencodeUsageCell({ channel }: { channel: Channel }) {
   )
 }
 
-function OpencodeLoadCell({ channel }: { channel: Channel }) {
+function CodeProviderLoadCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
+  const isCommand = channel.type === CHANNEL_TYPE_COMMAND
   const { data } = useQuery({
-    queryKey: ['opencode-usage', channel.id],
-    queryFn: () => getOpencodeUsage(channel.id),
-    enabled: channel.type === CHANNEL_TYPE_OPENCODE,
+    queryKey: ['code-provider-usage', channel.id],
+    queryFn: () =>
+      isCommand ? getCommandUsage(channel.id) : getOpencodeUsage(channel.id),
+    enabled: isFixedCodeChannelType(channel.type),
     refetchInterval: 15_000,
   })
-  if (channel.type !== CHANNEL_TYPE_OPENCODE || !data?.data) return null
+  if (!isFixedCodeChannelType(channel.type) || !data?.data) return null
   const usage = data.data
   const count = Math.min(usage.rpm_limit, Math.max(0, usage.rpm_count))
   const ratio = count / Math.max(1, usage.rpm_limit)
@@ -460,7 +482,7 @@ function OpencodeLoadCell({ channel }: { channel: Channel }) {
             <div
               className={`relative size-10 ${color}`}
               role='img'
-              aria-label={t('Opencode load: {{count}} of {{limit}} RPM', {
+              aria-label={t('Code provider load: {{count}} of {{limit}} RPM', {
                 count,
                 limit: usage.rpm_limit,
               })}
@@ -1310,10 +1332,10 @@ export function useChannelsColumns(
         accessorKey: 'balance',
         header: t('Used / Remaining'),
         cell: ({ row }) =>
-          row.original.type === CHANNEL_TYPE_OPENCODE ? (
+          isFixedCodeChannelType(row.original.type) ? (
             <div className='flex items-center gap-3'>
-              <OpencodeUsageCell channel={row.original} />
-              <OpencodeLoadCell channel={row.original} />
+              <CodeProviderUsageCell channel={row.original} />
+              <CodeProviderLoadCell channel={row.original} />
             </div>
           ) : (
             <BalanceCell channel={row.original} />

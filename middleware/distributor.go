@@ -139,8 +139,8 @@ func Distribute() func(c *gin.Context) {
 						TokenGroup:             usingGroup,
 						RequestPath:            c.Request.URL.Path,
 						Retry:                  common.GetPointer(0),
-						OpencodePool:           modelRequest.Model == model.OpencodeModel,
-						OpencodeIncludeRPMFull: modelRequest.Model == model.OpencodeModel,
+						OpencodePool:           model.IsCodeProviderModel(modelRequest.Model),
+						OpencodeIncludeRPMFull: model.IsCodeProviderModel(modelRequest.Model),
 						AttemptedChannelIDs:    make(map[int]struct{}),
 					})
 					if err != nil {
@@ -158,7 +158,7 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
-						if modelRequest.Model == model.OpencodeModel {
+						if model.IsCodeProviderModel(modelRequest.Model) {
 							abortWithOpenAiMessage(c, http.StatusBadGateway, constant.OpencodeUpstreamExhaustedMessage, types.ErrorCodeDoRequestFailed)
 							return
 						}

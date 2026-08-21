@@ -465,6 +465,27 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		}
 		relayInfo.OpencodeUpstreamCostMicroUSD = &opencodeCost
 		relayInfo.OpencodePricingPeriod = &pricingPeriod
+	} else if relayInfo.ChannelType == constant.ChannelTypeCommand {
+		commandCost := int64(0)
+		settleAt := time.Now().UTC()
+		pricingPeriod := model.OpencodePricingPeriodAt(settleAt)
+		commandModel := strings.TrimSpace(relayInfo.UpstreamModelName)
+		if commandModel == "" {
+			commandModel = relayInfo.OriginModelName
+		}
+		if billingUsage != nil {
+			calculatedCost, err := model.CalculateCommandCostMicroUSDForModel(billingUsage, commandModel, settleAt)
+			if err != nil {
+				logger.LogError(ctx, "failed to calculate command provider usage: "+err.Error())
+			} else {
+				commandCost = calculatedCost
+				if err := model.SettleCommandCostForModel(relayInfo.ChannelId, commandModel, commandCost, settleAt); err != nil {
+					logger.LogError(ctx, "failed to settle command provider usage: "+err.Error())
+				}
+			}
+		}
+		relayInfo.CommandUpstreamCostMicroUSD = &commandCost
+		relayInfo.CommandPricingPeriod = &pricingPeriod
 	}
 
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {

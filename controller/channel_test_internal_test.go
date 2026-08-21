@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/relay/channel/command"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
@@ -120,6 +121,78 @@ func TestValidateOpencodeUpdateAllowsExistingKeyOmission(t *testing.T) {
 	require.NotNil(t, channel.BaseURL)
 	assert.Equal(t, "deepseek-v4-flash", channel.Models)
 }
+
+func TestValidateCommandChannelNormalizesFixedConfiguration(t *testing.T) {
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeCommand,
+		Key:    "command-key",
+		Models: "",
+	}
+
+	require.NoError(t, validateChannel(channel, true))
+	assert.Equal(t, "deepseek/deepseek-v4-flash", channel.Models)
+	require.NotNil(t, channel.BaseURL)
+	assert.Equal(t, "https://api.commandcode.ai/provider/v1", *channel.BaseURL)
+}
+
+func TestValidateCommandChannelAllowsModelMappingSources(t *testing.T) {
+	mapping := `{"client-model":"deepseek/deepseek-v4-flash"}`
+	channel := &model.Channel{
+		Type:         constant.ChannelTypeCommand,
+		Key:          "command-key",
+		Models:       "deepseek/deepseek-v4-flash,client-model",
+		ModelMapping: &mapping,
+	}
+
+	require.NoError(t, validateChannel(channel, true))
+	assert.Equal(t, "deepseek/deepseek-v4-flash,client-model", channel.Models)
+}
+
+func TestValidateCommandChannelAllowsOptionalProModel(t *testing.T) {
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeCommand,
+		Key:    "command-key",
+		Models: command.Model + "," + command.ProModel,
+	}
+
+	require.NoError(t, validateChannel(channel, true))
+	assert.Equal(t, command.Model+","+command.ProModel, channel.Models)
+}
+
+func TestValidateCommandChannelRejectsProOnlyConfiguration(t *testing.T) {
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeCommand,
+		Key:    "command-key",
+		Models: command.ProModel,
+	}
+
+	require.ErrorContains(t, validateChannel(channel, true), "must include the fixed model")
+}
+
+func TestValidateCommandChannelRequiresFixedModelWithMappingSources(t *testing.T) {
+	mapping := `{"client-model":"deepseek/deepseek-v4-flash"}`
+	channel := &model.Channel{
+		Type:         constant.ChannelTypeCommand,
+		Key:          "command-key",
+		Models:       "client-model",
+		ModelMapping: &mapping,
+	}
+
+	require.ErrorContains(t, validateChannel(channel, true), "must include the fixed model")
+}
+
+func TestValidateCommandChannelRejectsUnmappedModels(t *testing.T) {
+	mapping := `{"client-model":"deepseek/deepseek-v4-flash"}`
+	channel := &model.Channel{
+		Type:         constant.ChannelTypeCommand,
+		Key:          "command-key",
+		Models:       "deepseek/deepseek-v4-flash,unsupported-model",
+		ModelMapping: &mapping,
+	}
+
+	require.ErrorContains(t, validateChannel(channel, true), "model mapping source models")
+}
+
 func TestResponsesCompactChannelSupport(t *testing.T) {
 	tests := []struct {
 		name        string

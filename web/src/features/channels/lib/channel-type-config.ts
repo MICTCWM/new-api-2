@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { CHANNEL_TYPES } from '../constants'
+import { CHANNEL_TYPES, getFixedCodeChannelModel } from '../constants'
 
 // ============================================================================
 // Channel Type Configuration
@@ -169,11 +169,23 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
     name: CHANNEL_TYPES[61],
     icon: 'OpenAI',
     defaultBaseUrl: 'https://opencode.ai/zen/go/v1/chat/completions',
-    supportedModels: ['deepseek-v4-flash'],
+    supportedModels: [getFixedCodeChannelModel(61)],
     hints: {
       baseUrl: 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions',
       key: 'Opencode API key',
-      models: 'deepseek-v4-flash',
+      models: getFixedCodeChannelModel(61),
+    },
+  },
+  62: {
+    id: 62,
+    name: CHANNEL_TYPES[62],
+    icon: 'OpenAI',
+    defaultBaseUrl: 'https://api.commandcode.ai/provider/v1',
+    supportedModels: [getFixedCodeChannelModel(62)],
+    hints: {
+      baseUrl: 'Fixed endpoint: https://api.commandcode.ai/provider/v1',
+      key: 'Command API key',
+      models: getFixedCodeChannelModel(62),
     },
   },
 }

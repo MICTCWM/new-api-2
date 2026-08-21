@@ -59,6 +59,7 @@ const (
 	ChannelTypeSub2API        = 59
 	ChannelTypeNewAPI         = 60
 	ChannelTypeOpencode       = 61
+	ChannelTypeCommand        = 62
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
@@ -128,6 +129,7 @@ var ChannelBaseURLs = []string{
 	"",                                          //59
 	"",                                          //60
 	"https://opencode.ai/zen/go/v1/chat/completions", //61
+	"https://api.commandcode.ai/provider/v1",         //62
 }
 
 var ChannelTypeNames = map[int]string{
@@ -189,6 +191,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeSub2API:        "Sub2API",
 	ChannelTypeNewAPI:         "New API",
 	ChannelTypeOpencode:       "Opencode",
+	ChannelTypeCommand:        "Command",
 }
 
 func GetChannelTypeName(channelType int) string {

@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/command"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	"github.com/QuantumNous/new-api/relay/channel/opencode"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -121,12 +122,44 @@ func GetOpencodeChannelUsage(c *gin.Context) {
 	common.ApiSuccess(c, usage)
 }
 
+func GetCommandChannelUsage(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	channel, err := model.GetChannelById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if channel.Type != constant.ChannelTypeCommand {
+		common.ApiError(c, fmt.Errorf("channel is not command"))
+		return
+	}
+	usage, err := model.GetCommandUsageSnapshot(id, common.GetTimestamp())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, usage)
+}
+
 func ResetOpencodeUsage(c *gin.Context) {
 	if err := model.ResetAllOpencodeUsage(); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	recordManageAudit(c, "channel.opencode.reset_all_usage", nil)
+	common.ApiSuccess(c, nil)
+}
+
+func ResetCommandUsage(c *gin.Context) {
+	if err := model.ResetAllCommandUsage(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "channel.command.reset_all_usage", nil)
 	common.ApiSuccess(c, nil)
 }
 
@@ -509,15 +542,64 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("channel cannot be empty")
 	}
 
-	if channel.Type == constant.ChannelTypeOpencode {
-		if isAdd && strings.TrimSpace(channel.Key) == "" {
-			return fmt.Errorf("opencode API key cannot be empty")
-		}
-		if channel.Models != "" && strings.TrimSpace(channel.Models) != opencode.Model {
-			return fmt.Errorf("opencode only supports model %s", opencode.Model)
-		}
-		channel.Models = opencode.Model
+	if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand {
+		modelName := opencode.Model
 		canonicalURL := opencode.CanonicalURL
+		keyName := "opencode"
+		if channel.Type == constant.ChannelTypeCommand {
+			modelName = command.Model
+			canonicalURL = command.BaseURL
+			keyName = "command"
+		}
+		if isAdd && strings.TrimSpace(channel.Key) == "" {
+			return fmt.Errorf("%s API key cannot be empty", keyName)
+		}
+		if channel.Type == constant.ChannelTypeCommand && channel.Models != "" {
+			mappingSources := make(map[string]string)
+			if mapping := strings.TrimSpace(channel.GetModelMapping()); mapping != "" {
+				if err := common.UnmarshalJsonStr(mapping, &mappingSources); err != nil {
+					return fmt.Errorf("%s model mapping must be valid JSON", keyName)
+				}
+			}
+			nativeModels := map[string]struct{}{
+				command.Model:    {},
+				command.ProModel: {},
+			}
+			validModels := make([]string, 0, len(channel.GetModels()))
+			seenModels := make(map[string]struct{})
+			hasFixedModel := false
+			for _, configuredModel := range channel.GetModels() {
+				configuredModel = strings.TrimSpace(configuredModel)
+				if configuredModel == "" {
+					continue
+				}
+				if configuredModel == modelName {
+					hasFixedModel = true
+				}
+				if _, isNativeModel := nativeModels[configuredModel]; !isNativeModel {
+					if _, ok := mappingSources[configuredModel]; !ok {
+						return fmt.Errorf("%s only supports Flash, Pro, or model mapping source models", keyName)
+					}
+				}
+				if _, ok := seenModels[configuredModel]; ok {
+					continue
+				}
+				seenModels[configuredModel] = struct{}{}
+				validModels = append(validModels, configuredModel)
+			}
+			if len(validModels) == 0 {
+				return fmt.Errorf("%s must have at least one model", keyName)
+			}
+			if !hasFixedModel {
+				return fmt.Errorf("%s must include the fixed model %s", keyName, modelName)
+			}
+			channel.Models = strings.Join(validModels, ",")
+		} else if channel.Models != "" && strings.TrimSpace(channel.Models) != modelName {
+			return fmt.Errorf("%s only supports model %s", keyName, modelName)
+		}
+		if channel.Models == "" && isAdd {
+			channel.Models = modelName
+		}
 		channel.BaseURL = &canonicalURL
 	}
 
@@ -675,10 +757,10 @@ func AddChannel(c *gin.Context) {
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
 	case "multi_to_single":
-		if addChannelRequest.Channel.Type == constant.ChannelTypeOpencode {
+		if addChannelRequest.Channel.Type == constant.ChannelTypeOpencode || addChannelRequest.Channel.Type == constant.ChannelTypeCommand {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "opencode requires one channel per API key; use batch mode",
+				"message": "this channel requires one channel per API key; use batch mode",
 			})
 			return
 		}
@@ -1033,11 +1115,11 @@ func UpdateChannel(c *gin.Context) {
 		})
 		return
 	}
-	if channel.Type == constant.ChannelTypeOpencode && strings.TrimSpace(channel.Key) == "" {
-		if originChannel.Type != constant.ChannelTypeOpencode || strings.TrimSpace(originChannel.Key) == "" {
+	if (channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand) && strings.TrimSpace(channel.Key) == "" {
+		if originChannel.Type != channel.Type || strings.TrimSpace(originChannel.Key) == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "opencode API key cannot be empty",
+				"message": "API key cannot be empty",
 			})
 			return
 		}

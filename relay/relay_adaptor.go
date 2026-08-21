@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/cloudflare"
 	"github.com/QuantumNous/new-api/relay/channel/codex"
 	"github.com/QuantumNous/new-api/relay/channel/cohere"
+	"github.com/QuantumNous/new-api/relay/channel/command"
 	"github.com/QuantumNous/new-api/relay/channel/coze"
 	"github.com/QuantumNous/new-api/relay/channel/deepseek"
 	"github.com/QuantumNous/new-api/relay/channel/dify"
@@ -132,17 +133,22 @@ func GetAdaptor(apiType int) channel.Adaptor {
 		return &newapi.Adaptor{}
 	case constant.APITypeOpencode:
 		return &opencode.Adaptor{}
+	case constant.APITypeCommand:
+		return &command.Adaptor{}
 	}
 	return nil
 }
 
 // GetAdaptorForChannel prefers the channel-specific adaptor when an API type
-// can otherwise fall back to a compatible adaptor. Opencode owns a canonical
-// endpoint, so selecting it by channel type prevents OpenAI URL composition
-// from appending another relay path.
+// can otherwise fall back to a compatible adaptor. Fixed code-provider
+// endpoints are selected by channel type so OpenAI URL composition does not
+// append another relay path.
 func GetAdaptorForChannel(apiType, channelType int) channel.Adaptor {
-	if channelType == constant.ChannelTypeOpencode {
+	switch channelType {
+	case constant.ChannelTypeOpencode:
 		return &opencode.Adaptor{}
+	case constant.ChannelTypeCommand:
+		return &command.Adaptor{}
 	}
 	return GetAdaptor(apiType)
 }

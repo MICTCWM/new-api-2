@@ -64,6 +64,8 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodGet, path: "/:id/codex/usage", permission: authz.ChannelRead, handler: controller.GetCodexChannelUsage},
 	{method: http.MethodGet, path: "/:id/opencode/usage", permission: authz.ChannelRead, handler: controller.GetOpencodeChannelUsage},
 	{method: http.MethodPost, path: "/opencode/usage/reset", permission: authz.ChannelOperate, handler: controller.ResetOpencodeUsage},
+	{method: http.MethodGet, path: "/:id/command/usage", permission: authz.ChannelRead, handler: controller.GetCommandChannelUsage},
+	{method: http.MethodPost, path: "/command/usage/reset", permission: authz.ChannelOperate, handler: controller.ResetCommandUsage},
 	{method: http.MethodGet, path: "/:id/codex/usage/reset-credits", permission: authz.ChannelRead, handler: controller.GetCodexChannelRateLimitResetCredits},
 	{method: http.MethodPost, path: "/:id/codex/usage/reset", permission: authz.ChannelOperate, handler: controller.ResetCodexChannelUsage},
 	{method: http.MethodPost, path: "/ollama/pull", permission: authz.ChannelSensitiveWrite, handler: controller.OllamaPullModel},

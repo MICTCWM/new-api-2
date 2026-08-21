@@ -60,8 +60,12 @@ import {
 } from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { resetOpencodeUsage } from '../api'
-import { CHANNEL_TYPE_OPENCODE, MODEL_FETCHABLE_TYPES } from '../constants'
+import { resetCommandUsage, resetOpencodeUsage } from '../api'
+import {
+  CHANNEL_TYPE_COMMAND,
+  MODEL_FETCHABLE_TYPES,
+  isFixedCodeChannelType,
+} from '../constants'
 import {
   channelsQueryKeys,
   handleDeleteChannel,
@@ -164,19 +168,43 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     }
   }
 
-  const handleResetOpencodeUsage = async () => {
+  const handleResetCodeProviderUsage = async () => {
     if (!canOperate) return
     setIsResettingUsage(true)
     try {
-      const response = await resetOpencodeUsage()
+      const response =
+        channel.type === CHANNEL_TYPE_COMMAND
+          ? await resetCommandUsage()
+          : await resetOpencodeUsage()
       if (response.success) {
-        toast.success(t('OpenCode quotas reset'))
-        await queryClient.invalidateQueries({ queryKey: ['opencode-usage'] })
+        toast.success(
+          t(
+            channel.type === CHANNEL_TYPE_COMMAND
+              ? 'Command quotas reset'
+              : 'OpenCode quotas reset'
+          )
+        )
+        await queryClient.invalidateQueries({
+          queryKey: ['code-provider-usage'],
+        })
       } else {
-        toast.error(response.message || t('Failed to reset OpenCode quotas'))
+        toast.error(
+          response.message ||
+            t(
+              channel.type === CHANNEL_TYPE_COMMAND
+                ? 'Failed to reset Command quotas'
+                : 'Failed to reset OpenCode quotas'
+            )
+        )
       }
     } catch {
-      toast.error(t('Failed to reset OpenCode quotas'))
+      toast.error(
+        t(
+          channel.type === CHANNEL_TYPE_COMMAND
+            ? 'Failed to reset Command quotas'
+            : 'Failed to reset OpenCode quotas'
+        )
+      )
     } finally {
       setIsResettingUsage(false)
     }
@@ -391,7 +419,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
           <DropdownMenuSeparator />
 
-          {channel.type === CHANNEL_TYPE_OPENCODE && (
+          {isFixedCodeChannelType(channel.type) && (
             <DropdownMenuItem
               disabled={!canOperate || isResettingUsage}
               onSelect={(event) => {
@@ -399,7 +427,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
                 if (canOperate) setResetUsageConfirmOpen(true)
               }}
             >
-              {t('Reset all OpenCode channel quotas')}
+              {t(
+                channel.type === CHANNEL_TYPE_COMMAND
+                  ? 'Reset all Command channel quotas'
+                  : 'Reset all OpenCode channel quotas'
+              )}
               <DropdownMenuShortcut>
                 {isResettingUsage ? (
                   <Loader2 className='size-4 animate-spin' />
@@ -431,15 +463,21 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       <ConfirmDialog
         open={resetUsageConfirmOpen}
         onOpenChange={setResetUsageConfirmOpen}
-        title={t('Reset all OpenCode channel quotas?')}
+        title={t(
+          channel.type === CHANNEL_TYPE_COMMAND
+            ? 'Reset all Command channel quotas?'
+            : 'Reset all OpenCode channel quotas?'
+        )}
         desc={t(
-          'This clears the 5-hour, weekly, monthly, idle, and busy allowances for every OpenCode channel.'
+          channel.type === CHANNEL_TYPE_COMMAND
+            ? 'This clears the 5-hour, weekly, monthly, and total-pool allowances for every Command channel.'
+            : 'This clears the 5-hour, weekly, monthly, idle, and busy allowances for every OpenCode channel.'
         )}
         confirmText={t('Reset')}
         destructive
         handleConfirm={() => {
           setResetUsageConfirmOpen(false)
-          void handleResetOpencodeUsage()
+          void handleResetCodeProviderUsage()
         }}
       />
 
