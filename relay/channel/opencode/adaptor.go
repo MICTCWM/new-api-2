@@ -57,10 +57,17 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, types.NewError(errors.New("opencode channel: request is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
-	if request.Model != "" && request.Model != Model {
-		return nil, types.NewError(errors.New("opencode channel: unsupported model"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	isModelMapped := info != nil && info.ChannelMeta != nil && info.ChannelMeta.IsModelMapped
+	if !isModelMapped {
+		if request.Model != "" && request.Model != Model {
+			return nil, types.NewError(errors.New("opencode channel: unsupported model"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if request.Model == "" {
+			request.Model = Model
+		}
+	} else if strings.TrimSpace(request.Model) == "" {
+		return nil, types.NewError(errors.New("opencode channel: mapped model is empty"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
-	request.Model = Model
 	return a.Adaptor.ConvertOpenAIRequest(c, info, request)
 }
 

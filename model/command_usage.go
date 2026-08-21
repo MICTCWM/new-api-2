@@ -367,6 +367,90 @@ func SettleCommandCostForModel(channelID int, modelName string, costMicroUSD int
 	})
 }
 
+// SetCommandUsageOverride replaces the usage counters for one Command
+// channel. It intentionally leaves RPM state untouched.
+func SetCommandUsageOverride(channelID int, override CodeProviderUsageOverride, now int64) error {
+	if channelID <= 0 {
+		return errors.New("invalid command channel id")
+	}
+	channel, found, err := getCommandChannel(channelID)
+	if err != nil {
+		return err
+	}
+	if !found || channel.Type != constant.ChannelTypeCommand {
+		return errors.New("channel is not command")
+	}
+	splitPools := commandChannelUsesSplitPools(channel)
+	poolLimit := CommandCombinedPoolLimitMicroUSD
+	if splitPools {
+		poolLimit = CommandFlashPoolLimitMicroUSD + CommandProPoolLimitMicroUSD
+	}
+	if err := validateCodeProviderUsageOverride(override, CommandFiveHourLimitMicroUSD, CommandWeekLimitMicroUSD, CommandMonthLimitMicroUSD); err != nil {
+		return err
+	}
+	if override.PoolUsedMicroUSD < 0 || override.PoolUsedMicroUSD > poolLimit {
+		return errors.New("command pool usage exceeds the limit")
+	}
+	if splitPools {
+		if override.FlashPoolUsedMicroUSD == nil || override.ProPoolUsedMicroUSD == nil {
+			return errors.New("command flash and pro pool usage are required")
+		}
+		if *override.FlashPoolUsedMicroUSD < 0 || *override.FlashPoolUsedMicroUSD > CommandFlashPoolLimitMicroUSD ||
+			*override.ProPoolUsedMicroUSD < 0 || *override.ProPoolUsedMicroUSD > CommandProPoolLimitMicroUSD {
+			return errors.New("command model pool usage exceeds the limit")
+		}
+		if *override.FlashPoolUsedMicroUSD+*override.ProPoolUsedMicroUSD != override.PoolUsedMicroUSD {
+			return errors.New("command model pool usage must equal the total pool usage")
+		}
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		channel, found, err := getCommandChannelTx(tx, channelID)
+		if err != nil {
+			return err
+		}
+		if !found || channel.Type != constant.ChannelTypeCommand {
+			return errors.New("channel is not command")
+		}
+		if err := ensureCommandPoolUsageRowsTx(tx, channel, now); err != nil {
+			return err
+		}
+		usage, err := getOrCreateCommandChannelUsageTx(tx, channelID, now)
+		if err != nil {
+			return err
+		}
+		usage.FiveHourUsed, usage.WeekUsed, usage.MonthUsed = override.FiveHourUsedMicroUSD, override.WeekUsedMicroUSD, override.MonthUsedMicroUSD
+		usage.FiveHourStart, usage.WeekStart, usage.MonthStart = now, now, now
+		if err := tx.Save(usage).Error; err != nil {
+			return err
+		}
+
+		if !splitPools {
+			pool, err := getOrCreateCommandPoolUsageByKeyTx(tx, CommandPoolKey(channelID), now)
+			if err != nil {
+				return err
+			}
+			pool.Used, pool.ResetTime = override.PoolUsedMicroUSD, now
+			return tx.Save(pool).Error
+		}
+
+		flash, err := getOrCreateCommandPoolUsageByKeyTx(tx, CommandFlashPoolKey(channelID), now)
+		if err != nil {
+			return err
+		}
+		pro, err := getOrCreateCommandPoolUsageByKeyTx(tx, CommandProPoolKey(channelID), now)
+		if err != nil {
+			return err
+		}
+		flash.Used, flash.ResetTime = *override.FlashPoolUsedMicroUSD, now
+		pro.Used, pro.ResetTime = *override.ProPoolUsedMicroUSD, now
+		if err := tx.Save(flash).Error; err != nil {
+			return err
+		}
+		return tx.Save(pro).Error
+	})
+}
+
 func GetCommandUsageSnapshot(channelID int, now int64) (*CommandUsageSnapshot, error) {
 	if channelID <= 0 {
 		return nil, errors.New("invalid channel id")

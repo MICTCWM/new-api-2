@@ -1160,16 +1160,13 @@ export function ChannelMutateDrawer({
   const modelOptions = useMemo(() => {
     if (isFixedCodeChannelType(currentType)) {
       const nativeModels = getFixedCodeChannelModels(currentType)
-      const models =
-        currentType === CHANNEL_TYPE_COMMAND
-          ? [
-              ...new Set([
-                ...nativeModels,
-                ...currentModelsArray,
-                ...redirectModelKeyList,
-              ]),
-            ]
-          : [...nativeModels]
+      const models = [
+        ...new Set([
+          ...nativeModels,
+          ...currentModelsArray,
+          ...redirectModelKeyList,
+        ]),
+      ]
       return models.map((model) => ({ value: model, label: model }))
     }
     const allModels = new Set([...allModelsList, ...currentModelsArray])
@@ -1301,16 +1298,14 @@ export function ChannelMutateDrawer({
     const nativeModels = getFixedCodeChannelModels(currentType)
     const fixedModel = nativeModels[0]
     let nextModels = [fixedModel]
-    if (currentType === CHANNEL_TYPE_COMMAND) {
-      const mappingSources = new Set(
-        extractMappingSourceModels(currentModelMapping || '')
-      )
-      const validModels = currentModelsArray.filter(
-        (model) => nativeModels.includes(model) || mappingSources.has(model)
-      )
-      if (validModels.length > 0) {
-        nextModels = validModels
-      }
+    const mappingSources = new Set(
+      extractMappingSourceModels(currentModelMapping || '')
+    )
+    const validModels = currentModelsArray.filter(
+      (model) => nativeModels.includes(model) || mappingSources.has(model)
+    )
+    if (validModels.length > 0) {
+      nextModels = validModels
     }
     const nextModelsValue = formatModelsArray(nextModels)
     if (currentModels !== nextModelsValue) {
@@ -1488,7 +1483,7 @@ export function ChannelMutateDrawer({
   const updateModels = useCallback(
     (newModels: string[], merge: boolean = false) => {
       let constrainedModels = newModels
-      if (currentType === CHANNEL_TYPE_COMMAND) {
+      if (isFixedCodeChannelType(currentType)) {
         const nativeModels = getFixedCodeChannelModels(currentType)
         const mappingSources = new Set(
           extractMappingSourceModels(currentModelMapping || '')
@@ -1496,8 +1491,6 @@ export function ChannelMutateDrawer({
         constrainedModels = newModels.filter(
           (model) => nativeModels.includes(model) || mappingSources.has(model)
         )
-      } else if (isFixedCodeChannelType(currentType)) {
-        constrainedModels = [getFixedCodeChannelModel(currentType)]
       }
       const finalModels = merge
         ? formatModelsArray([...currentModelsArray, ...constrainedModels])
@@ -1566,7 +1559,7 @@ export function ChannelMutateDrawer({
         t(
           currentType === CHANNEL_TYPE_COMMAND
             ? 'This channel supports Flash, Pro, and model mapping source models'
-            : 'This channel only supports deepseek-v4-flash'
+            : 'Opencode supports the fixed model and model mapping source models'
         )
       )
       return
@@ -1587,7 +1580,7 @@ export function ChannelMutateDrawer({
         t(
           currentType === CHANNEL_TYPE_COMMAND
             ? 'This channel supports Flash, Pro, and model mapping source models'
-            : 'This channel only supports deepseek-v4-flash'
+            : 'Opencode supports the fixed model and model mapping source models'
         )
       )
       return
@@ -1609,7 +1602,7 @@ export function ChannelMutateDrawer({
         t(
           currentType === CHANNEL_TYPE_COMMAND
             ? 'This channel supports Flash, Pro, and model mapping source models'
-            : 'This channel only supports deepseek-v4-flash'
+            : 'Opencode supports the fixed model and model mapping source models'
         )
       )
       return
@@ -1657,7 +1650,7 @@ export function ChannelMutateDrawer({
   const handleModelsChange = useCallback(
     (selected: string[]) => {
       let nextModels = selected
-      if (currentType === CHANNEL_TYPE_COMMAND) {
+      if (isFixedCodeChannelType(currentType)) {
         const nativeModels = getFixedCodeChannelModels(currentType)
         const mappingSources = new Set(
           extractMappingSourceModels(currentModelMapping || '')
@@ -1665,8 +1658,6 @@ export function ChannelMutateDrawer({
         nextModels = selected.filter(
           (model) => nativeModels.includes(model) || mappingSources.has(model)
         )
-      } else if (isFixedCodeChannelType(currentType)) {
-        nextModels = [getFixedCodeChannelModel(currentType)]
       }
       form.setValue('models', nextModels.join(','))
     },
@@ -2927,7 +2918,7 @@ export function ChannelMutateDrawer({
                                   {t(
                                     currentType === CHANNEL_TYPE_COMMAND
                                       ? 'Fixed endpoint: https://api.commandcode.ai/provider/v1. Supports deepseek/deepseek-v4-flash and deepseek/deepseek-v4-pro.'
-                                      : 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Only deepseek-v4-flash is supported.'
+                                      : 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and model mapping source models.'
                                   )}
                                 </AlertDescription>
                               </Alert>

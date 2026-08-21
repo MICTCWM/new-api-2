@@ -70,8 +70,6 @@ function fixedCodeChannelModels(
 ): string {
   const nativeModels = getFixedCodeChannelModels(type)
   const fixedModel = nativeModels[0]
-  if (type !== CHANNEL_TYPE_COMMAND) return fixedModel
-
   const mappingSources = new Set(extractMappingSourceModels(modelMapping || ''))
   const allowedModels = new Set([...nativeModels, ...mappingSources])
   const selectedModels = parseModelsString(models).filter((model) =>
@@ -378,23 +376,19 @@ export const channelFormSchema = z
           'Fixed code channels require batch mode for multiple API keys'
         )
       }
-      const fixedModel = getFixedCodeChannelModel(data.type)
       const configuredModels = parseModelsString(data.models)
       const mappingSources = new Set(
         extractMappingSourceModels(data.model_mapping || '')
       )
-      const invalidModels =
-        data.type === CHANNEL_TYPE_COMMAND
-          ? configuredModels.filter(
-              (model) =>
-                !getFixedCodeChannelModels(data.type).includes(model) &&
-                !mappingSources.has(model)
-            )
-          : configuredModels.filter((model) => model !== fixedModel)
+      const invalidModels = configuredModels.filter(
+        (model) =>
+          !getFixedCodeChannelModels(data.type).includes(model) &&
+          !mappingSources.has(model)
+      )
       const fixedModelError =
         data.type === CHANNEL_TYPE_COMMAND
           ? 'Command supports Flash, Pro, and model mapping source models'
-          : 'Fixed code channels only support deepseek-v4-flash'
+          : 'Opencode supports the fixed model and model mapping source models'
       if (invalidModels.length > 0) {
         addRequiredIssue(ctx, 'models', fixedModelError)
       }

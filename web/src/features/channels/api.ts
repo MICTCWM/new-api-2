@@ -27,6 +27,7 @@ import type {
   ChannelBalanceResponse,
   ChannelOpsResponse,
   ChannelTestResponse,
+  CodeProviderUsageOverrideRequest,
   CommandUsageResponse,
   CopyChannelParams,
   CopyChannelResponse,
@@ -370,6 +371,30 @@ export async function getCommandUsage(
 ): Promise<CommandUsageResponse> {
   const res = await api.get(
     `/api/channel/${channelId}/command/usage`,
+    channelActionConfig({ disableDuplicate: true })
+  )
+  return res.data
+}
+
+export async function setOpencodeUsageOverride(
+  channelId: number,
+  data: CodeProviderUsageOverrideRequest
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.post(
+    `/api/channel/${channelId}/opencode/usage/override`,
+    data,
+    channelActionConfig({ disableDuplicate: true })
+  )
+  return res.data
+}
+
+export async function setCommandUsageOverride(
+  channelId: number,
+  data: CodeProviderUsageOverrideRequest
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.post(
+    `/api/channel/${channelId}/command/usage/override`,
+    data,
     channelActionConfig({ disableDuplicate: true })
   )
   return res.data

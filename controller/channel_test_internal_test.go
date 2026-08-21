@@ -122,6 +122,43 @@ func TestValidateOpencodeUpdateAllowsExistingKeyOmission(t *testing.T) {
 	assert.Equal(t, "deepseek-v4-flash", channel.Models)
 }
 
+func TestValidateOpencodeChannelAllowsModelMappingSources(t *testing.T) {
+	mapping := `{"client-model":"deepseek-v4-flash"}`
+	channel := &model.Channel{
+		Type:         constant.ChannelTypeOpencode,
+		Key:          "opencode-key",
+		Models:       "deepseek-v4-flash,client-model",
+		ModelMapping: &mapping,
+	}
+
+	require.NoError(t, validateChannel(channel, true))
+	assert.Equal(t, "deepseek-v4-flash,client-model", channel.Models)
+}
+
+func TestValidateOpencodeChannelRequiresFixedModelWithMappingSources(t *testing.T) {
+	mapping := `{"client-model":"deepseek-v4-flash"}`
+	channel := &model.Channel{
+		Type:         constant.ChannelTypeOpencode,
+		Key:          "opencode-key",
+		Models:       "client-model",
+		ModelMapping: &mapping,
+	}
+
+	require.ErrorContains(t, validateChannel(channel, true), "must include the fixed model")
+}
+
+func TestValidateOpencodeChannelRejectsUnmappedModels(t *testing.T) {
+	mapping := `{"client-model":"deepseek-v4-flash"}`
+	channel := &model.Channel{
+		Type:         constant.ChannelTypeOpencode,
+		Key:          "opencode-key",
+		Models:       "deepseek-v4-flash,unsupported-model",
+		ModelMapping: &mapping,
+	}
+
+	require.ErrorContains(t, validateChannel(channel, true), "model mapping source models")
+}
+
 func TestValidateCommandChannelNormalizesFixedConfiguration(t *testing.T) {
 	channel := &model.Channel{
 		Type:   constant.ChannelTypeCommand,

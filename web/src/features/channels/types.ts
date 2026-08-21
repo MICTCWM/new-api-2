@@ -199,6 +199,17 @@ export interface CommandUsageResponse {
   data?: CommandUsageSnapshot
 }
 
+export interface CodeProviderUsageOverrideRequest {
+  five_hour_used_usd: number
+  week_used_usd: number
+  month_used_usd: number
+  pool_used_usd?: number
+  peak_pool_used_usd?: number
+  off_peak_pool_used_usd?: number
+  flash_pool_used_usd?: number
+  pro_pool_used_usd?: number
+}
+
 export interface GetChannelsResponse {
   success: boolean
   message?: string

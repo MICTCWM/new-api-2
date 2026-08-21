@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -143,6 +145,171 @@ func GetCommandChannelUsage(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, usage)
+}
+
+type codeProviderUsageOverrideRequest struct {
+	FiveHourUsedUSD    *float64 `json:"five_hour_used_usd"`
+	WeekUsedUSD        *float64 `json:"week_used_usd"`
+	MonthUsedUSD       *float64 `json:"month_used_usd"`
+	PoolUsedUSD        *float64 `json:"pool_used_usd"`
+	PeakPoolUsedUSD    *float64 `json:"peak_pool_used_usd"`
+	OffPeakPoolUsedUSD *float64 `json:"off_peak_pool_used_usd"`
+	FlashPoolUsedUSD   *float64 `json:"flash_pool_used_usd"`
+	ProPoolUsedUSD     *float64 `json:"pro_pool_used_usd"`
+}
+
+func usageOverrideMicroUSD(value *float64, field string, limit int64) (int64, error) {
+	if value == nil {
+		return 0, fmt.Errorf("%s is required", field)
+	}
+	if math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative finite amount", field)
+	}
+	amount := decimal.NewFromFloat(*value).Mul(decimal.NewFromInt(1_000_000)).Round(0)
+	limitDecimal := decimal.NewFromInt(limit)
+	if amount.GreaterThan(limitDecimal) {
+		return 0, fmt.Errorf("%s exceeds the limit of $%.2f", field, float64(limit)/1_000_000)
+	}
+	return amount.IntPart(), nil
+}
+
+func parseCodeProviderUsageOverride(req codeProviderUsageOverrideRequest, limits [3]int64) (model.CodeProviderUsageOverride, error) {
+	fiveHour, err := usageOverrideMicroUSD(req.FiveHourUsedUSD, "five_hour_used_usd", limits[0])
+	if err != nil {
+		return model.CodeProviderUsageOverride{}, err
+	}
+	week, err := usageOverrideMicroUSD(req.WeekUsedUSD, "week_used_usd", limits[1])
+	if err != nil {
+		return model.CodeProviderUsageOverride{}, err
+	}
+	month, err := usageOverrideMicroUSD(req.MonthUsedUSD, "month_used_usd", limits[2])
+	if err != nil {
+		return model.CodeProviderUsageOverride{}, err
+	}
+	return model.CodeProviderUsageOverride{
+		FiveHourUsedMicroUSD: fiveHour,
+		WeekUsedMicroUSD:     week,
+		MonthUsedMicroUSD:    month,
+	}, nil
+}
+
+func SetOpencodeChannelUsageOverride(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	channel, err := model.GetChannelById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if channel.Type != constant.ChannelTypeOpencode {
+		common.ApiError(c, fmt.Errorf("channel is not opencode"))
+		return
+	}
+	var req codeProviderUsageOverrideRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	override, err := parseCodeProviderUsageOverride(req, [3]int64{
+		model.OpencodeFiveHourLimitMicroUSD,
+		model.OpencodeWeekLimitMicroUSD,
+		model.OpencodeMonthLimitMicroUSD,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	peakPoolUsed, err := usageOverrideMicroUSD(req.PeakPoolUsedUSD, "peak_pool_used_usd", model.OpencodePoolLimitMicroUSD)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	override.PeakPoolUsedMicroUSD = &peakPoolUsed
+	offPeakPoolUsed, err := usageOverrideMicroUSD(req.OffPeakPoolUsedUSD, "off_peak_pool_used_usd", model.OpencodePoolLimitMicroUSD)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	override.OffPeakPoolUsedMicroUSD = &offPeakPoolUsed
+	if err := model.SetOpencodeUsageOverride(id, override, common.GetTimestamp()); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "channel.opencode.set_usage_override", map[string]interface{}{"channel_id": id})
+	common.ApiSuccess(c, nil)
+}
+
+func SetCommandChannelUsageOverride(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	channel, err := model.GetChannelById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if channel.Type != constant.ChannelTypeCommand {
+		common.ApiError(c, fmt.Errorf("channel is not command"))
+		return
+	}
+	var req codeProviderUsageOverrideRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	splitPools, err := model.CommandChannelUsesSplitPools(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	limits := model.CommandCombinedPoolLimitMicroUSD
+	if splitPools {
+		limits = model.CommandFlashPoolLimitMicroUSD + model.CommandProPoolLimitMicroUSD
+	}
+	override, err := parseCodeProviderUsageOverride(req, [3]int64{
+		model.CommandFiveHourLimitMicroUSD,
+		model.CommandWeekLimitMicroUSD,
+		model.CommandMonthLimitMicroUSD,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	poolUsed, err := usageOverrideMicroUSD(req.PoolUsedUSD, "pool_used_usd", limits)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	override.PoolUsedMicroUSD = poolUsed
+	if splitPools {
+		flashPoolUsed, err := usageOverrideMicroUSD(req.FlashPoolUsedUSD, "flash_pool_used_usd", model.CommandFlashPoolLimitMicroUSD)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		override.FlashPoolUsedMicroUSD = &flashPoolUsed
+		proPoolUsed, err := usageOverrideMicroUSD(req.ProPoolUsedUSD, "pro_pool_used_usd", model.CommandProPoolLimitMicroUSD)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		override.ProPoolUsedMicroUSD = &proPoolUsed
+		if *override.FlashPoolUsedMicroUSD+*override.ProPoolUsedMicroUSD != override.PoolUsedMicroUSD {
+			common.ApiError(c, fmt.Errorf("pool_used_usd must equal flash_pool_used_usd plus pro_pool_used_usd"))
+			return
+		}
+	}
+	if err := model.SetCommandUsageOverride(id, override, common.GetTimestamp()); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "channel.command.set_usage_override", map[string]interface{}{"channel_id": id})
+	common.ApiSuccess(c, nil)
 }
 
 func ResetOpencodeUsage(c *gin.Context) {
@@ -554,52 +721,51 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		if isAdd && strings.TrimSpace(channel.Key) == "" {
 			return fmt.Errorf("%s API key cannot be empty", keyName)
 		}
-		if channel.Type == constant.ChannelTypeCommand && channel.Models != "" {
-			mappingSources := make(map[string]string)
-			if mapping := strings.TrimSpace(channel.GetModelMapping()); mapping != "" {
-				if err := common.UnmarshalJsonStr(mapping, &mappingSources); err != nil {
-					return fmt.Errorf("%s model mapping must be valid JSON", keyName)
-				}
-			}
-			nativeModels := map[string]struct{}{
-				command.Model:    {},
-				command.ProModel: {},
-			}
-			validModels := make([]string, 0, len(channel.GetModels()))
-			seenModels := make(map[string]struct{})
-			hasFixedModel := false
-			for _, configuredModel := range channel.GetModels() {
-				configuredModel = strings.TrimSpace(configuredModel)
-				if configuredModel == "" {
-					continue
-				}
-				if configuredModel == modelName {
-					hasFixedModel = true
-				}
-				if _, isNativeModel := nativeModels[configuredModel]; !isNativeModel {
-					if _, ok := mappingSources[configuredModel]; !ok {
-						return fmt.Errorf("%s only supports Flash, Pro, or model mapping source models", keyName)
-					}
-				}
-				if _, ok := seenModels[configuredModel]; ok {
-					continue
-				}
-				seenModels[configuredModel] = struct{}{}
-				validModels = append(validModels, configuredModel)
-			}
-			if len(validModels) == 0 {
-				return fmt.Errorf("%s must have at least one model", keyName)
-			}
-			if !hasFixedModel {
-				return fmt.Errorf("%s must include the fixed model %s", keyName, modelName)
-			}
-			channel.Models = strings.Join(validModels, ",")
-		} else if channel.Models != "" && strings.TrimSpace(channel.Models) != modelName {
-			return fmt.Errorf("%s only supports model %s", keyName, modelName)
-		}
-		if channel.Models == "" && isAdd {
+		if channel.Models == "" {
 			channel.Models = modelName
 		}
+		mappingSources := make(map[string]string)
+		if mapping := strings.TrimSpace(channel.GetModelMapping()); mapping != "" {
+			if err := common.UnmarshalJsonStr(mapping, &mappingSources); err != nil {
+				return fmt.Errorf("%s model mapping must be valid JSON", keyName)
+			}
+		}
+		nativeModels := map[string]struct{}{modelName: {}}
+		if channel.Type == constant.ChannelTypeCommand {
+			nativeModels[command.ProModel] = struct{}{}
+		}
+		validModels := make([]string, 0, len(channel.GetModels()))
+		seenModels := make(map[string]struct{})
+		hasFixedModel := false
+		for _, configuredModel := range channel.GetModels() {
+			configuredModel = strings.TrimSpace(configuredModel)
+			if configuredModel == "" {
+				continue
+			}
+			if configuredModel == modelName {
+				hasFixedModel = true
+			}
+			if _, isNativeModel := nativeModels[configuredModel]; !isNativeModel {
+				if _, ok := mappingSources[configuredModel]; !ok {
+					if channel.Type == constant.ChannelTypeCommand {
+						return fmt.Errorf("%s only supports Flash, Pro, or model mapping source models", keyName)
+					}
+					return fmt.Errorf("%s only supports deepseek-v4-flash or model mapping source models", keyName)
+				}
+			}
+			if _, ok := seenModels[configuredModel]; ok {
+				continue
+			}
+			seenModels[configuredModel] = struct{}{}
+			validModels = append(validModels, configuredModel)
+		}
+		if len(validModels) == 0 {
+			return fmt.Errorf("%s must have at least one model", keyName)
+		}
+		if !hasFixedModel {
+			return fmt.Errorf("%s must include the fixed model %s", keyName, modelName)
+		}
+		channel.Models = strings.Join(validModels, ",")
 		channel.BaseURL = &canonicalURL
 	}
 

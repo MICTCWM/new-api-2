@@ -60,12 +60,14 @@ func TestGetCodeProviderCandidatesIncludesModelMappingSource(t *testing.T) {
 		common.SetMainDatabaseType(previousType)
 	})
 
+	mapping := `{"client-model":"deepseek/deepseek-v4-flash"}`
 	channel := &Channel{
-		Type:   constant.ChannelTypeCommand,
-		Status: common.ChannelStatusEnabled,
-		Key:    "command-key",
-		Models: CommandModel + ",client-model",
-		Group:  "default",
+		Type:         constant.ChannelTypeCommand,
+		Status:       common.ChannelStatusEnabled,
+		Key:          "command-key",
+		Models:       CommandModel + ",client-model",
+		ModelMapping: &mapping,
+		Group:        "default",
 	}
 	require.NoError(t, db.Create(channel).Error)
 	require.NoError(t, db.Create(&Ability{
@@ -90,6 +92,43 @@ func TestGetCodeProviderCandidatesIncludesModelMappingSource(t *testing.T) {
 		Enabled:   true,
 	}).Error)
 
+	candidates, err := GetCodeProviderCandidates("default", "client-model", nil)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	require.Equal(t, channel.Id, candidates[0].Id)
+}
+
+func TestGetCodeProviderCandidatesIncludesOpencodeModelMappingSource(t *testing.T) {
+	previousDB := DB
+	previousType := common.MainDatabaseType()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Channel{}, &Ability{}, &OpencodeChannelUsage{}, &OpencodePoolUsage{}))
+	DB = db
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	t.Cleanup(func() {
+		DB = previousDB
+		common.SetMainDatabaseType(previousType)
+	})
+
+	mapping := `{"client-model":"deepseek-v4-flash"}`
+	channel := &Channel{
+		Type:         constant.ChannelTypeOpencode,
+		Status:       common.ChannelStatusEnabled,
+		Key:          "opencode-key",
+		Models:       OpencodeModel + ",client-model",
+		ModelMapping: &mapping,
+		Group:        "default",
+	}
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&Ability{
+		Group:     "default",
+		Model:     "client-model",
+		ChannelId: channel.Id,
+		Enabled:   true,
+	}).Error)
+
+	require.True(t, IsCodeProviderModel("client-model"))
 	candidates, err := GetCodeProviderCandidates("default", "client-model", nil)
 	require.NoError(t, err)
 	require.Len(t, candidates, 1)
@@ -206,6 +245,33 @@ func TestResetAllOpencodeUsageResetsEveryChannelAndPool(t *testing.T) {
 func TestSettleOpencodeCostRejectsNegativeCharge(t *testing.T) {
 	useOpencodeUsageDB(t)
 	require.Error(t, SettleOpencodeCost(405, -1, time.Now().UTC()))
+}
+
+func TestSetOpencodeUsageOverrideUpdatesBothPricingPoolsAndPreservesRPM(t *testing.T) {
+	useOpencodeUsageDB(t)
+	now := time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC)
+	allowed, _, err := ReserveOpencodeRPM(450, now.Unix())
+	require.NoError(t, err)
+	require.True(t, allowed)
+
+	peak := int64(7_000_000)
+	offPeak := int64(11_000_000)
+	require.NoError(t, SetOpencodeUsageOverride(450, CodeProviderUsageOverride{
+		FiveHourUsedMicroUSD:    2_000_000,
+		WeekUsedMicroUSD:        8_000_000,
+		MonthUsedMicroUSD:       15_000_000,
+		PeakPoolUsedMicroUSD:    &peak,
+		OffPeakPoolUsedMicroUSD: &offPeak,
+	}, now.Unix()))
+
+	snapshot, err := GetOpencodeUsageSnapshot(450, now.Unix())
+	require.NoError(t, err)
+	require.Equal(t, int64(2_000_000), snapshot.FiveHour.UsedMicroUSD)
+	require.Equal(t, int64(8_000_000), snapshot.Week.UsedMicroUSD)
+	require.Equal(t, int64(15_000_000), snapshot.Month.UsedMicroUSD)
+	require.Equal(t, peak, snapshot.PeakPool.UsedMicroUSD)
+	require.Equal(t, offPeak, snapshot.OffPeakPool.UsedMicroUSD)
+	require.Equal(t, 1, snapshot.RPMCount)
 }
 
 func TestOpencodeRPMReservationCanBeReleasedAfterFailure(t *testing.T) {

@@ -75,6 +75,7 @@ import {
   getFirstResponseTimeColor,
   getResponseTimeColor,
   getReasoningEffortVariant,
+  getUpstreamCostUSD,
   renderAuditContent,
 } from '../../lib/format'
 import {
@@ -386,6 +387,18 @@ function BillingBreakdown(props: {
       label: t('Billing Path'),
       value: getUsageBillingPathLabel(t, other.admin_info),
     })
+
+    const upstreamCost = getUpstreamCostUSD(other.admin_info)
+    if (upstreamCost != null) {
+      rows.push({
+        label: t('Upstream Cost'),
+        value: formatBillingCurrencyFromUSD(upstreamCost, {
+          digitsLarge: 4,
+          digitsSmall: 6,
+          abbreviate: false,
+        }),
+      })
+    }
   }
 
   rows.push({

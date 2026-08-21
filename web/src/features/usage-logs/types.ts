@@ -120,6 +120,12 @@ export interface LogOtherData {
     use_channel?: number[]
     local_count_tokens?: boolean
     usage_billing_path?: UsageBillingPath | string
+    opencode_upstream_cost_usd?: number
+    opencode_upstream_cost_micro_usd?: number
+    opencode_pricing_period?: 'peak' | 'off_peak' | string
+    command_upstream_cost_usd?: number
+    command_upstream_cost_micro_usd?: number
+    command_pricing_period?: 'peak' | 'off_peak' | string
     channel_affinity?: ChannelAffinityInfo
     // Top-up audit fields (type=1, admin only)
     payment_method?: string

@@ -84,6 +84,20 @@ type OpencodeCapacitySnapshot struct {
 	AvailableCapacity int `json:"available_capacity"`
 }
 
+// CodeProviderUsageOverride contains the already validated micro-dollar
+// values used by the admin usage editor. Pool fields are optional because
+// OpenCode uses peak/off-peak pools while Command may use split model pools.
+type CodeProviderUsageOverride struct {
+	FiveHourUsedMicroUSD    int64
+	WeekUsedMicroUSD        int64
+	MonthUsedMicroUSD       int64
+	PoolUsedMicroUSD        int64
+	PeakPoolUsedMicroUSD    *int64
+	OffPeakPoolUsedMicroUSD *int64
+	FlashPoolUsedMicroUSD   *int64
+	ProPoolUsedMicroUSD     *int64
+}
+
 func IsOpencodePeak(t time.Time) bool {
 	hour := t.UTC().Hour()
 	return (hour >= 1 && hour < 4) || (hour >= 6 && hour < 10)
@@ -251,6 +265,66 @@ func SettleOpencodeCost(channelID int, costMicroUSD int64, now time.Time) error 
 		}
 		return tx.Save(poolUsage).Error
 	})
+}
+
+// SetOpencodeUsageOverride replaces the usage counters for one OpenCode
+// channel. It intentionally leaves RPM state untouched.
+func SetOpencodeUsageOverride(channelID int, override CodeProviderUsageOverride, now int64) error {
+	if channelID <= 0 {
+		return errors.New("invalid opencode channel id")
+	}
+	if err := validateCodeProviderUsageOverride(override, OpencodeFiveHourLimitMicroUSD, OpencodeWeekLimitMicroUSD, OpencodeMonthLimitMicroUSD); err != nil {
+		return err
+	}
+	if override.PeakPoolUsedMicroUSD == nil || override.OffPeakPoolUsedMicroUSD == nil {
+		return errors.New("opencode peak and off-peak usage are required")
+	}
+	if *override.PeakPoolUsedMicroUSD < 0 || *override.OffPeakPoolUsedMicroUSD < 0 || *override.PeakPoolUsedMicroUSD > OpencodePoolLimitMicroUSD || *override.OffPeakPoolUsedMicroUSD > OpencodePoolLimitMicroUSD {
+		return errors.New("opencode pool usage exceeds the limit")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		usage, err := getOrCreateOpencodeChannelUsageTx(tx, channelID, now)
+		if err != nil {
+			return err
+		}
+		peak, err := getOrCreateOpencodePoolUsageTx(tx, opencodePoolKeyForPeriod(channelID, OpencodePricingPeak), now)
+		if err != nil {
+			return err
+		}
+		offPeak, err := getOrCreateOpencodePoolUsageTx(tx, opencodePoolKeyForPeriod(channelID, OpencodePricingOffPeak), now)
+		if err != nil {
+			return err
+		}
+		usage.FiveHourUsed, usage.WeekUsed, usage.MonthUsed = override.FiveHourUsedMicroUSD, override.WeekUsedMicroUSD, override.MonthUsedMicroUSD
+		usage.FiveHourStart, usage.WeekStart, usage.MonthStart = now, now, now
+		peak.Used = *override.PeakPoolUsedMicroUSD
+		offPeak.Used = *override.OffPeakPoolUsedMicroUSD
+		peak.ResetTime, offPeak.ResetTime = now, now
+
+		if err := tx.Save(usage).Error; err != nil {
+			return err
+		}
+		if err := tx.Save(peak).Error; err != nil {
+			return err
+		}
+		if err := tx.Save(offPeak).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func validateCodeProviderUsageOverride(override CodeProviderUsageOverride, fiveHourLimit, weekLimit, monthLimit int64) error {
+	if override.FiveHourUsedMicroUSD < 0 || override.FiveHourUsedMicroUSD > fiveHourLimit {
+		return errors.New("5-hour usage exceeds the limit")
+	}
+	if override.WeekUsedMicroUSD < 0 || override.WeekUsedMicroUSD > weekLimit {
+		return errors.New("weekly usage exceeds the limit")
+	}
+	if override.MonthUsedMicroUSD < 0 || override.MonthUsedMicroUSD > monthLimit {
+		return errors.New("monthly usage exceeds the limit")
+	}
+	return nil
 }
 
 func GetOpencodeUsageSnapshot(channelID int, now int64) (*OpencodeUsageSnapshot, error) {
@@ -522,9 +596,68 @@ func GetOpencodeQuotaCandidates(group, modelName string, attempted map[int]struc
 	return getOpencodeCandidates(group, modelName, attempted, false)
 }
 
-// IsCodeProviderModel identifies fixed OpenCode/Command models and Command
-// model-mapping sources. The latter need the same queue so mapped requests do
-// not bypass the provider-specific quota checks.
+func getModelMappingSources(channel *Channel) (map[string]struct{}, error) {
+	sources := make(map[string]struct{})
+	if channel == nil {
+		return sources, nil
+	}
+	rawMapping := strings.TrimSpace(channel.GetModelMapping())
+	if rawMapping == "" {
+		return sources, nil
+	}
+	mapping := make(map[string]string)
+	if err := common.UnmarshalJsonStr(rawMapping, &mapping); err != nil {
+		return nil, err
+	}
+	for source := range mapping {
+		source = strings.TrimSpace(source)
+		if source != "" {
+			sources[source] = struct{}{}
+		}
+	}
+	return sources, nil
+}
+
+func channelHasConfiguredModel(channel *Channel, modelName string) bool {
+	if channel == nil || modelName == "" {
+		return false
+	}
+	for _, configuredModel := range channel.GetModels() {
+		if strings.TrimSpace(configuredModel) == modelName {
+			return true
+		}
+	}
+	return false
+}
+
+func channelSupportsCodeProviderModel(channel *Channel, modelName string) bool {
+	modelName = strings.TrimSpace(modelName)
+	if !channelHasConfiguredModel(channel, modelName) {
+		return false
+	}
+	switch channel.Type {
+	case constant.ChannelTypeOpencode:
+		if modelName == OpencodeModel {
+			return true
+		}
+	case constant.ChannelTypeCommand:
+		if modelName == CommandFlashModel || modelName == CommandProModel {
+			return true
+		}
+	default:
+		return false
+	}
+	mappingSources, err := getModelMappingSources(channel)
+	if err != nil {
+		return false
+	}
+	_, ok := mappingSources[modelName]
+	return ok
+}
+
+// IsCodeProviderModel identifies fixed OpenCode/Command models and model-
+// mapping sources on either channel. Mapped requests need the same queue so
+// they do not bypass the provider-specific quota checks.
 func IsCodeProviderModel(modelName string) bool {
 	modelName = strings.TrimSpace(modelName)
 	if modelName == OpencodeModel || modelName == CommandFlashModel || modelName == CommandProModel {
@@ -536,7 +669,7 @@ func IsCodeProviderModel(modelName string) bool {
 	var count int64
 	err := DB.Table("abilities").
 		Joins("JOIN channels ON channels.id = abilities.channel_id").
-		Where("abilities.model = ? AND channels.type = ? AND channels.status = ?", modelName, constant.ChannelTypeCommand, common.ChannelStatusEnabled).
+		Where("abilities.model = ? AND channels.type IN ? AND channels.status = ?", modelName, []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, common.ChannelStatusEnabled).
 		Count(&count).Error
 	return err == nil && count > 0
 }
@@ -554,9 +687,11 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 	if modelName == "" {
 		return nil, nil
 	}
-	channelTypes := []int{constant.ChannelTypeCommand}
+	channelTypes := []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}
 	if modelName == OpencodeModel {
 		channelTypes = []int{constant.ChannelTypeOpencode}
+	} else if modelName == CommandFlashModel || modelName == CommandProModel {
+		channelTypes = []int{constant.ChannelTypeCommand}
 	}
 	var channels []*Channel
 	query := DB.Table("channels").
@@ -564,9 +699,6 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 		Joins("JOIN abilities ON abilities.channel_id = channels.id").
 		Where("channels.type IN ? AND channels.status = ?", channelTypes, common.ChannelStatusEnabled).
 		Where("abilities."+commonGroupCol+" = ? AND abilities.model = ? AND abilities.enabled = ?", group, modelName, true)
-	if modelName == OpencodeModel {
-		query = query.Where("channels.models = ?", OpencodeModel)
-	}
 	if err := query.Find(&channels).Error; err != nil {
 		return nil, err
 	}
@@ -577,6 +709,9 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 			continue
 		}
 		if _, ok := attempted[channel.Id]; ok {
+			continue
+		}
+		if !channelSupportsCodeProviderModel(channel, modelName) {
 			continue
 		}
 		var ok bool
@@ -680,7 +815,8 @@ func ReleaseCodeProviderRPM(channelType, channelID int, now int64) error {
 }
 
 func getOpencodeCandidates(group, modelName string, attempted map[int]struct{}, checkRPM bool) ([]*Channel, error) {
-	if modelName != OpencodeModel {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
 		return nil, nil
 	}
 	var channels []*Channel
@@ -688,8 +824,7 @@ func getOpencodeCandidates(group, modelName string, attempted map[int]struct{}, 
 		Select("channels.*").
 		Joins("JOIN abilities ON abilities.channel_id = channels.id").
 		Where("channels.type = ? AND channels.status = ?", constant.ChannelTypeOpencode, common.ChannelStatusEnabled).
-		Where("abilities."+commonGroupCol+" = ? AND abilities.model = ? AND abilities.enabled = ?", group, OpencodeModel, true).
-		Where("channels.models = ?", OpencodeModel)
+		Where("abilities."+commonGroupCol+" = ? AND abilities.model = ? AND abilities.enabled = ?", group, modelName, true)
 	if err := query.Find(&channels).Error; err != nil {
 		return nil, err
 	}
@@ -700,6 +835,9 @@ func getOpencodeCandidates(group, modelName string, attempted map[int]struct{}, 
 			continue
 		}
 		if _, ok := attempted[channel.Id]; ok {
+			continue
+		}
+		if !channelSupportsCodeProviderModel(channel, modelName) {
 			continue
 		}
 		ok, err := OpencodeChannelHasCapacity(channel.Id, now)
@@ -719,8 +857,24 @@ func ValidateOpencodeChannel(channel *Channel) error {
 	if channel == nil || channel.Type != constant.ChannelTypeOpencode {
 		return fmt.Errorf("not an opencode channel")
 	}
-	if channel.Key == "" || channel.Models != OpencodeModel {
+	if strings.TrimSpace(channel.Key) == "" {
 		return fmt.Errorf("invalid opencode channel configuration")
+	}
+	mappingSources, err := getModelMappingSources(channel)
+	if err != nil {
+		return fmt.Errorf("invalid opencode model mapping")
+	}
+	if !channelHasConfiguredModel(channel, OpencodeModel) {
+		return fmt.Errorf("opencode channel must include %s", OpencodeModel)
+	}
+	for _, configuredModel := range channel.GetModels() {
+		configuredModel = strings.TrimSpace(configuredModel)
+		if configuredModel == "" || configuredModel == OpencodeModel {
+			continue
+		}
+		if _, ok := mappingSources[configuredModel]; !ok {
+			return fmt.Errorf("opencode channel only supports %s or model mapping source models", OpencodeModel)
+		}
 	}
 	return nil
 }

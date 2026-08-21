@@ -135,3 +135,38 @@ func TestCommandUsageMigratesLegacyPoolIntoFlashPool(t *testing.T) {
 	require.NoError(t, DB.Where("pool_key = ?", CommandPoolKey(channel.Id)).First(&legacy).Error)
 	require.Equal(t, int64(0), legacy.Used)
 }
+
+func TestSetCommandUsageOverrideUpdatesConfiguredPoolsAndPreservesRPM(t *testing.T) {
+	useCommandUsageDB(t)
+	channel := &Channel{
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    "command-key",
+		Models: CommandFlashModel + "," + CommandProModel,
+		Group:  "default",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	now := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
+	allowed, _, err := ReserveCommandRPM(channel.Id, now.Unix())
+	require.NoError(t, err)
+	require.True(t, allowed)
+
+	flash := int64(12_000_000)
+	pro := int64(4_000_000)
+	require.NoError(t, SetCommandUsageOverride(channel.Id, CodeProviderUsageOverride{
+		FiveHourUsedMicroUSD:  3_000_000,
+		WeekUsedMicroUSD:      9_000_000,
+		MonthUsedMicroUSD:     18_000_000,
+		PoolUsedMicroUSD:      flash + pro,
+		FlashPoolUsedMicroUSD: &flash,
+		ProPoolUsedMicroUSD:   &pro,
+	}, now.Unix()))
+
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now.Unix())
+	require.NoError(t, err)
+	require.Equal(t, int64(3_000_000), snapshot.FiveHour.UsedMicroUSD)
+	require.Equal(t, flash, snapshot.FlashPool.UsedMicroUSD)
+	require.Equal(t, pro, snapshot.ProPool.UsedMicroUSD)
+	require.Equal(t, flash+pro, snapshot.Pool.UsedMicroUSD)
+	require.Equal(t, 1, snapshot.RPMCount)
+}

@@ -352,6 +352,22 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 
+          {isFixedCodeChannelType(channel.type) && (
+            <DropdownMenuItem
+              disabled={!canOperate}
+              onClick={() => {
+                if (!canOperate) return
+                setCurrentRow(channel)
+                setOpen('usage-override')
+              }}
+            >
+              {t('Fill usage settings')}
+              <DropdownMenuShortcut>
+                <DollarSign size={16} />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
+
           {/* Detect Upstream Updates (only for fetchable channel types) */}
           {MODEL_FETCHABLE_TYPES.has(channel.type) && (
             <DropdownMenuItem

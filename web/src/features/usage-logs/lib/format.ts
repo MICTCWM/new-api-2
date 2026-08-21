@@ -29,6 +29,15 @@ import type { LogOtherData } from '../types'
 
 export { normalizeTierLabel }
 
+export function getUpstreamCostUSD(
+  adminInfo: LogOtherData['admin_info'] | undefined
+): number | undefined {
+  const cost =
+    adminInfo?.command_upstream_cost_usd ?? adminInfo?.opencode_upstream_cost_usd
+  if (cost == null || !Number.isFinite(cost) || cost < 0) return undefined
+  return cost
+}
+
 const PARAM_OVERRIDE_ACTION_MAP: Record<string, string> = {
   set: 'Set',
   delete: 'Delete',
