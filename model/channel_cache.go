@@ -112,8 +112,22 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return getRandomSatisfiedChannel(group, model, retry, requestPath, false)
+}
+
+// GetRandomSatisfiedOrdinaryChannel selects a channel while excluding the
+// provider-specific OpenCode and Command channel types. This is used only
+// after a fixed code-provider model has no eligible provider channel left.
+func GetRandomSatisfiedOrdinaryChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return getRandomSatisfiedChannel(group, model, retry, requestPath, true)
+}
+
+func getRandomSatisfiedChannel(group string, model string, retry int, requestPath string, excludeCodeProviders bool) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
+		if excludeCodeProviders {
+			return GetOrdinaryChannel(group, model, retry, requestPath)
+		}
 		return GetChannel(group, model, retry, requestPath)
 	}
 
@@ -122,6 +136,9 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 
 	// First, try to find channels with the exact model name.
 	channels := filterChannelsByRequestPathAndModel(group2model2channels[group][model], requestPath, model)
+	if excludeCodeProviders {
+		channels = filterChannelIDsByCodeProviderType(channels, true)
+	}
 	channels, err := filterChannelIDsByKickedSpeedProtection(channels, group)
 	if err != nil {
 		return nil, err
@@ -131,6 +148,9 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
+		if excludeCodeProviders {
+			channels = filterChannelIDsByCodeProviderType(channels, true)
+		}
 		channels, err = filterChannelIDsByKickedSpeedProtection(channels, group)
 		if err != nil {
 			return nil, err
@@ -216,6 +236,20 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	return nil, errors.New("channel not found")
 }
 
+func filterChannelIDsByCodeProviderType(channelIDs []int, excludeCodeProviders bool) []int {
+	if !excludeCodeProviders || len(channelIDs) == 0 {
+		return channelIDs
+	}
+	filtered := make([]int, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		channel, ok := channelsIDM[channelID]
+		if !ok || (channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand) {
+			filtered = append(filtered, channelID)
+		}
+	}
+	return filtered
+}
+
 func filterChannelIDsByKickedSpeedProtection(channelIDs []int, group string) ([]int, error) {
 	if len(channelIDs) == 0 || strings.TrimSpace(group) == "" || DB == nil {
 		return channelIDs, nil
@@ -285,14 +319,30 @@ func CodeProviderChannelHasCapacity(channel *Channel, modelName string, now int6
 	}
 	if channel.Type == constant.ChannelTypeOpencode {
 		if checkRPM {
-			return OpencodeChannelHasCapacity(channel.Id, now)
+			available, err := OpencodeChannelHasCapacity(channel.Id, now)
+			if !available && err == nil {
+				err = ReconcileCodeProviderQuotaChannel(channel.Id, now)
+			}
+			return available, err
 		}
-		return OpencodeChannelHasQuotaCapacity(channel.Id, now)
+		available, err := OpencodeChannelHasQuotaCapacity(channel.Id, now)
+		if !available && err == nil {
+			err = ReconcileCodeProviderQuotaChannel(channel.Id, now)
+		}
+		return available, err
 	}
 	if checkRPM {
-		return CommandChannelHasCapacityForModel(channel, modelName, now)
+		available, err := CommandChannelHasCapacityForModel(channel, modelName, now)
+		if !available && err == nil {
+			err = ReconcileCodeProviderQuotaChannel(channel.Id, now)
+		}
+		return available, err
 	}
-	return CommandChannelHasQuotaCapacityForModel(channel, modelName, now)
+	available, err := CommandChannelHasQuotaCapacityForModel(channel, modelName, now)
+	if !available && err == nil {
+		err = ReconcileCodeProviderQuotaChannel(channel.Id, now)
+	}
+	return available, err
 }
 
 func CacheGetChannel(id int) (*Channel, error) {
@@ -347,6 +397,42 @@ func CacheUpdateChannelStatus(id int, status int) {
 						break
 					}
 				}
+			}
+		}
+	} else if channel, ok := channelsIDM[id]; ok {
+		// Re-enable the channel in the in-memory candidate index immediately.
+		// Status updates remove disabled channels from this index, so only
+		// changing the cached status would otherwise leave the channel absent
+		// until the next full cache sync.
+		if group2model2channels == nil {
+			group2model2channels = make(map[string]map[string][]int)
+		}
+		for _, group := range channel.GetGroups() {
+			if _, ok := group2model2channels[group]; !ok {
+				group2model2channels[group] = make(map[string][]int)
+			}
+			for _, modelName := range channel.GetModels() {
+				models := group2model2channels[group][modelName]
+				alreadyPresent := false
+				for _, channelID := range models {
+					if channelID == id {
+						alreadyPresent = true
+						break
+					}
+				}
+				if alreadyPresent {
+					continue
+				}
+				models = append(models, id)
+				sort.Slice(models, func(i, j int) bool {
+					left := channelsIDM[models[i]]
+					right := channelsIDM[models[j]]
+					if left == nil || right == nil {
+						return models[i] < models[j]
+					}
+					return left.GetPriority() > right.GetPriority()
+				})
+				group2model2channels[group][modelName] = models
 			}
 		}
 	}

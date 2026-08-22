@@ -13,7 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
-var errOpencodeQueueUnavailable = errors.New("opencode has no local quota capacity")
+var ErrOpencodeQueueUnavailable = errors.New("opencode has no local quota capacity")
 
 type OpencodeQueueItem struct {
 	ID          string `json:"id"`
@@ -101,7 +101,7 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 			if quotaChannel == nil {
 				removeOpencodeQueueEntryLocked(entry)
 				opencodeQueueMu.Unlock()
-				return nil, "", errOpencodeQueueUnavailable
+				return nil, "", ErrOpencodeQueueUnavailable
 			}
 		}
 		wake := opencodeQueueWake

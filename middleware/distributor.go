@@ -83,6 +83,7 @@ func Distribute() func(c *gin.Context) {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorModelNameRequired))
 					return
 				}
+				isCodeProviderModel := model.IsCodeProviderModel(modelRequest.Model)
 				var selectGroup string
 				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 				// check path is /pg/chat/completions
@@ -103,21 +104,39 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if protected, protectedGroup, protectedErr := service.GetSpeedProtectedChannel(&service.RetryParam{
+				protectedParam := &service.RetryParam{
 					Ctx:                 c,
 					TokenGroup:          usingGroup,
 					ModelName:           modelRequest.Model,
 					RequestPath:         c.Request.URL.Path,
 					Retry:               common.GetPointer(0),
 					AttemptedChannelIDs: make(map[int]struct{}),
-					OpencodePool:        model.IsCodeProviderModel(modelRequest.Model),
-				}); protectedErr != nil {
+					OpencodePool:        isCodeProviderModel,
+				}
+				protected, protectedGroup, protectedErr := service.GetSpeedProtectedChannel(protectedParam)
+				if protectedErr != nil {
 					abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
 					return
 				} else if protected != nil {
 					channel = protected
 					selectGroup = protectedGroup
 					common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
+				} else if isCodeProviderModel {
+					// A fixed Command/OpenCode model may also be configured on a
+					// normal OpenAI channel. Only fall back after the protected
+					// code-provider candidates are exhausted; code-provider routing
+					// and its queue remain unchanged while candidates exist.
+					protectedParam.OpencodePool = false
+					protected, protectedGroup, protectedErr = service.GetSpeedProtectedChannel(protectedParam)
+					if protectedErr != nil {
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
+						return
+					}
+					if protected != nil {
+						channel = protected
+						selectGroup = protectedGroup
+						common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
+					}
 				}
 
 				if channel == nil {
@@ -166,16 +185,17 @@ func Distribute() func(c *gin.Context) {
 				}
 
 				if channel == nil {
-					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
+					selectionParam := &service.RetryParam{
 						Ctx:                    c,
 						ModelName:              modelRequest.Model,
 						TokenGroup:             usingGroup,
 						RequestPath:            c.Request.URL.Path,
 						Retry:                  common.GetPointer(0),
-						OpencodePool:           model.IsCodeProviderModel(modelRequest.Model),
-						OpencodeIncludeRPMFull: model.IsCodeProviderModel(modelRequest.Model),
+						OpencodePool:           isCodeProviderModel,
+						OpencodeIncludeRPMFull: isCodeProviderModel,
 						AttemptedChannelIDs:    make(map[int]struct{}),
-					})
+					}
+					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannelWithCodeProviderFallback(selectionParam)
 					if err != nil {
 						showGroup := usingGroup
 						if usingGroup == "auto" {
@@ -191,7 +211,7 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
-						if model.IsCodeProviderModel(modelRequest.Model) {
+						if isCodeProviderModel {
 							abortWithOpenAiMessage(c, http.StatusBadGateway, constant.OpencodeUpstreamExhaustedMessage, types.ErrorCodeDoRequestFailed)
 							return
 						}

@@ -40,12 +40,17 @@ func (opencodeUsageCalibrationHandler) Interval() time.Duration { return time.Mi
 func (opencodeUsageCalibrationHandler) NewPayload() any { return nil }
 
 func (opencodeUsageCalibrationHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
-	calibrated, err := model.CalibrateDueOpencodeChannels(ctx, time.Now().Unix())
-	if err != nil {
-		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int{"calibrated": calibrated}, err)
+	disabled, enabled, reconcileErr := model.ReconcileCodeProviderQuotaChannels(time.Now().Unix())
+	if reconcileErr != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int{"disabled": disabled, "enabled": enabled}, reconcileErr)
 		return
 	}
-	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, map[string]int{"calibrated": calibrated}, nil)
+	calibrated, err := model.CalibrateDueOpencodeChannels(ctx, time.Now().Unix())
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int{"calibrated": calibrated, "disabled": disabled, "enabled": enabled}, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, map[string]int{"calibrated": calibrated, "disabled": disabled, "enabled": enabled}, nil)
 }
 
 type speedProtectionHandler struct{}

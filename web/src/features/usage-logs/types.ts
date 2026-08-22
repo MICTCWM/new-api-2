@@ -108,6 +108,15 @@ export interface ChannelRetryFailure {
   reason?: string
 }
 
+export interface SpeedProtectionEvent {
+  event?: 'entered' | 'kicked' | string
+  channel_id?: number
+  group?: string
+  first_response_ms?: number
+  failure_count?: number
+  trigger?: 'probe' | 'passive_recovery' | string
+}
+
 export const USAGE_BILLING_PATH = {
   LOCAL: 'local',
   UPSTREAM: 'upstream',
@@ -171,6 +180,7 @@ export interface LogOtherData {
     action?: string
     params?: Record<string, string | number | boolean | string[]>
   }
+  speed_protection?: SpeedProtectionEvent
   // Operation audit details written by the admin-audit fallback in authHelper (type=3, admin only)
   audit_info?: {
     method?: string

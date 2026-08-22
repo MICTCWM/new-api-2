@@ -57,6 +57,45 @@ func TestSpeedProtectionEntersAndLeavesAfterTwoSlowProbes(t *testing.T) {
 	require.False(t, state.Kicked)
 }
 
+func TestSpeedProtectionStateTransitionsWriteUsageLogs(t *testing.T) {
+	useSpeedProtectionDB(t)
+
+	previousLogDB := LOG_DB
+	logDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, logDB.AutoMigrate(&Log{}))
+	LOG_DB = logDB
+	t.Cleanup(func() {
+		LOG_DB = previousLogDB
+	})
+
+	require.NoError(t, UpdateSpeedProtectionProbe(21, "default", 4_000, true, 3_000))
+	require.NoError(t, UpdateSpeedProtectionProbe(21, "default", 16_000, true, 3_001))
+	require.NoError(t, UpdateSpeedProtectionProbe(21, "default", 16_000, true, 3_002))
+
+	var logs []Log
+	require.NoError(t, LOG_DB.Order("created_at asc, id asc").Find(&logs).Error)
+	require.Len(t, logs, 2)
+	require.Equal(t, LogTypeSystem, logs[0].Type)
+	require.Equal(t, LogTypeSystem, logs[1].Type)
+	require.Equal(t, "default", logs[0].Group)
+	require.Equal(t, "default", logs[1].Group)
+	require.Contains(t, logs[0].Content, "Speed protection entered")
+	require.Contains(t, logs[1].Content, "kicked")
+
+	entered, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	enteredEvent, ok := entered["speed_protection"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "entered", enteredEvent["event"])
+
+	kicked, err := common.StrToMap(logs[1].Other)
+	require.NoError(t, err)
+	kickedEvent, ok := kicked["speed_protection"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "kicked", kickedEvent["event"])
+}
+
 func TestSpeedProtectionClearsExpiredFailureWindowWithoutRemovingProtection(t *testing.T) {
 	useSpeedProtectionDB(t)
 

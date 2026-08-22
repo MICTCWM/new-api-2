@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -21,6 +22,75 @@ const (
 	SpeedProtectionRecoveryWindow       = 10 * time.Minute
 	SpeedProtectionRecoveryRequestLimit = 20
 )
+
+const (
+	speedProtectionEnteredAction = "speed_protection.entered"
+	speedProtectionKickedAction  = "speed_protection.kicked"
+)
+
+type speedProtectionEvent struct {
+	Action          string
+	Event           string
+	ChannelID       int
+	Group           string
+	FirstResponseMs int64
+	FailureCount    int
+	Trigger         string
+	Timestamp       int64
+}
+
+// recordSpeedProtectionEvent writes only state transitions. Probe results and
+// normal request observations that leave the state unchanged are intentionally
+// not recorded, otherwise the usage log would be flooded by the scheduler.
+func recordSpeedProtectionEvent(event *speedProtectionEvent) {
+	if event == nil || LOG_DB == nil {
+		return
+	}
+
+	content := fmt.Sprintf(
+		"Speed protection %s for channel %d in group %s",
+		event.Event,
+		event.ChannelID,
+		event.Group,
+	)
+	if event.Event == "kicked" {
+		content = fmt.Sprintf(
+			"Speed protection kicked channel %d out of group %s after %d slow responses",
+			event.ChannelID,
+			event.Group,
+			event.FailureCount,
+		)
+	}
+
+	other := map[string]interface{}{
+		"op": buildOpField(event.Action, map[string]interface{}{
+			"channel_id":        event.ChannelID,
+			"group":             event.Group,
+			"first_response_ms": event.FirstResponseMs,
+			"failure_count":     event.FailureCount,
+			"trigger":           event.Trigger,
+		}),
+		"speed_protection": map[string]interface{}{
+			"event":             event.Event,
+			"channel_id":        event.ChannelID,
+			"group":             event.Group,
+			"first_response_ms": event.FirstResponseMs,
+			"failure_count":     event.FailureCount,
+			"trigger":           event.Trigger,
+		},
+	}
+	log := &Log{
+		CreatedAt: event.Timestamp,
+		Type:      LogTypeSystem,
+		Content:   content,
+		ChannelId: event.ChannelID,
+		Group:     event.Group,
+		Other:     common.MapToJsonStr(other),
+	}
+	if err := createLog(log); err != nil {
+		common.SysLog("failed to record speed protection log: " + err.Error())
+	}
+}
 
 // SpeedProtectionState is intentionally separate from ChannelOtherSettings.
 // Configuration changes must not overwrite live probe counters.
@@ -244,7 +314,8 @@ func UpdateSpeedProtectionProbe(channelID int, group string, firstResponseMs int
 	if channelID <= 0 || strings.TrimSpace(group) == "" || DB == nil {
 		return errors.New("invalid speed protection probe input")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	var event *speedProtectionEvent
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		var state SpeedProtectionState
 		err := lockForUpdate(tx).Where(map[string]any{"channel_id": channelID, "group": group}).First(&state).Error
 		isNew := errors.Is(err, gorm.ErrRecordNotFound)
@@ -254,6 +325,7 @@ func UpdateSpeedProtectionProbe(channelID int, group string, firstResponseMs int
 		if isNew {
 			state = SpeedProtectionState{ChannelID: channelID, Group: group}
 		}
+		wasActive := state.Active
 		state.LastProbeAt = now
 		state.LastFirstResponseMs = max(firstResponseMs, 0)
 		state.LastProbeSucceeded = succeeded
@@ -285,11 +357,38 @@ func UpdateSpeedProtectionProbe(channelID int, group string, firstResponseMs int
 				state.RecoveryFastCount = 0
 			}
 		}
+		if !wasActive && state.Active {
+			event = &speedProtectionEvent{
+				Action:          speedProtectionEnteredAction,
+				Event:           "entered",
+				ChannelID:       channelID,
+				Group:           group,
+				FirstResponseMs: max(firstResponseMs, 0),
+				Trigger:         "probe",
+				Timestamp:       now,
+			}
+		} else if wasActive && !state.Active && state.Kicked {
+			event = &speedProtectionEvent{
+				Action:          speedProtectionKickedAction,
+				Event:           "kicked",
+				ChannelID:       channelID,
+				Group:           group,
+				FirstResponseMs: max(firstResponseMs, 0),
+				FailureCount:    SpeedProtectionFailureLimit,
+				Trigger:         "probe",
+				Timestamp:       now,
+			}
+		}
 		if isNew {
 			return tx.Create(&state).Error
 		}
 		return tx.Save(&state).Error
 	})
+	if err != nil {
+		return err
+	}
+	recordSpeedProtectionEvent(event)
+	return nil
 }
 
 func ObserveSpeedProtectionRequest(channelID int, group string, firstResponseMs int64) error {
@@ -321,7 +420,8 @@ func observeSpeedProtectionRequestAt(channelID int, group string, firstResponseM
 		return nil
 	}
 
-	return DB.Transaction(func(tx *gorm.DB) error {
+	var event *speedProtectionEvent
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		var state SpeedProtectionState
 		err := lockForUpdate(tx).Where(map[string]any{"channel_id": channelID, "group": group}).First(&state).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -345,7 +445,21 @@ func observeSpeedProtectionRequestAt(channelID int, group string, firstResponseM
 			state.Kicked = false
 			state.RecoveryWindowStart = 0
 			state.RecoveryFastCount = 0
+			event = &speedProtectionEvent{
+				Action:          speedProtectionEnteredAction,
+				Event:           "entered",
+				ChannelID:       channelID,
+				Group:           group,
+				FirstResponseMs: firstResponseMs,
+				Trigger:         "passive_recovery",
+				Timestamp:       now,
+			}
 		}
 		return tx.Save(&state).Error
 	})
+	if err != nil {
+		return err
+	}
+	recordSpeedProtectionEvent(event)
+	return nil
 }

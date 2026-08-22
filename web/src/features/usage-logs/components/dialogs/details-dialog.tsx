@@ -569,6 +569,16 @@ export function DetailsDialog(props: DetailsDialogProps) {
   // Localized operation text rendered from the language-independent op
   // descriptor (shared by audit type=3 and login type=7).
   const operationText = renderAuditContent(other, t)
+  const speedProtectionEvent =
+    props.log.type === 4 ? other?.speed_protection : undefined
+  let speedProtectionTrigger: string | undefined
+  if (speedProtectionEvent?.trigger === 'passive_recovery') {
+    speedProtectionTrigger = t('Passive Recovery')
+  } else if (speedProtectionEvent?.trigger === 'probe') {
+    speedProtectionTrigger = t('Scheduled Probe')
+  } else {
+    speedProtectionTrigger = speedProtectionEvent?.trigger
+  }
   const auditRoute = isManage && props.isAdmin ? other?.audit_info : undefined
   // Channel update records which fields changed (stable field tokens); render
   // them with their localized labels for admins.
@@ -1010,6 +1020,52 @@ export function DetailsDialog(props: DetailsDialogProps) {
                     : `${t('Failed')} (${auditRoute.status})`
                 }
                 mono
+              />
+            )}
+          </DetailSection>
+        )}
+
+        {/* Speed protection state transition (type=4) */}
+        {speedProtectionEvent && (
+          <DetailSection
+            icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}
+            iconTone={
+              speedProtectionEvent.event === 'kicked' ? 'destructive' : 'success'
+            }
+            label={t('Speed protection')}
+            variant={
+              speedProtectionEvent.event === 'kicked' ? 'danger' : 'default'
+            }
+          >
+            {operationText && (
+              <DetailRow label={t('Operation')} value={operationText} />
+            )}
+            {speedProtectionEvent.group && (
+              <DetailRow
+                label={t('Group')}
+                value={speedProtectionEvent.group}
+                mono
+              />
+            )}
+            {speedProtectionEvent.first_response_ms != null && (
+              <DetailRow
+                label={t('First Response Time')}
+                value={`${speedProtectionEvent.first_response_ms} ms`}
+                mono
+              />
+            )}
+            {speedProtectionEvent.failure_count != null &&
+              speedProtectionEvent.failure_count > 0 && (
+                <DetailRow
+                  label={t('Failure Count')}
+                  value={String(speedProtectionEvent.failure_count)}
+                  mono
+                />
+              )}
+            {speedProtectionTrigger && (
+              <DetailRow
+                label={t('Detection Trigger')}
+                value={speedProtectionTrigger}
               />
             )}
           </DetailSection>

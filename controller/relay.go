@@ -196,6 +196,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		OpencodePool:        common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeOpencode || common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeCommand,
 		AttemptedChannelIDs: make(map[int]struct{}),
 	}
+	if model.IsCodeProviderModel(relayInfo.OriginModelName) && !retryParam.OpencodePool {
+		retryParam.ExcludeCodeProviderChannels = true
+	}
 
 	relayInfo.LastError = nil
 
@@ -381,6 +384,24 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if retryParam.OpencodePool {
 		channel, _, err := service.WaitForOpencodeChannel(retryParam, info.GetEstimatePromptTokens())
 		if err != nil {
+			if errors.Is(err, service.ErrOpencodeQueueUnavailable) {
+				fallbackParam := *retryParam
+				fallbackParam.OpencodePool = false
+				fallbackParam.OpencodeIncludeRPMFull = false
+				fallbackParam.OpencodeRPMReserved = false
+				fallbackParam.ExcludeCodeProviderChannels = true
+				channel, _, fallbackErr := service.CacheGetRandomSatisfiedChannel(&fallbackParam)
+				if fallbackErr == nil && channel != nil {
+					retryParam.OpencodePool = false
+					retryParam.ExcludeCodeProviderChannels = true
+					info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+					newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
+					if newAPIError != nil {
+						return nil, newAPIError
+					}
+					return channel, nil
+				}
+			}
 			return nil, types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 		}
 		if channel == nil {

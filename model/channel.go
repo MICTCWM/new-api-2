@@ -770,6 +770,21 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	if err != nil {
 		return false
 	} else {
+		if status == common.ChannelStatusEnabled {
+			// A manual enable must clear a stale quota-disable marker so a later
+			// scheduler pass cannot treat this deliberate action as recoverable
+			// automation state.
+			if clearErr := clearCodeProviderQuotaDisabledUntil(channelId); clearErr != nil {
+				common.SysLog(fmt.Sprintf("failed to clear quota disable marker: channel_id=%d, error=%v", channelId, clearErr))
+			}
+		} else if status == common.ChannelStatusAutoDisabled && !strings.HasPrefix(reason, codeProviderQuotaDisableReasonPrefix) {
+			// A later provider error must take ownership away from the quota
+			// lifecycle, otherwise its reset-time re-enabler could revive an
+			// unrelated error-disabled channel.
+			if clearErr := clearCodeProviderQuotaDisabledUntil(channelId); clearErr != nil {
+				common.SysLog(fmt.Sprintf("failed to clear quota disable marker after provider error: channel_id=%d, error=%v", channelId, clearErr))
+			}
+		}
 		if channel.Status == status {
 			return false
 		}

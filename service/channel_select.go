@@ -25,8 +25,9 @@ type RetryParam struct {
 	OpencodePool        bool
 	// OpencodeIncludeRPMFull is used by the distributor's initial selection so
 	// requests can reach the relay queue when all eligible channels are busy.
-	OpencodeIncludeRPMFull bool
-	OpencodeRPMReserved    bool
+	OpencodeIncludeRPMFull      bool
+	OpencodeRPMReserved         bool
+	ExcludeCodeProviderChannels bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -143,6 +144,9 @@ func selectSpeedProtectedCandidate(param *RetryParam, group string) (*model.Chan
 	available := make([]*model.Channel, 0, len(candidates))
 	now := time.Now().Unix()
 	for _, candidate := range candidates {
+		if param.ExcludeCodeProviderChannels && (candidate.Type == constant.ChannelTypeOpencode || candidate.Type == constant.ChannelTypeCommand) {
+			continue
+		}
 		if param.OpencodePool && candidate.Type != constant.ChannelTypeOpencode && candidate.Type != constant.ChannelTypeCommand {
 			continue
 		}
@@ -354,7 +358,11 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				return speedChannel, autoGroup, nil
 			}
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
+			if param.ExcludeCodeProviderChannels {
+				channel, _ = model.GetRandomSatisfiedOrdinaryChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
+			} else {
+				channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
+			}
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -397,10 +405,33 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		} else if speedChannel != nil {
 			return speedChannel, param.TokenGroup, nil
 		}
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
+		if param.ExcludeCodeProviderChannels {
+			channel, err = model.GetRandomSatisfiedOrdinaryChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
+		} else {
+			channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
+		}
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
 	}
 	return channel, selectGroup, nil
+}
+
+// CacheGetRandomSatisfiedChannelWithCodeProviderFallback first tries the
+// provider-specific pool and only falls back to ordinary channels when that
+// pool has no candidate. This keeps code-provider queueing intact while
+// allowing a regular channel configured with the same model to serve when all
+// Command/OpenCode channels in the group are disabled or exhausted.
+func CacheGetRandomSatisfiedChannelWithCodeProviderFallback(param *RetryParam) (*model.Channel, string, error) {
+	channel, group, err := CacheGetRandomSatisfiedChannel(param)
+	if param == nil || !param.OpencodePool || channel != nil || err != nil {
+		return channel, group, err
+	}
+
+	fallbackParam := *param
+	fallbackParam.OpencodePool = false
+	fallbackParam.OpencodeIncludeRPMFull = false
+	fallbackParam.OpencodeRPMReserved = false
+	fallbackParam.ExcludeCodeProviderChannels = true
+	return CacheGetRandomSatisfiedChannel(&fallbackParam)
 }

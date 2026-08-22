@@ -53,6 +53,11 @@ type OpencodeChannelUsage struct {
 	LastCalibratedAt         int64  `json:"last_calibrated_at" gorm:"index"`
 	NextCalibrationAt        int64  `json:"next_calibration_at" gorm:"index"`
 	LastCalibrationError     string `json:"last_calibration_error" gorm:"type:text"`
+	// QuotaDisabledUntil is set only when the channel was auto-disabled because
+	// an upstream rolling quota was exhausted. It is the marker that permits
+	// the quota reconciler to re-enable the channel later without touching
+	// manually disabled or error-disabled channels.
+	QuotaDisabledUntil int64 `json:"quota_disabled_until" gorm:"index"`
 }
 
 type OpencodePoolUsage struct {
@@ -158,6 +163,9 @@ func GetOpencodeCapacitySnapshot(now int64) (*OpencodeCapacitySnapshot, error) {
 			return nil, err
 		}
 		if !quotaAvailable {
+			if quotaErr := ReconcileCodeProviderQuotaChannel(channel.Id, now); quotaErr != nil {
+				return nil, quotaErr
+			}
 			continue
 		}
 		usage, err := getOrCreateOpencodeChannelUsage(channel.Id, now)
@@ -766,6 +774,8 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 		}
 		if ok {
 			available = append(available, channel)
+		} else if quotaErr := ReconcileCodeProviderQuotaChannel(channel.Id, now); quotaErr != nil {
+			return nil, quotaErr
 		}
 	}
 	return available, nil
@@ -848,6 +858,9 @@ func getCodeProviderCapacitySnapshot(group, modelName string, now int64) (*Openc
 			rpmCount = normalizeCommandRPM(usage.RPMCount)
 		}
 		if !quotaAvailable {
+			if quotaErr := ReconcileCodeProviderQuotaChannel(channel.Id, now); quotaErr != nil {
+				return nil, quotaErr
+			}
 			continue
 		}
 		available := limit - rpmCount
@@ -915,6 +928,8 @@ func getOpencodeCandidates(group, modelName string, attempted map[int]struct{}, 
 		}
 		if ok {
 			available = append(available, channel)
+		} else if quotaErr := ReconcileCodeProviderQuotaChannel(channel.Id, now); quotaErr != nil {
+			return nil, quotaErr
 		}
 	}
 	return available, nil

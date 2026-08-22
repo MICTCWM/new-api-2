@@ -44,6 +44,9 @@ type CommandChannelUsage struct {
 	MonthStart     int64 `json:"month_start"`
 	RPMWindowStart int64 `json:"rpm_window_start"`
 	RPMCount       int   `json:"rpm_count"`
+	// QuotaDisabledUntil identifies an automatic disable caused by the rolling
+	// quota windows. A zero value means this channel is not quota-disabled.
+	QuotaDisabledUntil int64 `json:"quota_disabled_until" gorm:"index"`
 }
 
 type CommandPoolUsage struct {

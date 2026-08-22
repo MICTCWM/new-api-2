@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import { type ColumnDef } from '@tanstack/react-table'
+import type { ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -64,7 +64,14 @@ function getColumnVisibilityStorageKey(
 }
 
 function deserializeLogTypeFilter(value: unknown): unknown[] {
-  const values = Array.isArray(value) ? value : value ? [value] : []
+  let values: unknown[]
+  if (Array.isArray(value)) {
+    values = value
+  } else if (value) {
+    values = [value]
+  } else {
+    values = []
+  }
   return values.filter((item) => String(item) !== LOG_TYPE_ALL_VALUE)
 }
 
@@ -217,6 +224,10 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
           )
           if (other?.admin_info?.quota_saturation) {
             tintClass = quotaSaturationRowTint
+          } else if (other?.speed_protection?.event === 'kicked') {
+            tintClass = 'bg-rose-50/40 dark:bg-rose-950/20'
+          } else if (other?.speed_protection?.event === 'entered') {
+            tintClass = 'bg-emerald-50/40 dark:bg-emerald-950/20'
           }
         }
 

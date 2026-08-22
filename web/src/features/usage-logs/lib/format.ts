@@ -399,6 +399,9 @@ export function formatDuration(
  */
 const AUDIT_TEMPLATES: Record<string, string> = {
   login: 'Logged in successfully via {{method}}',
+  'speed_protection.entered':
+    'Speed protection activated for group {{group}}',
+  'speed_protection.kicked': 'Speed protection removed from group {{group}}',
   // User management
   'user.create': 'Created user {{username}} (role {{role}})',
   'user.update': 'Updated user {{username}} (ID: {{id}})',

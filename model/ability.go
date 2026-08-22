@@ -106,6 +106,16 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return getChannel(group, model, retry, requestPath, false)
+}
+
+// GetOrdinaryChannel is the database-backed counterpart to
+// GetRandomSatisfiedOrdinaryChannel.
+func GetOrdinaryChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return getChannel(group, model, retry, requestPath, true)
+}
+
+func getChannel(group string, model string, retry int, requestPath string, excludeCodeProviders bool) (*Channel, error) {
 	var abilities []Ability
 
 	var err error = nil
@@ -125,6 +135,12 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 	abilities, err = filterAbilitiesByKickedSpeedProtection(abilities, group)
 	if err != nil {
 		return nil, err
+	}
+	if excludeCodeProviders {
+		abilities, err = filterAbilitiesByCodeProviderType(abilities)
+		if err != nil {
+			return nil, err
+		}
 	}
 	channel := Channel{}
 	if len(abilities) > 0 {
@@ -148,6 +164,32 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+func filterAbilitiesByCodeProviderType(abilities []Ability) ([]Ability, error) {
+	if len(abilities) == 0 {
+		return abilities, nil
+	}
+	channelIDs := make([]int, 0, len(abilities))
+	for _, ability := range abilities {
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+	var channels []Channel
+	if err := DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	channelTypes := make(map[int]int, len(channels))
+	for _, channel := range channels {
+		channelTypes[channel.Id] = channel.Type
+	}
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		channelType, ok := channelTypes[ability.ChannelId]
+		if !ok || (channelType != constant.ChannelTypeOpencode && channelType != constant.ChannelTypeCommand) {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered, nil
 }
 
 func filterAbilitiesByKickedSpeedProtection(abilities []Ability, group string) ([]Ability, error) {

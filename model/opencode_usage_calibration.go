@@ -196,7 +196,7 @@ func persistOpencodeRemoteUsage(channelID int, remote *opencodeRemoteUsage, now 
 	if remote == nil {
 		return errors.New("opencode usage is missing")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
 		usage, err := getOrCreateOpencodeChannelUsageTx(tx, channelID, now)
 		if err != nil {
 			return err
@@ -211,7 +211,10 @@ func persistOpencodeRemoteUsage(channelID int, remote *opencodeRemoteUsage, now 
 		usage.LastCalibrationError = ""
 		usage.NextCalibrationAt = nextOpencodeUsageCalibrationAt(channelID, now)
 		return tx.Save(usage).Error
-	})
+	}); err != nil {
+		return err
+	}
+	return ReconcileCodeProviderQuotaChannel(channelID, now)
 }
 
 func calibrateClaimedOpencodeChannel(ctx context.Context, channelID int, now int64) error {
@@ -261,7 +264,7 @@ func CalibrateDueOpencodeChannels(ctx context.Context, now int64) (int, error) {
 		ctx = context.Background()
 	}
 	var channels []*Channel
-	if err := DB.Where("type = ? AND status = ?", constant.ChannelTypeOpencode, common.ChannelStatusEnabled).
+	if err := DB.Where("type = ? AND status IN ?", constant.ChannelTypeOpencode, []int{common.ChannelStatusEnabled, common.ChannelStatusAutoDisabled}).
 		Order("id asc").Find(&channels).Error; err != nil {
 		return 0, err
 	}
@@ -273,6 +276,18 @@ func CalibrateDueOpencodeChannels(ctx context.Context, now int64) (int, error) {
 		}
 		if channel == nil {
 			continue
+		}
+		if channel.Status == common.ChannelStatusAutoDisabled {
+			quotaDisabledUntil, markerErr := GetCodeProviderQuotaDisabledUntil(channel.Id)
+			if markerErr != nil {
+				if firstErr == nil {
+					firstErr = markerErr
+				}
+				continue
+			}
+			if quotaDisabledUntil <= 0 {
+				continue
+			}
 		}
 		claimed, err := markOpencodeCalibrationAttempt(channel.Id, now, false)
 		if err != nil {
