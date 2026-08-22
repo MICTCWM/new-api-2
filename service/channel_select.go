@@ -3,11 +3,14 @@ package service
 import (
 	"errors"
 	"math/rand"
+	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 )
 
@@ -128,6 +131,133 @@ func selectWeightedOpencodeCandidate(candidates []*model.Channel) *model.Channel
 	}
 	return priorityCandidates[len(priorityCandidates)-1]
 }
+
+func selectSpeedProtectedCandidate(param *RetryParam, group string) (*model.Channel, error) {
+	if param == nil || param.Ctx == nil || !common.GetContextKeyBool(param.Ctx, constant.ContextKeyIsStream) {
+		return nil, nil
+	}
+	candidates, err := model.GetSpeedProtectionCandidates(group, param.ModelName, param.AttemptedChannelIDs)
+	if err != nil {
+		return nil, err
+	}
+	available := make([]*model.Channel, 0, len(candidates))
+	now := time.Now().Unix()
+	for _, candidate := range candidates {
+		if param.OpencodePool && candidate.Type != constant.ChannelTypeOpencode && candidate.Type != constant.ChannelTypeCommand {
+			continue
+		}
+		if !relaycommon.IsStreamSupportedChannel(candidate.Type) {
+			continue
+		}
+		if (candidate.Type == constant.ChannelTypeOpencode || candidate.Type == constant.ChannelTypeCommand) && !strings.HasSuffix(strings.TrimRight(param.RequestPath, "/"), "/chat/completions") {
+			continue
+		}
+		if !model.ChannelSupportsRequestPath(candidate, param.RequestPath, param.ModelName) {
+			continue
+		}
+		ok, err := model.CodeProviderChannelHasCapacity(candidate, param.ModelName, now, true)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		available = append(available, candidate)
+	}
+	return selectWeightedOpencodeCandidate(available), nil
+}
+
+func GetSpeedProtectedChannel(param *RetryParam) (*model.Channel, string, error) {
+	if param == nil {
+		return nil, "", nil
+	}
+	groups := []string{param.TokenGroup}
+	if param.TokenGroup == "auto" {
+		userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+		if group := common.GetContextKeyString(param.Ctx, constant.ContextKeyAutoGroup); group != "" {
+			groups = []string{group}
+		} else {
+			groups = GetRequestAutoGroups(param.Ctx, userGroup)
+		}
+	}
+	for _, group := range groups {
+		channel, err := selectSpeedProtectedCandidate(param, group)
+		if err != nil || channel != nil {
+			return channel, group, err
+		}
+	}
+	return nil, "", nil
+}
+
+func selectAffinityCodeProviderCandidate(param *RetryParam, group string) (*model.Channel, error) {
+	if param == nil || param.Ctx == nil || group == "" {
+		return nil, nil
+	}
+	affinityID := GetCurrentChannelAffinitySelection(param.Ctx)
+	if affinityID <= 0 {
+		return nil, nil
+	}
+	if _, attempted := param.AttemptedChannelIDs[affinityID]; attempted {
+		ClearCurrentChannelAffinitySelection(param.Ctx)
+		return nil, nil
+	}
+
+	channel, err := model.CacheGetChannel(affinityID)
+	if err != nil || channel == nil {
+		if !ShouldKeepChannelAffinityOnChannelDisabled() {
+			ClearCurrentChannelAffinityCache(param.Ctx)
+		} else {
+			ClearCurrentChannelAffinitySelection(param.Ctx)
+		}
+		return nil, nil
+	}
+	if channel.Status != common.ChannelStatusEnabled ||
+		(channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand) ||
+		!model.IsChannelEnabledForGroupModel(group, param.ModelName, channel.Id) ||
+		!model.ChannelSupportsRequestPath(channel, param.RequestPath, param.ModelName) {
+		if !ShouldKeepChannelAffinityOnChannelDisabled() {
+			ClearCurrentChannelAffinityCache(param.Ctx)
+		} else {
+			ClearCurrentChannelAffinitySelection(param.Ctx)
+		}
+		return nil, nil
+	}
+
+	kicked, err := model.IsSpeedProtectionChannelKicked(channel, group)
+	if err != nil {
+		return nil, err
+	}
+	if kicked {
+		if !ShouldKeepChannelAffinityOnChannelDisabled() {
+			ClearCurrentChannelAffinityCache(param.Ctx)
+		} else {
+			ClearCurrentChannelAffinitySelection(param.Ctx)
+		}
+		return nil, nil
+	}
+
+	now := time.Now().Unix()
+	quotaAvailable, err := model.CodeProviderChannelHasCapacity(channel, param.ModelName, now, false)
+	if err != nil {
+		return nil, err
+	}
+	if !quotaAvailable {
+		// A quota-exhausted affinity must never be selected again for this key.
+		ClearCurrentChannelAffinityCache(param.Ctx)
+		return nil, nil
+	}
+	available, err := model.CodeProviderChannelHasCapacity(channel, param.ModelName, now, true)
+	if err != nil {
+		return nil, err
+	}
+	if !available {
+		// RPM saturation is temporary. Keep the cache, but let ordinary
+		// candidates serve this request when one is available.
+		return nil, nil
+	}
+	return channel, nil
+}
+
 func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, error) {
 	var channel *model.Channel
 	var err error
@@ -148,6 +278,23 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		}
 
 		for _, group := range groups {
+			if speedChannel, speedErr := selectSpeedProtectedCandidate(param, group); speedErr != nil {
+				return nil, group, speedErr
+			} else if speedChannel != nil {
+				if param.TokenGroup == "auto" {
+					common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
+				}
+				ClearCurrentChannelAffinitySelection(param.Ctx)
+				return speedChannel, group, nil
+			}
+			if affinityChannel, affinityErr := selectAffinityCodeProviderCandidate(param, group); affinityErr != nil {
+				return nil, group, affinityErr
+			} else if affinityChannel != nil {
+				if param.TokenGroup == "auto" {
+					common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
+				}
+				return affinityChannel, group, nil
+			}
 			var candidates []*model.Channel
 			if param.OpencodeIncludeRPMFull {
 				candidates, err = model.GetCodeProviderQuotaCandidates(group, param.ModelName, param.AttemptedChannelIDs)
@@ -162,6 +309,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			if param.TokenGroup == "auto" {
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
+			}
+			if GetCurrentChannelAffinitySelection(param.Ctx) > 0 {
+				ClearCurrentChannelAffinitySelection(param.Ctx)
 			}
 			return selectWeightedOpencodeCandidate(candidates), group, nil
 		}
@@ -196,6 +346,13 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				priorityRetry = 0
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
+			if speedChannel, speedErr := selectSpeedProtectedCandidate(param, autoGroup); speedErr != nil {
+				return nil, autoGroup, speedErr
+			} else if speedChannel != nil {
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, autoGroup)
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i)
+				return speedChannel, autoGroup, nil
+			}
 
 			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
 			if channel == nil {
@@ -235,6 +392,11 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
+		if speedChannel, speedErr := selectSpeedProtectedCandidate(param, param.TokenGroup); speedErr != nil {
+			return nil, param.TokenGroup, speedErr
+		} else if speedChannel != nil {
+			return speedChannel, param.TokenGroup, nil
+		}
 		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
 		if err != nil {
 			return nil, param.TokenGroup, err

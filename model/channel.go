@@ -57,6 +57,8 @@ type Channel struct {
 
 	// cache info
 	Keys []string `json:"-" gorm:"-"`
+
+	SpeedProtection SpeedProtectionStatus `json:"speed_protection" gorm:"-"`
 }
 
 type ChannelInfo struct {
@@ -984,6 +986,9 @@ func (channel *Channel) ValidateSettings() error {
 		if err := channelOtherSettings.AdvancedCustom.Validate(); err != nil {
 			return err
 		}
+	}
+	if err := ValidateSpeedProtectionSettings(channel, *channelOtherSettings); err != nil {
+		return err
 	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom && channelOtherSettings.UpstreamModelUpdateCheckEnabled {
 		if _, ok := channelOtherSettings.AdvancedCustom.ModelListRoute(); !ok {

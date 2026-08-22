@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	OpencodeModel                       = "deepseek-v4-flash"
-	OpencodeFiveHourLimitMicroUSD int64 = 12_000_000
-	OpencodeWeekLimitMicroUSD     int64 = 30_000_000
-	OpencodeMonthLimitMicroUSD    int64 = 60_000_000
+	OpencodeModel                          = "deepseek-v4-flash"
+	OpencodeFiveHourLimitMicroUSD    int64 = 12_000_000
+	OpencodeWeekLimitMicroUSD        int64 = 30_000_000
+	OpencodeMonthLimitMicroUSD       int64 = 60_000_000
+	OpencodeUsageCalibrationInterval       = 10 * time.Minute
 	// Each OpenCode channel has independent 30 USD pools for peak and off-peak pricing.
 	OpencodePoolLimitMicroUSD        int64 = 30_000_000
 	OpencodeMinimumRemainingMicroUSD int64 = 200_000
@@ -45,6 +46,13 @@ type OpencodeChannelUsage struct {
 	MonthStart     int64 `json:"month_start"`
 	RPMWindowStart int64 `json:"rpm_window_start"`
 	RPMCount       int   `json:"rpm_count"`
+
+	// Calibration state is kept with the local counters so each channel has an
+	// independent schedule and a failed upstream read cannot erase local usage.
+	LastCalibrationAttemptAt int64  `json:"last_calibration_attempt_at" gorm:"index"`
+	LastCalibratedAt         int64  `json:"last_calibrated_at" gorm:"index"`
+	NextCalibrationAt        int64  `json:"next_calibration_at" gorm:"index"`
+	LastCalibrationError     string `json:"last_calibration_error" gorm:"type:text"`
 }
 
 type OpencodePoolUsage struct {
@@ -66,17 +74,25 @@ type OpencodeUsageWindow struct {
 }
 
 type OpencodeUsageSnapshot struct {
-	ChannelID     int                 `json:"channel_id"`
-	FiveHour      OpencodeUsageWindow `json:"five_hour"`
-	Week          OpencodeUsageWindow `json:"week"`
-	Month         OpencodeUsageWindow `json:"month"`
-	Pool          OpencodeUsageWindow `json:"pool"`
-	PeakPool      OpencodeUsageWindow `json:"peak_pool"`
-	OffPeakPool   OpencodeUsageWindow `json:"off_peak_pool"`
-	PricingPeriod string              `json:"pricing_period"`
-	RPMCount      int                 `json:"rpm_count"`
-	RPMLimit      int                 `json:"rpm_limit"`
-	RPMResetAt    int64               `json:"rpm_reset_at"`
+	ChannelID     int                         `json:"channel_id"`
+	FiveHour      OpencodeUsageWindow         `json:"five_hour"`
+	Week          OpencodeUsageWindow         `json:"week"`
+	Month         OpencodeUsageWindow         `json:"month"`
+	Pool          OpencodeUsageWindow         `json:"pool"`
+	PeakPool      OpencodeUsageWindow         `json:"peak_pool"`
+	OffPeakPool   OpencodeUsageWindow         `json:"off_peak_pool"`
+	PricingPeriod string                      `json:"pricing_period"`
+	RPMCount      int                         `json:"rpm_count"`
+	RPMLimit      int                         `json:"rpm_limit"`
+	RPMResetAt    int64                       `json:"rpm_reset_at"`
+	Calibration   OpencodeCalibrationSnapshot `json:"calibration"`
+}
+
+type OpencodeCalibrationSnapshot struct {
+	LastAttemptAt int64  `json:"last_attempt_at"`
+	LastSuccessAt int64  `json:"last_success_at"`
+	NextAt        int64  `json:"next_at"`
+	LastError     string `json:"last_error,omitempty"`
 }
 
 type OpencodeCapacitySnapshot struct {
@@ -297,6 +313,8 @@ func SetOpencodeUsageOverride(channelID int, override CodeProviderUsageOverride,
 		}
 		usage.FiveHourUsed, usage.WeekUsed, usage.MonthUsed = override.FiveHourUsedMicroUSD, override.WeekUsedMicroUSD, override.MonthUsedMicroUSD
 		usage.FiveHourStart, usage.WeekStart, usage.MonthStart = now, now, now
+		usage.LastCalibrationError = ""
+		usage.NextCalibrationAt = nextOpencodeUsageCalibrationAt(channelID, now)
 		peak.Used = *override.PeakPoolUsedMicroUSD
 		offPeak.Used = *override.OffPeakPoolUsedMicroUSD
 		peak.ResetTime, offPeak.ResetTime = now, now
@@ -348,6 +366,12 @@ func GetOpencodeUsageSnapshot(channelID int, now int64) (*OpencodeUsageSnapshot,
 		return nil, err
 	}
 	resetOpencodeChannelWindows(channelUsage, now)
+	if channelUsage.NextCalibrationAt == 0 {
+		channelUsage.NextCalibrationAt = nextOpencodeUsageCalibrationAt(channelID, now)
+		if err := DB.Save(channelUsage).Error; err != nil {
+			return nil, err
+		}
+	}
 	return &OpencodeUsageSnapshot{
 		ChannelID:     channelID,
 		FiveHour:      makeOpencodeWindow(channelUsage.FiveHourUsed, OpencodeFiveHourLimitMicroUSD, channelUsage.FiveHourStart+5*60*60),
@@ -360,6 +384,12 @@ func GetOpencodeUsageSnapshot(channelID int, now int64) (*OpencodeUsageSnapshot,
 		RPMCount:      normalizeOpencodeRPM(channelUsage.RPMCount),
 		RPMLimit:      operation_setting.GetOpencodeRPMLimit(),
 		RPMResetAt:    channelUsage.RPMWindowStart + 60,
+		Calibration: OpencodeCalibrationSnapshot{
+			LastAttemptAt: channelUsage.LastCalibrationAttemptAt,
+			LastSuccessAt: channelUsage.LastCalibratedAt,
+			NextAt:        channelUsage.NextCalibrationAt,
+			LastError:     channelUsage.LastCalibrationError,
+		},
 	}, nil
 }
 
@@ -687,17 +717,11 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 	if modelName == "" {
 		return nil, nil
 	}
-	channelTypes := []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}
-	if modelName == OpencodeModel {
-		channelTypes = []int{constant.ChannelTypeOpencode}
-	} else if modelName == CommandFlashModel || modelName == CommandProModel {
-		channelTypes = []int{constant.ChannelTypeCommand}
-	}
 	var channels []*Channel
 	query := DB.Table("channels").
 		Select("channels.*").
 		Joins("JOIN abilities ON abilities.channel_id = channels.id").
-		Where("channels.type IN ? AND channels.status = ?", channelTypes, common.ChannelStatusEnabled).
+		Where("channels.type IN ? AND channels.status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, common.ChannelStatusEnabled).
 		Where("abilities."+commonGroupCol+" = ? AND abilities.model = ? AND abilities.enabled = ?", group, modelName, true)
 	if err := query.Find(&channels).Error; err != nil {
 		return nil, err
@@ -712,6 +736,13 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 			continue
 		}
 		if !channelSupportsCodeProviderModel(channel, modelName) {
+			continue
+		}
+		kicked, kickedErr := IsSpeedProtectionChannelKicked(channel, group)
+		if kickedErr != nil {
+			return nil, kickedErr
+		}
+		if kicked {
 			continue
 		}
 		var ok bool
@@ -743,17 +774,48 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 // GetCodeProviderCapacitySnapshot backs the shared request queue. A split
 // Command channel contributes capacity when either of its model pools is open.
 func GetCodeProviderCapacitySnapshot(now int64) (*OpencodeCapacitySnapshot, error) {
+	return getCodeProviderCapacitySnapshot("", "", now)
+}
+
+// GetCodeProviderCapacitySnapshotForGroupModel returns queue capacity for one
+// group/model key. Speed-protection kicked channels are excluded only for the
+// group where they were kicked; the same channel can still contribute to a
+// different queue key.
+func GetCodeProviderCapacitySnapshotForGroupModel(group, modelName string, now int64) (*OpencodeCapacitySnapshot, error) {
+	return getCodeProviderCapacitySnapshot(strings.TrimSpace(group), strings.TrimSpace(modelName), now)
+}
+
+func getCodeProviderCapacitySnapshot(group, modelName string, now int64) (*OpencodeCapacitySnapshot, error) {
 	var channels []*Channel
-	if err := DB.Where("type IN ? AND status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
+	query := DB.Where("type IN ? AND status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, common.ChannelStatusEnabled)
+	if group != "" && modelName != "" {
+		query = query.
+			Joins("JOIN abilities ON abilities.channel_id = channels.id").
+			Where("abilities."+commonGroupCol+" = ? AND abilities.model = ? AND abilities.enabled = ?", group, modelName, true)
+	}
+	if err := query.Find(&channels).Error; err != nil {
 		return nil, err
 	}
 
 	limit := operation_setting.GetOpencodeRPMLimit()
-	snapshot := &OpencodeCapacitySnapshot{TotalCapacity: len(channels) * limit}
+	snapshot := &OpencodeCapacitySnapshot{}
 	for _, channel := range channels {
 		if channel == nil {
 			continue
 		}
+		if group != "" && modelName != "" {
+			if !channelSupportsCodeProviderModel(channel, modelName) {
+				continue
+			}
+			kicked, kickedErr := IsSpeedProtectionChannelKicked(channel, group)
+			if kickedErr != nil {
+				return nil, kickedErr
+			}
+			if kicked {
+				continue
+			}
+		}
+		snapshot.TotalCapacity += limit
 		var quotaAvailable bool
 		var err error
 		var rpmCount int
@@ -770,7 +832,11 @@ func GetCodeProviderCapacitySnapshot(now int64) (*OpencodeCapacitySnapshot, erro
 			resetOpencodeChannelWindows(usage, now)
 			rpmCount = normalizeOpencodeRPM(usage.RPMCount)
 		case constant.ChannelTypeCommand:
-			quotaAvailable, err = CommandChannelHasAnyQuotaCapacity(channel, now)
+			if group != "" && modelName != "" {
+				quotaAvailable, err = CommandChannelHasQuotaCapacityForModel(channel, modelName, now)
+			} else {
+				quotaAvailable, err = CommandChannelHasAnyQuotaCapacity(channel, now)
+			}
 			if err != nil {
 				return nil, err
 			}

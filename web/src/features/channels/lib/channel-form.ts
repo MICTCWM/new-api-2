@@ -29,6 +29,7 @@ import {
   getFixedCodeChannelModel,
   MODEL_FETCHABLE_TYPES,
   OPENAI_FIELD_PASSTHROUGH_TYPES,
+  SPEED_PROTECTION_SUPPORTED_CHANNEL_TYPES,
   isFixedCodeChannelType,
 } from '../constants'
 import type { Channel } from '../types'
@@ -299,6 +300,8 @@ export const channelFormSchema = z
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
     // Type-specific settings (stored in settings JSON)
+    speed_protection_enabled: z.boolean().optional(),
+    speed_protection_groups: z.array(z.string()).optional(),
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
     aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
@@ -391,6 +394,34 @@ export const channelFormSchema = z
           : 'Opencode supports the fixed model and model mapping source models'
       if (invalidModels.length > 0) {
         addRequiredIssue(ctx, 'models', fixedModelError)
+      }
+    }
+
+    if (data.speed_protection_enabled) {
+      if (!SPEED_PROTECTION_SUPPORTED_CHANNEL_TYPES.has(data.type)) {
+        addRequiredIssue(
+          ctx,
+          'speed_protection_enabled',
+          'Speed protection is not supported for this channel type'
+        )
+      }
+      if ((data.speed_protection_groups || []).length === 0) {
+        addRequiredIssue(
+          ctx,
+          'speed_protection_groups',
+          'Select at least one protected group'
+        )
+      }
+      const channelGroups = new Set(data.group)
+      const invalidGroups = (data.speed_protection_groups || []).filter(
+        (group) => !channelGroups.has(group)
+      )
+      if (invalidGroups.length > 0) {
+        addRequiredIssue(
+          ctx,
+          'speed_protection_groups',
+          'Protected groups must belong to this channel'
+        )
       }
     }
 
@@ -513,6 +544,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
+  speed_protection_enabled: false,
+  speed_protection_groups: [],
   advanced_custom: '',
 }
 
@@ -577,6 +610,8 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
+  let speedProtectionEnabled = false
+  let speedProtectionGroups: string[] = []
   let advancedCustom = ''
 
   if (channel.settings) {
@@ -603,6 +638,12 @@ export function transformChannelToFormDefaults(
       )
         ? parsed.upstream_model_update_ignored_models.join(',')
         : ''
+      speedProtectionEnabled = parsed.speed_protection_enabled === true
+      speedProtectionGroups = Array.isArray(parsed.speed_protection_groups)
+        ? parsed.speed_protection_groups.filter(
+            (group: unknown): group is string => typeof group === 'string'
+          )
+        : []
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -664,6 +705,8 @@ export function transformChannelToFormDefaults(
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
+    speed_protection_enabled: speedProtectionEnabled,
+    speed_protection_groups: speedProtectionGroups,
     advanced_custom: advancedCustom,
   }
 }
@@ -793,6 +836,15 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
 
   settingsObj.disable_task_polling_sleep =
     formData.disable_task_polling_sleep === true
+
+  settingsObj.speed_protection_enabled = formData.speed_protection_enabled === true
+  settingsObj.speed_protection_groups = [
+    ...new Set(
+      (formData.speed_protection_groups || [])
+        .map((group) => group.trim())
+        .filter(Boolean)
+    ),
+  ]
 
   // Upstream model update settings (for model-fetchable channel types)
   if (MODEL_FETCHABLE_TYPES.has(formData.type)) {

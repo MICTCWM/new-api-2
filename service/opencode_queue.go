@@ -19,6 +19,7 @@ type OpencodeQueueItem struct {
 	ID          string `json:"id"`
 	UserID      int    `json:"user_id"`
 	Username    string `json:"username"`
+	Group       string `json:"group"`
 	Model       string `json:"model"`
 	InputTokens int    `json:"input_tokens"`
 	QueuedAt    int64  `json:"queued_at"`
@@ -60,7 +61,7 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 
 	entry := &opencodeQueueEntry{
 		item:     newOpencodeQueueItem(param, inputTokens),
-		queueKey: opencodeQueueKey{group: param.TokenGroup, model: param.ModelName},
+		queueKey: opencodeQueueKey{group: queueGroupForParam(param), model: param.ModelName},
 	}
 	opencodeQueueMu.Lock()
 	entry.item.Position = len(opencodeQueue) + 1
@@ -125,6 +126,19 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 	}
 }
 
+func queueGroupForParam(param *RetryParam) string {
+	if param == nil {
+		return ""
+	}
+	group := param.TokenGroup
+	if group == "auto" && param.Ctx != nil {
+		if selectedGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyAutoGroup); selectedGroup != "" {
+			return selectedGroup
+		}
+	}
+	return group
+}
+
 func isOpencodeQueueTurnLocked(entry *opencodeQueueEntry) bool {
 	for _, current := range opencodeQueue {
 		if current == entry {
@@ -153,6 +167,7 @@ func newOpencodeQueueItem(param *RetryParam, inputTokens int) OpencodeQueueItem 
 		ID:          requestID,
 		UserID:      userID,
 		Username:    username,
+		Group:       queueGroupForParam(param),
 		Model:       param.ModelName,
 		InputTokens: max(inputTokens, 0),
 		QueuedAt:    time.Now().Unix(),
@@ -209,26 +224,43 @@ func NotifyOpencodeQueue() {
 func GetOpencodeQueueSnapshot() (*OpencodeQueueSnapshot, error) {
 	opencodeQueueMu.Lock()
 	items := make([]OpencodeQueueItem, len(opencodeQueue))
+	keyCounts := make(map[opencodeQueueKey]int)
 	for index, entry := range opencodeQueue {
 		items[index] = entry.item
 		items[index].Position = index + 1
+		keyCounts[entry.queueKey]++
 	}
 	queuedCount := len(items)
 	opencodeQueueMu.Unlock()
 
-	capacity, err := model.GetCodeProviderCapacitySnapshot(common.GetTimestamp())
-	if err != nil {
-		return nil, err
-	}
+	var capacity *model.OpencodeCapacitySnapshot
 	waitMinutes := 0
-	if queuedCount > 0 {
-		totalCapacity := capacity.TotalCapacity
-		if totalCapacity < operation_setting.GetOpencodeRPMLimit() {
-			totalCapacity = operation_setting.GetOpencodeRPMLimit()
+	if queuedCount == 0 {
+		var err error
+		capacity, err = model.GetCodeProviderCapacitySnapshot(common.GetTimestamp())
+		if err != nil {
+			return nil, err
 		}
-		waitMinutes = (queuedCount + totalCapacity - 1) / totalCapacity
-		if waitMinutes < 1 {
-			waitMinutes = 1
+	} else {
+		capacity = &model.OpencodeCapacitySnapshot{}
+		for key, count := range keyCounts {
+			keyCapacity, err := model.GetCodeProviderCapacitySnapshotForGroupModel(key.group, key.model, common.GetTimestamp())
+			if err != nil {
+				return nil, err
+			}
+			capacity.TotalCapacity += keyCapacity.TotalCapacity
+			capacity.AvailableCapacity += keyCapacity.AvailableCapacity
+			totalCapacity := keyCapacity.TotalCapacity
+			if totalCapacity < operation_setting.GetOpencodeRPMLimit() {
+				totalCapacity = operation_setting.GetOpencodeRPMLimit()
+			}
+			keyWaitMinutes := (count + totalCapacity - 1) / totalCapacity
+			if keyWaitMinutes < 1 {
+				keyWaitMinutes = 1
+			}
+			if keyWaitMinutes > waitMinutes {
+				waitMinutes = keyWaitMinutes
+			}
 		}
 	}
 	return &OpencodeQueueSnapshot{

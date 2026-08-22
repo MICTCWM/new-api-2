@@ -263,7 +263,13 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				continue
 			}
 			if !strings.HasPrefix(data, "[DONE]") {
-				info.SetFirstResponseTime()
+				if info.SetFirstResponseTime() && info.IsStream && info.GetChannelID() > 0 {
+					group := info.UsingGroup
+					if group == "" {
+						group = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+					}
+					_ = service.ObserveSpeedProtectionRequest(info.GetChannelID(), group, time.Since(info.StartTime).Milliseconds())
+				}
 				info.ReceivedResponseCount++
 
 				select {

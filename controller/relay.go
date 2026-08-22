@@ -295,6 +295,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		if retryParam.OpencodePool && service.GetCurrentChannelAffinitySelection(c) == channel.Id {
+			// A failed code-provider affinity must not be reused on the next
+			// attempt. Keep the existing attempted-channel filter so retrying
+			// still follows the normal multi-channel chain.
+			service.ClearCurrentChannelAffinityCache(c)
+		}
 
 		if retryParam.OpencodePool && opencodeAttempts >= 4 {
 			newAPIError = types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
@@ -429,7 +435,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if openaiErr == nil {
 		return false
 	}
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
+	isCodeProviderChannel := channelType == constant.ChannelTypeOpencode || channelType == constant.ChannelTypeCommand
+	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) && !isCodeProviderChannel {
 		return false
 	}
 	if types.IsChannelError(openaiErr) {
@@ -458,6 +466,7 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
+	service.RecordChannelRetryFailure(c, channelError.ChannelId, channelError.ChannelName, channelError.ChannelType, err)
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
@@ -492,6 +501,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			adminInfo["is_multi_key"] = true
 			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 		}
+		service.AppendChannelRetryAdminInfo(c, adminInfo)
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
 		other["admin_info"] = adminInfo
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)

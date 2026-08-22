@@ -89,3 +89,18 @@ func TestValidateChannelTestConcurrency(t *testing.T) {
 	assert.Error(t, ValidateChannelTestConcurrency("33"))
 	assert.Error(t, ValidateChannelTestConcurrency("1.5"))
 }
+
+func TestSpeedProtectionProbeIntervalUsesSafeBounds(t *testing.T) {
+	assert.Equal(t, float64(DefaultSpeedProtectionProbeIntervalMinutes), NormalizeSpeedProtectionProbeInterval(0))
+	assert.Equal(t, float64(MaxSpeedProtectionProbeIntervalMinutes), NormalizeSpeedProtectionProbeInterval(float64(MaxSpeedProtectionProbeIntervalMinutes+1)))
+	assert.Equal(t, float64(30), NormalizeSpeedProtectionProbeInterval(30))
+}
+
+func TestValidateSpeedProtectionProbeInterval(t *testing.T) {
+	require.NoError(t, ValidateSpeedProtectionProbeInterval("1"))
+	require.NoError(t, ValidateSpeedProtectionProbeInterval("1440"))
+	assert.Error(t, ValidateSpeedProtectionProbeInterval("0"))
+	assert.Error(t, ValidateSpeedProtectionProbeInterval("1441"))
+	assert.Error(t, ValidateSpeedProtectionProbeInterval("1.5"))
+	assert.Error(t, ValidateSpeedProtectionProbeInterval("NaN"))
+}

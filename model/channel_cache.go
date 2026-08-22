@@ -122,11 +122,19 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 
 	// First, try to find channels with the exact model name.
 	channels := filterChannelsByRequestPathAndModel(group2model2channels[group][model], requestPath, model)
+	channels, err := filterChannelIDsByKickedSpeedProtection(channels, group)
+	if err != nil {
+		return nil, err
+	}
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
+		channels, err = filterChannelIDsByKickedSpeedProtection(channels, group)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if len(channels) == 0 {
@@ -208,6 +216,24 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	return nil, errors.New("channel not found")
 }
 
+func filterChannelIDsByKickedSpeedProtection(channelIDs []int, group string) ([]int, error) {
+	if len(channelIDs) == 0 || strings.TrimSpace(group) == "" || DB == nil {
+		return channelIDs, nil
+	}
+	filtered := make([]int, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		channel := channelsIDM[channelID]
+		kicked, err := IsSpeedProtectionChannelKicked(channel, group)
+		if err != nil {
+			return nil, err
+		}
+		if !kicked {
+			filtered = append(filtered, channelID)
+		}
+	}
+	return filtered, nil
+}
+
 // filterChannelsByRequestPathAndModel restricts candidates by request path and
 // model. Only Advanced Custom (type 58) channels are path-checked: they are kept
 // only when one of their configured routes matches requestPath and model. All
@@ -234,6 +260,39 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 		}
 	}
 	return filtered
+}
+
+func ChannelSupportsRequestPath(channel *Channel, requestPath string, model string) bool {
+	if channel == nil {
+		return false
+	}
+	if channel.Type != constant.ChannelTypeAdvancedCustom || requestPath == "" {
+		return true
+	}
+	config := channel.GetOtherSettings().AdvancedCustom
+	return config != nil && config.SupportsPathForModel(requestPath, model)
+}
+
+func CodeProviderChannelHasCapacity(channel *Channel, modelName string, now int64, checkRPM bool) (bool, error) {
+	if channel == nil {
+		return false, nil
+	}
+	if channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand {
+		return true, nil
+	}
+	if !channelSupportsCodeProviderModel(channel, modelName) {
+		return false, nil
+	}
+	if channel.Type == constant.ChannelTypeOpencode {
+		if checkRPM {
+			return OpencodeChannelHasCapacity(channel.Id, now)
+		}
+		return OpencodeChannelHasQuotaCapacity(channel.Id, now)
+	}
+	if checkRPM {
+		return CommandChannelHasCapacityForModel(channel, modelName, now)
+	}
+	return CommandChannelHasQuotaCapacityForModel(channel, modelName, now)
 }
 
 func CacheGetChannel(id int) (*Channel, error) {

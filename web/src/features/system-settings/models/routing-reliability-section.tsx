@@ -70,6 +70,8 @@ const channelTestModes = [
 ] as const
 type ChannelTestMode = (typeof channelTestModes)[number]
 const MAX_CHANNEL_TEST_CONCURRENCY = 32
+const MIN_SPEED_PROTECTION_PROBE_INTERVAL = 1
+const MAX_SPEED_PROTECTION_PROBE_INTERVAL = 1440
 
 const createRoutingReliabilitySchema = (
   t: (key: string, options?: Record<string, unknown>) => string
@@ -98,6 +100,17 @@ const createRoutingReliabilitySchema = (
             t('Channel test concurrency must be between 1 and 32')
           ),
         channel_test_mode: z.enum(channelTestModes),
+        speed_protection_probe_interval_minutes: z.coerce
+          .number()
+          .int(t('Enter a positive integer'))
+          .min(
+            MIN_SPEED_PROTECTION_PROBE_INTERVAL,
+            t('Speed protection probe interval must be between 1 and 1440 minutes')
+          )
+          .max(
+            MAX_SPEED_PROTECTION_PROBE_INTERVAL,
+            t('Speed protection probe interval must be between 1 and 1440 minutes')
+          ),
       }),
     })
     .superRefine((values, ctx) => {
@@ -147,6 +160,7 @@ type RoutingReliabilitySectionProps = {
     'monitor_setting.auto_test_channel_minutes': number
     'monitor_setting.channel_test_concurrency': number
     'monitor_setting.channel_test_mode': ChannelTestMode
+    'monitor_setting.speed_protection_probe_interval_minutes': number
   }
 }
 
@@ -166,6 +180,7 @@ type NormalizedRoutingReliabilityValues = {
   'monitor_setting.auto_test_channel_minutes': number
   'monitor_setting.channel_test_concurrency': number
   'monitor_setting.channel_test_mode': ChannelTestMode
+  'monitor_setting.speed_protection_probe_interval_minutes': number
 }
 
 function normalizeChannelTestMode(value?: string): ChannelTestMode {
@@ -197,6 +212,8 @@ const buildFormDefaults = (
     channel_test_mode: normalizeChannelTestMode(
       defaults['monitor_setting.channel_test_mode']
     ),
+    speed_protection_probe_interval_minutes:
+      defaults['monitor_setting.speed_protection_probe_interval_minutes'],
   },
 })
 
@@ -225,6 +242,8 @@ const normalizeDefaults = (
   'monitor_setting.channel_test_mode': normalizeChannelTestMode(
     defaults['monitor_setting.channel_test_mode']
   ),
+  'monitor_setting.speed_protection_probe_interval_minutes':
+    defaults['monitor_setting.speed_protection_probe_interval_minutes'],
 })
 
 const normalizeFormValues = (
@@ -250,6 +269,8 @@ const normalizeFormValues = (
   'monitor_setting.channel_test_concurrency':
     values.monitor_setting.channel_test_concurrency,
   'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
+  'monitor_setting.speed_protection_probe_interval_minutes':
+    values.monitor_setting.speed_protection_probe_interval_minutes,
 })
 
 export function RoutingReliabilitySection({
@@ -526,6 +547,33 @@ export function RoutingReliabilitySection({
                     <FormDescription>
                       {t(
                         'Maximum number of channels tested at the same time (1-32)'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='monitor_setting.speed_protection_probe_interval_minutes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Speed protection probe interval (minutes)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={MIN_SPEED_PROTECTION_PROBE_INTERVAL}
+                        max={MAX_SPEED_PROTECTION_PROBE_INTERVAL}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'How often enabled speed-protection channels are tested with a streaming request (1-1440 minutes).'
                       )}
                     </FormDescription>
                     <FormMessage />

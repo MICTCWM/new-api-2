@@ -71,6 +71,13 @@ export const channelSchema = z.object({
     multi_key_mode: 'random',
   }),
   settings: z.string().default('{}'), // other_settings JSON
+  speed_protection: z
+    .object({
+      enabled: z.boolean().default(false),
+      groups: z.array(z.string()).default([]),
+      active_groups: z.array(z.string()).default([]),
+    })
+    .default({ enabled: false, groups: [], active_groups: [] }),
 })
 
 export type Channel = z.infer<typeof channelSchema>
@@ -91,6 +98,8 @@ export interface ChannelSettings {
 }
 
 export interface ChannelOtherSettings {
+  speed_protection_enabled?: boolean
+  speed_protection_groups?: string[]
   azure_responses_version?: string
   vertex_key_type?: 'json' | 'api_key'
   openrouter_enterprise?: boolean
@@ -168,6 +177,12 @@ export interface OpencodeUsageSnapshot {
   rpm_count: number
   rpm_limit: number
   rpm_reset_at: number
+  calibration: {
+    last_attempt_at: number
+    last_success_at: number
+    next_at: number
+    last_error?: string
+  }
 }
 
 export interface OpencodeUsageResponse {
@@ -263,6 +278,7 @@ export interface ChannelBalanceResponse {
   balance?: number
   currency?: string
   raw_response?: string
+  usage?: OpencodeUsageSnapshot
 }
 
 export interface FetchModelsResponse {

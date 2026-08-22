@@ -296,6 +296,7 @@ func migrateDB() error {
 		&OpencodePoolUsage{},
 		&CommandChannelUsage{},
 		&CommandPoolUsage{},
+		&SpeedProtectionState{},
 	)
 	if err != nil {
 		return err
@@ -367,6 +368,7 @@ func migrateDBFast() error {
 		{&OpencodePoolUsage{}, "OpencodePoolUsage"},
 		{&CommandChannelUsage{}, "CommandChannelUsage"},
 		{&CommandPoolUsage{}, "CommandPoolUsage"},
+		{&SpeedProtectionState{}, "SpeedProtectionState"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

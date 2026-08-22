@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
@@ -19,9 +20,94 @@ import (
 // service.StartSystemTaskRunner.
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
+	service.RegisterSystemTaskHandler(opencodeUsageCalibrationHandler{})
+	service.RegisterSystemTaskHandler(speedProtectionHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+}
+
+type opencodeUsageCalibrationHandler struct{}
+
+func (opencodeUsageCalibrationHandler) Type() string { return model.SystemTaskTypeOpencodeUsage }
+
+func (opencodeUsageCalibrationHandler) Enabled() bool { return true }
+
+// The scheduler wakes this handler once a minute. Each channel persists its
+// own ten-minute slot, which keeps upstream usage reads staggered.
+func (opencodeUsageCalibrationHandler) Interval() time.Duration { return time.Minute }
+
+func (opencodeUsageCalibrationHandler) NewPayload() any { return nil }
+
+func (opencodeUsageCalibrationHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	calibrated, err := model.CalibrateDueOpencodeChannels(ctx, time.Now().Unix())
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int{"calibrated": calibrated}, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, map[string]int{"calibrated": calibrated}, nil)
+}
+
+type speedProtectionHandler struct{}
+
+func (speedProtectionHandler) Type() string { return model.SystemTaskTypeSpeedProtection }
+
+func (speedProtectionHandler) Enabled() bool {
+	return operation_setting.GetMonitorSetting().SpeedProtectionProbeIntervalMinutes > 0
+}
+
+func (speedProtectionHandler) Interval() time.Duration {
+	minutes := operation_setting.GetMonitorSetting().SpeedProtectionProbeIntervalMinutes
+	if minutes <= 0 {
+		minutes = operation_setting.DefaultSpeedProtectionProbeIntervalMinutes
+	}
+	return time.Duration(minutes * float64(time.Minute))
+}
+
+func (speedProtectionHandler) NewPayload() any { return nil }
+
+func (speedProtectionHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	testUserID, err := resolveChannelTestUserID(nil)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	channels, err := model.GetAllChannels(0, 0, true, false)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	probed := 0
+	for _, channel := range channels {
+		if ctx.Err() != nil {
+			finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, ctx.Err())
+			return
+		}
+		if channel == nil || channel.Status != common.ChannelStatusEnabled || !relaycommon.IsStreamSupportedChannel(channel.Type) {
+			continue
+		}
+		status, statusErr := model.GetSpeedProtectionStatus(channel)
+		if statusErr != nil {
+			common.SysError(fmt.Sprintf("failed to load speed protection config: channel_id=%d err=%v", channel.Id, statusErr))
+			continue
+		}
+		if !status.Enabled {
+			continue
+		}
+		for _, group := range status.Groups {
+			if ctx.Err() != nil {
+				finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, ctx.Err())
+				return
+			}
+			result := testChannelWithGroup(ctx, channel, testUserID, "", "", true, group)
+			now := time.Now().Unix()
+			if updateErr := model.UpdateSpeedProtectionProbe(channel.Id, group, result.firstResponseMillis, result.localErr == nil && result.firstResponseSeen, now); updateErr != nil {
+				common.SysError(fmt.Sprintf("failed to update speed protection state: channel_id=%d group=%s err=%v", channel.Id, group, updateErr))
+			}
+			probed++
+		}
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, map[string]int{"probed": probed}, nil)
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and

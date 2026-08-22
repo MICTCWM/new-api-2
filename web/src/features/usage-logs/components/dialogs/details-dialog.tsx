@@ -84,6 +84,7 @@ import {
   isTimingLogType,
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { RetryChainPopover } from '../retry-chain-popover'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -616,8 +617,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
     (other?.request_path || conversionChain.length > 0)
 
   const useChannel = other?.admin_info?.use_channel
-  const channelChain =
-    useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
+  const retryChannelIds = Array.isArray(useChannel)
+    ? useChannel.map(String).filter(Boolean)
+    : []
+  const retryFailures = other?.admin_info?.channel_retry_failures
+  const channelAffinity = other?.admin_info?.channel_affinity
+  const hasChannelAffinityHit = channelAffinity?.channel_id != null
   const reasoningEffortVariant = getReasoningEffortVariant(
     other?.reasoning_effort
   )
@@ -685,8 +690,53 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           )}
 
-          {channelChain && props.isAdmin && (
-            <DetailRow label={t('Retry Chain')} value={channelChain} mono />
+          {retryChannelIds.length > 1 && props.isAdmin && (
+            <DetailRow
+              label={t('Retry Chain')}
+              value={
+                <RetryChainPopover
+                  channelIds={retryChannelIds}
+                  failures={retryFailures}
+                />
+              }
+            />
+          )}
+
+          {hasChannelAffinityHit && props.isAdmin && channelAffinity && (
+            <DetailSection
+              icon={<Route aria-hidden='true' />}
+              iconTone='info'
+              label={t('Channel Affinity')}
+            >
+              {channelAffinity.channel_id != null && (
+                <DetailRow
+                  label={t('Channel')}
+                  value={channelAffinity.channel_id}
+                  mono
+                />
+              )}
+              {channelAffinity.selected_group && (
+                <DetailRow
+                  label={t('Group')}
+                  value={channelAffinity.selected_group}
+                  mono
+                />
+              )}
+              {channelAffinity.rule_name && (
+                <DetailRow
+                  label={t('Rule')}
+                  value={channelAffinity.rule_name}
+                  mono
+                />
+              )}
+              {channelAffinity.model && (
+                <DetailRow
+                  label={t('Model')}
+                  value={channelAffinity.model}
+                  mono
+                />
+              )}
+            </DetailSection>
           )}
 
           {props.log.token_name && (

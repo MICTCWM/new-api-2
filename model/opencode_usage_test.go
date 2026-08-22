@@ -135,6 +135,62 @@ func TestGetCodeProviderCandidatesIncludesOpencodeModelMappingSource(t *testing.
 	require.Equal(t, channel.Id, candidates[0].Id)
 }
 
+func TestGetCodeProviderCandidatesSkipsExhaustedCommandChannelAndKeepsGroup(t *testing.T) {
+	previousDB := DB
+	previousType := common.MainDatabaseType()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Channel{}, &Ability{}, &OpencodeChannelUsage{}, &OpencodePoolUsage{}, &CommandChannelUsage{}, &CommandPoolUsage{}))
+	DB = db
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	t.Cleanup(func() {
+		DB = previousDB
+		common.SetMainDatabaseType(previousType)
+	})
+
+	exhausted := &Channel{
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    "exhausted-key",
+		Models: CommandFlashModel,
+		Group:  "default",
+	}
+	available := &Channel{
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    "available-key",
+		Models: CommandFlashModel,
+		Group:  "default",
+	}
+	otherGroup := &Channel{
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    "other-group-key",
+		Models: CommandFlashModel,
+		Group:  "other",
+	}
+	for _, channel := range []*Channel{exhausted, available, otherGroup} {
+		require.NoError(t, db.Create(channel).Error)
+		require.NoError(t, db.Create(&Ability{Group: channel.Group, Model: CommandFlashModel, ChannelId: channel.Id, Enabled: true}).Error)
+	}
+
+	require.NoError(t, SetCommandUsageOverride(exhausted.Id, CodeProviderUsageOverride{
+		FiveHourUsedMicroUSD: 0,
+		WeekUsedMicroUSD:     0,
+		MonthUsedMicroUSD:    0,
+		PoolUsedMicroUSD:     CommandCombinedPoolLimitMicroUSD,
+	}, 4_000))
+
+	candidates, err := GetCodeProviderCandidates("default", CommandFlashModel, nil)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	require.Equal(t, available.Id, candidates[0].Id)
+
+	candidates, err = GetCodeProviderCandidates("missing", CommandFlashModel, nil)
+	require.NoError(t, err)
+	require.Empty(t, candidates)
+}
+
 func TestOpencodePeakWindowBoundaries(t *testing.T) {
 	for _, test := range []struct {
 		hour int

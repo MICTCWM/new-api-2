@@ -66,6 +66,40 @@ const (
 
 const OpencodeUpstreamExhaustedMessage = "上游已超额"
 
+// streamSupportedChannelTypes lists channel types whose relay path can
+// measure a streaming first response. Keep this capability in constant so
+// model validation and relay routing use the same source of truth.
+var streamSupportedChannelTypes = map[int]bool{
+	ChannelTypeOpenAI:         true,
+	ChannelTypeAnthropic:      true,
+	ChannelTypeAws:            true,
+	ChannelTypeGemini:         true,
+	ChannelCloudflare:         true,
+	ChannelTypeAzure:          true,
+	ChannelTypeVolcEngine:     true,
+	ChannelTypeOllama:         true,
+	ChannelTypeXai:            true,
+	ChannelTypeDeepSeek:       true,
+	ChannelTypeBaiduV2:        true,
+	ChannelTypeZhipu_v4:       true,
+	ChannelTypeAli:            true,
+	ChannelTypeSubmodel:       true,
+	ChannelTypeCodex:          true,
+	ChannelTypeMoonshot:       true,
+	ChannelTypeMiniMax:        true,
+	ChannelTypeSiliconFlow:    true,
+	ChannelTypeAdvancedCustom: true,
+	ChannelTypeSub2API:        true,
+	ChannelTypeNewAPI:         true,
+	ChannelTypeTencent:        true,
+	ChannelTypeOpencode:       true,
+	ChannelTypeCommand:        true,
+}
+
+func IsStreamSupportedChannel(channelType int) bool {
+	return streamSupportedChannelTypes[channelType]
+}
+
 var ChannelBaseURLs = []string{
 	"",                                    // 0
 	"https://api.openai.com",              // 1

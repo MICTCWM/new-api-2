@@ -545,6 +545,19 @@ func UpdateChannelBalance(c *gin.Context) {
 		})
 		return
 	}
+	if channel.Type == constant.ChannelTypeOpencode {
+		usage, err := model.CalibrateOpencodeChannel(c.Request.Context(), id, common.GetTimestamp())
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+			"usage":   usage,
+		})
+		return
+	}
 	result, err := updateChannelBalance(channel)
 	if err != nil {
 		common.ApiError(c, err)

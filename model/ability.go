@@ -122,6 +122,10 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 		return nil, err
 	}
 	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
+	abilities, err = filterAbilitiesByKickedSpeedProtection(abilities, group)
+	if err != nil {
+		return nil, err
+	}
 	channel := Channel{}
 	if len(abilities) > 0 {
 		// Randomly choose one
@@ -144,6 +148,43 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+func filterAbilitiesByKickedSpeedProtection(abilities []Ability, group string) ([]Ability, error) {
+	if len(abilities) == 0 || strings.TrimSpace(group) == "" || DB == nil {
+		return abilities, nil
+	}
+	channelIDs := make([]int, 0, len(abilities))
+	seen := make(map[int]struct{}, len(abilities))
+	for _, ability := range abilities {
+		if _, ok := seen[ability.ChannelId]; ok {
+			continue
+		}
+		seen[ability.ChannelId] = struct{}{}
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+	var channels []*Channel
+	if err := DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	channelsByID := make(map[int]*Channel, len(channels))
+	for _, channel := range channels {
+		if channel != nil {
+			channelsByID[channel.Id] = channel
+		}
+	}
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		channel := channelsByID[ability.ChannelId]
+		kicked, err := IsSpeedProtectionChannelKicked(channel, group)
+		if err != nil {
+			return nil, err
+		}
+		if !kicked {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered, nil
 }
 
 // filterAbilitiesByRequestPathAndModel restricts candidates by request path and

@@ -151,6 +151,7 @@ import {
   getFixedCodeChannelModels,
   MODEL_FETCHABLE_TYPES,
   OPENAI_FIELD_PASSTHROUGH_TYPES,
+  SPEED_PROTECTION_SUPPORTED_CHANNEL_TYPES,
   isFixedCodeChannelType,
 } from '../../constants'
 import { useChannelMutateForm } from '../../hooks/use-channel-mutate-form'
@@ -756,6 +757,10 @@ export function ChannelMutateDrawer({
   const currentDisableTaskPollingSleep = form.watch(
     'disable_task_polling_sleep'
   )
+  const currentSpeedProtectionEnabled = form.watch(
+    'speed_protection_enabled'
+  )
+  const currentSpeedProtectionGroups = form.watch('speed_protection_groups')
   const currentProxy = form.watch('proxy')
   const currentHttpProtocol = form.watch('http_protocol')
   const currentHttp2ConnectionShards = form.watch('http2_connection_shards')
@@ -927,6 +932,15 @@ export function ChannelMutateDrawer({
     }))
   }, [groupsData, currentGroups])
 
+  const protectedGroupOptions = useMemo(
+    () =>
+      (currentGroups || []).map((group) => ({
+        value: group,
+        label: group,
+      })),
+    [currentGroups]
+  )
+
   // Parse current models as array
   const currentModelsArray = useMemo(
     () => parseModelsString(currentModels),
@@ -1032,6 +1046,8 @@ export function ChannelMutateDrawer({
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
     currentDisableTaskPollingSleep ||
+    currentSpeedProtectionEnabled ||
+    (currentSpeedProtectionGroups?.length ?? 0) > 0 ||
     currentProxy?.trim() ||
     currentSystemPrompt?.trim() ||
     currentSystemPromptOverride ||
@@ -4206,6 +4222,73 @@ export function ChannelMutateDrawer({
                             className='space-y-4 disabled:opacity-60'
                           >
                             <div className='divide-border space-y-0 divide-y border-y'>
+                              <FormField
+                                control={form.control}
+                                name='speed_protection_enabled'
+                                render={({ field }) => (
+                                  <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>
+                                        {t('Speed protection')}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'Route streaming requests here when this channel passes the first-token speed checks.'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value === true}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+
+                              {currentSpeedProtectionEnabled && (
+                                <FormField
+                                  control={form.control}
+                                  name='speed_protection_groups'
+                                  render={({ field }) => (
+                                    <FormItem className='space-y-3 px-4 py-3'>
+                                      <div className='space-y-1'>
+                                        <FormLabel>
+                                          {t('Protected groups')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Choose only groups already assigned to this channel.'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <MultiSelect
+                                          options={protectedGroupOptions}
+                                          selected={field.value || []}
+                                          onChange={field.onChange}
+                                          placeholder={t(
+                                            'Select protected groups'
+                                          )}
+                                          disabled={sensitiveLocked}
+                                        />
+                                      </FormControl>
+                                      {!SPEED_PROTECTION_SUPPORTED_CHANNEL_TYPES.has(
+                                        currentType
+                                      ) && (
+                                        <FormDescription className='text-destructive'>
+                                          {t(
+                                            'Speed protection is not supported for this channel type.'
+                                          )}
+                                        </FormDescription>
+                                      )}
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                              )}
+
                               {currentType === 1 && (
                                 <FormField
                                   control={form.control}

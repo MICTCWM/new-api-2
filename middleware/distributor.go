@@ -39,6 +39,7 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
+		common.SetContextKey(c, constant.ContextKeyIsStream, requestUsesStream(c))
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -102,33 +103,65 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
-					affinityUsable := false
-					preferred, err := model.CacheGetChannel(preferredChannelID)
-					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
-						if usingGroup == "auto" {
-							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-							autoGroups := service.GetRequestAutoGroups(c, userGroup)
-							for _, g := range autoGroups {
-								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
-									selectGroup = g
-									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
-									channel = preferred
-									affinityUsable = true
-									service.MarkChannelAffinityUsed(c, g, preferred.Id)
-									break
+				if protected, protectedGroup, protectedErr := service.GetSpeedProtectedChannel(&service.RetryParam{
+					Ctx:                 c,
+					TokenGroup:          usingGroup,
+					ModelName:           modelRequest.Model,
+					RequestPath:         c.Request.URL.Path,
+					Retry:               common.GetPointer(0),
+					AttemptedChannelIDs: make(map[int]struct{}),
+					OpencodePool:        model.IsCodeProviderModel(modelRequest.Model),
+				}); protectedErr != nil {
+					abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
+					return
+				} else if protected != nil {
+					channel = protected
+					selectGroup = protectedGroup
+					common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
+				}
+
+				if channel == nil {
+					if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+						affinityUsable := false
+						preferred, err := model.CacheGetChannel(preferredChannelID)
+						if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+							channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+							if preferred.Type == constant.ChannelTypeOpencode || preferred.Type == constant.ChannelTypeCommand {
+								capacity, capacityErr := model.CodeProviderChannelHasCapacity(preferred, modelRequest.Model, time.Now().Unix(), true)
+								if capacityErr != nil || !capacity {
+									preferred = nil
 								}
 							}
-						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
-							channel = preferred
-							selectGroup = usingGroup
-							affinityUsable = true
-							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 						}
-					}
-					if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
-						service.ClearCurrentChannelAffinityCache(c)
+						if preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+							channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+							if usingGroup == "auto" {
+								userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+								autoGroups := service.GetRequestAutoGroups(c, userGroup)
+								for _, g := range autoGroups {
+									kicked, kickErr := model.IsSpeedProtectionChannelKicked(preferred, g)
+									if kickErr != nil || kicked {
+										continue
+									}
+									if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
+										selectGroup = g
+										common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
+										channel = preferred
+										affinityUsable = true
+										service.MarkChannelAffinityUsed(c, g, preferred.Id)
+										break
+									}
+								}
+							} else if kicked, kickErr := model.IsSpeedProtectionChannelKicked(preferred, usingGroup); kickErr == nil && !kicked && model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
+								channel = preferred
+								selectGroup = usingGroup
+								affinityUsable = true
+								service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
+							}
+						}
+						if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
+							service.ClearCurrentChannelAffinityCache(c)
+						}
 					}
 				}
 
@@ -255,6 +288,24 @@ func getJSONStringValue(result gjson.Result, field string) (string, error) {
 		return "", fmt.Errorf("field %s must be a string", field)
 	}
 	return result.String(), nil
+}
+
+func requestUsesStream(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if strings.Contains(c.Request.URL.Path, "streamGenerateContent") {
+		return true
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return false
+	}
+	body, err := storage.Bytes()
+	if err != nil || !gjson.ValidBytes(body) {
+		return false
+	}
+	return gjson.GetBytes(body, "stream").Bool()
 }
 
 func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {

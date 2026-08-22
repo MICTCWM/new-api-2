@@ -129,6 +129,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		adminInfo["command_pricing_period"] = *relayInfo.CommandPricingPeriod
 	}
 
+	AppendChannelRetryAdminInfo(ctx, adminInfo)
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo

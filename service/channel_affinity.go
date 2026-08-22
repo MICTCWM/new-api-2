@@ -25,6 +25,7 @@ const (
 	ginKeyChannelAffinityMeta       = "channel_affinity_meta"
 	ginKeyChannelAffinityLogInfo    = "channel_affinity_log_info"
 	ginKeyChannelAffinitySkipRetry  = "channel_affinity_skip_retry_on_failure"
+	ginKeyChannelAffinitySelectedID = "channel_affinity_selected_channel_id"
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
@@ -645,6 +646,8 @@ func ClearCurrentChannelAffinityCache(c *gin.Context) bool {
 	if c == nil {
 		return false
 	}
+	c.Set(ginKeyChannelAffinitySkipRetry, false)
+	ClearCurrentChannelAffinitySelection(c)
 	cacheKey, _, ok := getChannelAffinityContext(c)
 	if !ok || cacheKey == "" {
 		return false
@@ -656,13 +659,33 @@ func ClearCurrentChannelAffinityCache(c *gin.Context) bool {
 		common.SysError(fmt.Sprintf("channel affinity cache delete current failed: err=%v", err))
 		return false
 	}
-	c.Set(ginKeyChannelAffinitySkipRetry, false)
 	for _, ok := range deleted {
 		if ok {
 			return true
 		}
 	}
 	return false
+}
+
+// GetCurrentChannelAffinitySelection returns the channel that was selected by
+// affinity for the current request. It is intentionally separate from the
+// cached channel: a queue may fall back to another channel while keeping the
+// cache for a later request.
+func GetCurrentChannelAffinitySelection(c *gin.Context) int {
+	if c == nil {
+		return 0
+	}
+	return c.GetInt(ginKeyChannelAffinitySelectedID)
+}
+
+// ClearCurrentChannelAffinitySelection stops treating the request's current
+// channel as an affinity hit without deleting the future affinity cache.
+func ClearCurrentChannelAffinitySelection(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	c.Set(ginKeyChannelAffinitySelectedID, 0)
+	c.Set(ginKeyChannelAffinitySkipRetry, false)
 }
 
 func ShouldKeepChannelAffinityOnChannelDisabled() bool {
@@ -681,6 +704,7 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 	if !ok {
 		return
 	}
+	c.Set(ginKeyChannelAffinitySelectedID, channelID)
 	c.Set(ginKeyChannelAffinitySkipRetry, meta.SkipRetry)
 	info := map[string]interface{}{
 		"reason":         meta.RuleName,

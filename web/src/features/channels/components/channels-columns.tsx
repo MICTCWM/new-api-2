@@ -53,7 +53,7 @@ import {
   getCurrencyLabel,
 } from '@/lib/currency'
 import { formatTimestampToDate } from '@/lib/format'
-import { truncateText } from '@/lib/utils'
+import { cn, truncateText } from '@/lib/utils'
 
 import {
   getCodexUsage,
@@ -177,6 +177,50 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
         />
       )}
     </div>
+  )
+}
+
+function SpeedProtectionStatus({ channel }: { channel: Channel }) {
+  const { t } = useTranslation()
+  const status = channel.speed_protection
+  if (!status?.enabled) {
+    return null
+  }
+
+  const activeGroups = status.active_groups || []
+  const active = activeGroups.length > 0
+  const configuredGroups = status.groups || []
+  return (
+    <TooltipProvider delay={100}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              aria-label={t('Speed protection status')}
+              className={cn(
+                'inline-flex size-2.5 shrink-0 rounded-full border',
+                active
+                  ? 'border-amber-600 bg-amber-400'
+                  : 'border-muted-foreground/50 bg-muted-foreground/30'
+              )}
+            />
+          }
+        />
+        <TooltipContent side='top' className='max-w-xs'>
+          <div className='space-y-1 text-xs'>
+            <div>
+              {t('Speed protection')}: {active ? t('Active') : t('Standby')}
+            </div>
+            <div>
+              {t('Protected groups')}: {configuredGroups.join(', ') || t('None')}
+            </div>
+            <div>
+              {t('Active groups')}: {activeGroups.join(', ') || t('None')}
+            </div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
@@ -355,21 +399,22 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
     [t('Weekly'), usage.week],
     [t('Monthly'), usage.month],
   ] as const
-  const poolWindows = isCommand
-    ? commandUsage?.split_pools
-      ? ([
-          [
-            t('Flash pool'),
-            commandUsage.flash_pool ?? commandUsage.pool,
-            'flash',
-          ],
-          [t('Pro pool'), commandUsage.pro_pool ?? commandUsage.pool, 'pro'],
-        ] as const)
-      : ([[t('Total pool'), usage.pool, 'combined']] as const)
-    : ([
-        [t('Idle'), usage.off_peak_pool ?? usage.pool, 'off_peak'],
-        [t('Busy'), usage.peak_pool ?? usage.pool, 'peak'],
-      ] as const)
+  let poolWindows
+  if (isCommand) {
+    if (commandUsage?.split_pools) {
+      poolWindows = [
+        [t('Flash pool'), commandUsage.flash_pool ?? commandUsage.pool, 'flash'],
+        [t('Pro pool'), commandUsage.pro_pool ?? commandUsage.pool, 'pro'],
+      ] as const
+    } else {
+      poolWindows = [[t('Total pool'), usage.pool, 'combined']] as const
+    }
+  } else {
+    poolWindows = [
+      [t('Idle'), usage.off_peak_pool ?? usage.pool, 'off_peak'],
+      [t('Busy'), usage.peak_pool ?? usage.pool, 'peak'],
+    ] as const
+  }
   return (
     <div className='flex min-w-52 items-center gap-2'>
       <div className='min-w-40 flex-1 space-y-1'>
@@ -903,6 +948,7 @@ export function useChannelsColumns(
                     className='font-medium'
                     maxWidth='max-w-full'
                   />
+                  <SpeedProtectionStatus channel={channel} />
                   {isPassThrough && (
                     <TooltipProvider delay={100}>
                       <Tooltip>

@@ -25,6 +25,15 @@ export const CHANNEL_TYPE_NEW_API = 60
 export const CHANNEL_TYPE_OPENCODE = 61
 export const CHANNEL_TYPE_COMMAND = 62
 
+// Mirrors relay/common's stream-capable channel set. The backend remains the
+// source of truth, while this set keeps unsupported channel types from showing
+// an unusable speed-protection control in the editor.
+export const SPEED_PROTECTION_SUPPORTED_CHANNEL_TYPES = new Set([
+  1, 3, 4, 14, 17, 23, 24, 25, 26, 33, 35, 39, 40, 43, 45, 46, 48, 53,
+  57, 58, 59, CHANNEL_TYPE_NEW_API, CHANNEL_TYPE_OPENCODE,
+  CHANNEL_TYPE_COMMAND,
+])
+
 export const FIXED_CODE_CHANNEL_MODELS: Record<number, string> = {
   [CHANNEL_TYPE_OPENCODE]: 'deepseek-v4-flash',
   [CHANNEL_TYPE_COMMAND]: 'deepseek/deepseek-v4-flash',

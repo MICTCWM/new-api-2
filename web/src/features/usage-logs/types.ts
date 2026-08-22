@@ -83,6 +83,10 @@ export type LogFilters = CommonLogFilters | DrawingLogFilters | TaskLogFilters
  * Parsed data from the 'other' field in usage logs
  */
 export interface ChannelAffinityInfo {
+  channel_id?: number
+  model?: string
+  request_path?: string
+  reason?: string
   rule_name?: string
   selected_group?: string
   key_source?: string
@@ -91,6 +95,17 @@ export interface ChannelAffinityInfo {
   key_hint?: string
   key_fp?: string
   using_group?: string
+}
+
+export interface ChannelRetryFailure {
+  attempt_index: number
+  channel_id: number
+  channel_name?: string
+  channel_type?: number
+  status_code?: number
+  error_code?: string
+  error_type?: string
+  reason?: string
 }
 
 export const USAGE_BILLING_PATH = {
@@ -126,6 +141,7 @@ export interface LogOtherData {
     command_upstream_cost_usd?: number
     command_upstream_cost_micro_usd?: number
     command_pricing_period?: 'peak' | 'off_peak' | string
+    channel_retry_failures?: ChannelRetryFailure[]
     channel_affinity?: ChannelAffinityInfo
     // Top-up audit fields (type=1, admin only)
     payment_method?: string

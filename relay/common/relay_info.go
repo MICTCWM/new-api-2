@@ -238,7 +238,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 		channelMeta.ChannelOtherSettings = channelOtherSettings
 	}
 
-	if streamSupportedChannels[channelMeta.ChannelType] {
+	if constant.IsStreamSupportedChannel(channelMeta.ChannelType) {
 		channelMeta.SupportStreamOptions = true
 	}
 
@@ -335,30 +335,8 @@ func (info *RelayInfo) ToString() string {
 	return b.String()
 }
 
-// 定义支持流式选项的通道类型
-var streamSupportedChannels = map[int]bool{
-	constant.ChannelTypeOpenAI:         true,
-	constant.ChannelTypeAnthropic:      true,
-	constant.ChannelTypeAws:            true,
-	constant.ChannelTypeGemini:         true,
-	constant.ChannelCloudflare:         true,
-	constant.ChannelTypeAzure:          true,
-	constant.ChannelTypeVolcEngine:     true,
-	constant.ChannelTypeOllama:         true,
-	constant.ChannelTypeXai:            true,
-	constant.ChannelTypeDeepSeek:       true,
-	constant.ChannelTypeBaiduV2:        true,
-	constant.ChannelTypeZhipu_v4:       true,
-	constant.ChannelTypeAli:            true,
-	constant.ChannelTypeSubmodel:       true,
-	constant.ChannelTypeCodex:          true,
-	constant.ChannelTypeMoonshot:       true,
-	constant.ChannelTypeMiniMax:        true,
-	constant.ChannelTypeSiliconFlow:    true,
-	constant.ChannelTypeAdvancedCustom: true,
-	constant.ChannelTypeSub2API:        true,
-	constant.ChannelTypeNewAPI:         true,
-	constant.ChannelTypeTencent:        true,
+func IsStreamSupportedChannel(channelType int) bool {
+	return constant.IsStreamSupportedChannel(channelType)
 }
 
 func GenRelayInfoWs(c *gin.Context, ws *websocket.Conn) *RelayInfo {
@@ -852,11 +830,13 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 	return options
 }
 
-func (info *RelayInfo) SetFirstResponseTime() {
-	if info.isFirstResponse {
-		info.FirstResponseTime = time.Now()
-		info.isFirstResponse = false
+func (info *RelayInfo) SetFirstResponseTime() bool {
+	if info == nil || !info.isFirstResponse {
+		return false
 	}
+	info.FirstResponseTime = time.Now()
+	info.isFirstResponse = false
+	return true
 }
 
 func (info *RelayInfo) HasSendResponse() bool {

@@ -401,6 +401,9 @@ func GetAllChannels(c *gin.Context) {
 	for _, datum := range channelData {
 		clearChannelInfo(datum)
 	}
+	if err := model.EnrichSpeedProtectionStatuses(channelData); err != nil {
+		common.SysError("failed to load speed protection status: " + err.Error())
+	}
 
 	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
 	var results []struct {
@@ -614,6 +617,9 @@ func SearchChannels(c *gin.Context) {
 	for _, datum := range pagedData {
 		clearChannelInfo(datum)
 	}
+	if err := model.EnrichSpeedProtectionStatuses(pagedData); err != nil {
+		common.SysError("failed to load speed protection status: " + err.Error())
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -640,6 +646,9 @@ func GetChannel(c *gin.Context) {
 	}
 	if channel != nil {
 		clearChannelInfo(channel)
+		if err := model.EnrichSpeedProtectionStatuses([]*model.Channel{channel}); err != nil {
+			common.SysError("failed to load speed protection status: " + err.Error())
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -772,6 +781,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
+	}
+	if channel.GetOtherSettings().SpeedProtectionEnabled && !relaycommon.IsStreamSupportedChannel(channel.Type) {
+		return fmt.Errorf("speed protection is not supported for this channel type")
 	}
 
 	if channel.Type == constant.ChannelTypeNewAPI && strings.TrimSpace(channel.GetBaseURL()) == "" {

@@ -35,6 +35,7 @@ import { formatTimestampToDate } from '@/lib/format'
 
 import { getCodexUsage, updateChannelBalance } from '../../api'
 import { channelsQueryKeys } from '../../lib'
+import type { OpencodeUsageSnapshot } from '../../types'
 import { useChannels } from '../channels-provider'
 import {
   CodexUsageDialog,
@@ -59,6 +60,8 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
   const [rawResponse, setRawResponse] = useState<string | null>(
     props.initialRawResponse ?? null
   )
+  const [opencodeUsage, setOpencodeUsage] =
+    useState<OpencodeUsageSnapshot | null>(null)
   const [codexUsageResponse, setCodexUsageResponse] =
     useState<CodexUsageDialogData | null>(null)
 
@@ -96,7 +99,21 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
     setIsQuerying(true)
     try {
       const response = await updateChannelBalance(currentRow.id)
-      if (response.success && response.balance !== undefined) {
+      if (response.success && response.usage) {
+        setOpencodeUsage(response.usage)
+        setBalanceUpdatedTime(
+          response.usage.calibration.last_success_at ||
+            Math.floor(Date.now() / 1000)
+        )
+        toast.success(t('Balance updated successfully'))
+        await queryClient.invalidateQueries({
+          queryKey: channelsQueryKeys.lists(),
+        })
+        await queryClient.invalidateQueries({
+          queryKey: ['code-provider-usage', currentRow.id],
+        })
+        setRawResponse(null)
+      } else if (response.success && response.balance !== undefined) {
         const newBalance = response.balance
         const now = Math.floor(Date.now() / 1000)
 
@@ -134,6 +151,7 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
     setBalance(null)
     setBalanceUpdatedTime(null)
     setRawResponse(null)
+    setOpencodeUsage(null)
     setCodexUsageResponse(null)
     props.onOpenChange(false)
   }
@@ -186,7 +204,7 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
       }
     >
       <div className='space-y-4 py-4'>
-        {rawResponse !== null ? (
+        {rawResponse !== null && (
           <>
             <Alert>
               <AlertTitle>{t('Balance response not recognized')}</AlertTitle>
@@ -206,7 +224,57 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
               <CodeBlockCopyButton />
             </CodeBlock>
           </>
-        ) : (
+        )}
+        {rawResponse === null && opencodeUsage && (
+          <div className='space-y-3'>
+            {(
+              [
+                [t('5 hours'), opencodeUsage.five_hour],
+                [t('Weekly'), opencodeUsage.week],
+                [t('Monthly'), opencodeUsage.month],
+              ] as const
+            ).map(([label, window]) => {
+              const percent = Math.min(100, Math.max(0, window.percent))
+              return (
+                <div className='space-y-2 rounded-lg border p-4' key={label}>
+                  <div className='flex items-center justify-between gap-3 text-sm'>
+                    <span className='font-medium'>{label}</span>
+                    <span className='text-muted-foreground tabular-nums'>
+                      {percent.toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className='bg-muted h-2 overflow-hidden rounded-full'>
+                    <div
+                      className='bg-primary h-full transition-all'
+                      style={{ width: `${percent}%` }}
+                    />
+                  </div>
+                  <div className='text-muted-foreground flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs'>
+                    <span>
+                      {t('Used:')} {formatBalance(window.used_usd)} /{' '}
+                      {formatBalance(window.limit_usd)}
+                    </span>
+                    <span>
+                      {t('Remaining:')} {formatBalance(window.remaining_usd)}
+                    </span>
+                  </div>
+                  <div className='text-muted-foreground text-xs'>
+                    {t('Reset at:')} {formatDate(window.reset_at)}
+                  </div>
+                </div>
+              )
+            })}
+            <div className='text-muted-foreground text-xs'>
+              {t('Last updated:')}{' '}
+              {formatDate(
+                opencodeUsage.calibration.last_success_at ||
+                  balanceUpdatedTime ||
+                  currentRow.balance_updated_time
+              )}
+            </div>
+          </div>
+        )}
+        {rawResponse === null && !opencodeUsage && (
           <>
             {/* Current Balance Display */}
             <div className='bg-muted/50 rounded-lg border p-4'>

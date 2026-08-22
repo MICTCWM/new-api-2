@@ -37,9 +37,11 @@ import (
 )
 
 type testResult struct {
-	context     *gin.Context
-	localErr    error
-	newAPIError *types.NewAPIError
+	context             *gin.Context
+	localErr            error
+	newAPIError         *types.NewAPIError
+	firstResponseMillis int64
+	firstResponseSeen   bool
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, endpointType string) string {
@@ -71,10 +73,23 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 }
 
 func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+	return testChannelWithGroup(ctx, channel, testUserID, testModel, endpointType, isStream, "")
+}
+
+func testChannelWithGroup(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, forcedGroup string) (result testResult) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	tik := time.Now()
+	var info *relaycommon.RelayInfo
+	defer func() {
+		if info != nil && info.FirstResponseTime.After(info.StartTime) {
+			result.firstResponseMillis = max(info.FirstResponseTime.Sub(info.StartTime).Milliseconds(), 0)
+			result.firstResponseSeen = true
+			return
+		}
+		result.firstResponseMillis = max(time.Since(tik).Milliseconds(), 0)
+	}()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
 		constant.ChannelTypeMidjourneyPlus,
@@ -166,6 +181,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	c.Set("channel", channel.Type)
 	c.Set("base_url", channel.GetBaseURL())
 	group, _ := model.GetUserGroup(testUserID, false)
+	if forcedGroup != "" {
+		group = forcedGroup
+	}
 	c.Set("group", group)
 
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel)
@@ -229,7 +247,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 
 	request := buildTestRequest(testModel, endpointType, channel, isStream)
 
-	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
+	info, err = relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
 	if err != nil {
 		return testResult{
@@ -472,8 +490,8 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
 		}
 	}
-	result := w.Result()
-	respBody, err := readTestResponseBody(result.Body, isStream)
+	responseResult := w.Result()
+	respBody, err := readTestResponseBody(responseResult.Body, isStream)
 	if err != nil {
 		return testResult{
 			context:     c,
@@ -489,6 +507,43 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
+	if usage != nil {
+		settleAt := time.Now().UTC()
+		switch channel.Type {
+		case constant.ChannelTypeOpencode:
+			cost := int64(0)
+			pricingPeriod := model.OpencodePricingPeriodAt(settleAt)
+			calculatedCost, costErr := model.CalculateOpencodeCostMicroUSD(usage, settleAt)
+			if costErr != nil {
+				common.SysError(fmt.Sprintf("failed to calculate OpenCode channel test usage: channel_id=%d err=%v", channel.Id, costErr))
+			} else {
+				cost = calculatedCost
+				if err := model.SettleOpencodeCost(channel.Id, cost, settleAt); err != nil {
+					common.SysError(fmt.Sprintf("failed to settle OpenCode channel test usage: channel_id=%d err=%v", channel.Id, err))
+				}
+			}
+			info.OpencodeUpstreamCostMicroUSD = &cost
+			info.OpencodePricingPeriod = &pricingPeriod
+		case constant.ChannelTypeCommand:
+			cost := int64(0)
+			pricingPeriod := model.OpencodePricingPeriodAt(settleAt)
+			commandModel := strings.TrimSpace(info.UpstreamModelName)
+			if commandModel == "" {
+				commandModel = info.OriginModelName
+			}
+			calculatedCost, costErr := model.CalculateCommandCostMicroUSDForModel(usage, commandModel, settleAt)
+			if costErr != nil {
+				common.SysError(fmt.Sprintf("failed to calculate Command channel test usage: channel_id=%d model=%s err=%v", channel.Id, commandModel, costErr))
+			} else {
+				cost = calculatedCost
+				if err := model.SettleCommandCostForModel(channel.Id, commandModel, cost, settleAt); err != nil {
+					common.SysError(fmt.Sprintf("failed to settle Command channel test usage: channel_id=%d model=%s err=%v", channel.Id, commandModel, err))
+				}
+			}
+			info.CommandUpstreamCostMicroUSD = &cost
+			info.CommandPricingPeriod = &pricingPeriod
+		}
+	}
 
 	quota, tieredResult := settleTestQuota(info, priceData, usage)
 	tok := time.Now()
