@@ -36,7 +36,13 @@ const OPERATIONS_SECTIONS = [
           DefaultCollapseSidebar: settings.DefaultCollapseSidebar,
           DemoSiteEnabled: settings.DemoSiteEnabled,
           SelfUseModeEnabled: settings.SelfUseModeEnabled,
-          OpencodeRPMLimit: settings.OpencodeRPMLimit,
+          OpencodeConcurrencyLimit: settings.OpencodeConcurrencyLimit,
+          AutoScalingEnabled: settings.AutoScalingEnabled,
+          AutoScalingRPMLimit: settings.AutoScalingRPMLimit,
+          AutoScalingCooldownMinutes: settings.AutoScalingCooldownMinutes,
+          AutoScalingToken: settings.AutoScalingToken,
+          AutoScalingChannelIDs: settings.AutoScalingChannelIDs,
+          AutoScalingInstanceIDs: settings.AutoScalingInstanceIDs,
         }}
       />
     ),

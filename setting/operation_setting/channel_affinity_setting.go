@@ -36,6 +36,8 @@ type ChannelAffinitySetting struct {
 	Rules                 []ChannelAffinityRule `json:"rules"`
 }
 
+const ChannelAffinityProtectionLeaseSeconds int64 = 15
+
 // Keep Codex CLI passthrough aligned with upstream. Codex uses lower-case
 // header names, while HTTP matching here is case-insensitive.
 // Request session/thread headers:
@@ -145,6 +147,28 @@ var channelAffinitySetting = ChannelAffinitySetting{
 			IncludeUsingGroup:     true,
 			IncludeRuleName:       true,
 			UserAgentInclude:      nil,
+		},
+		{
+			Name:       "opencode session trace",
+			ModelRegex: []string{"^deepseek-v4-flash$"},
+			PathRegex:  []string{"/v1/chat/completions"},
+			KeySources: []ChannelAffinityKeySource{
+				{Type: "gjson", Path: "prompt_cache_key"},
+				{Type: "gjson", Path: "session_id"},
+				{Type: "request_header", Key: "X-OpenCode-Session"},
+				{Type: "request_header", Key: "X-OpenCode-Session-Id"},
+				{Type: "request_header", Key: "X-Session-Id"},
+				// OpenCode clients that do not expose a session key still get
+				// stable routing per access token, which keeps one upstream account
+				// from being used through multiple channels.
+				{Type: "context_int", Key: "token_id"},
+			},
+			TTLSeconds:         0,
+			SkipRetryOnFailure: true,
+			IncludeUsingGroup:  true,
+			IncludeModelName:   true,
+			IncludeRuleName:    true,
+			UserAgentInclude:   nil,
 		},
 	},
 }

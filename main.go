@@ -29,6 +29,7 @@ import (
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/autoscaling"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -113,6 +114,9 @@ func main() {
 
 	// 数据看板
 	go model.UpdateQuotaData()
+
+	// 全局 RPM 自动伸缩：监控全局请求频率，超阈值时启动 AutoDL 容器实例 Pro 并启用渠道。
+	go autoscaling.StartAutoScalingLoop()
 
 	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
 		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))

@@ -57,6 +57,7 @@ export const channelSchema = z.object({
   status_code_mapping: z.string().nullish(),
   priority: z.number().nullish(),
   auto_ban: z.number().nullish(),
+  fallback_sequence: z.string().nullish(),
   other_info: z.string().default(''),
   tag: z.string().nullish(),
   setting: z.string().nullish(),
@@ -98,6 +99,8 @@ export interface ChannelSettings {
 }
 
 export interface ChannelOtherSettings {
+  channel_concurrency_limit?: number
+  channel_rpm_limit?: number
   speed_protection_enabled?: boolean
   speed_protection_groups?: string[]
   azure_responses_version?: string
@@ -112,6 +115,7 @@ export interface ChannelOtherSettings {
   allow_speed?: boolean
   claude_beta_query?: boolean
   disable_task_polling_sleep?: boolean
+  station_cache_enabled?: boolean
   upstream_model_update_check_enabled?: boolean
   upstream_model_update_auto_sync_enabled?: boolean
   upstream_model_update_ignored_models?: string[]
@@ -177,6 +181,12 @@ export interface OpencodeUsageSnapshot {
   rpm_count: number
   rpm_limit: number
   rpm_reset_at: number
+  affinity_reserved_rpm: number
+  available_rpm: number
+  concurrency_count: number
+  concurrency_limit: number
+  affinity_reserved_concurrency: number
+  available_concurrency: number
   calibration: {
     last_attempt_at: number
     last_success_at: number
@@ -206,6 +216,12 @@ export interface CommandUsageSnapshot {
   rpm_count: number
   rpm_limit: number
   rpm_reset_at: number
+  affinity_reserved_rpm: number
+  available_rpm: number
+  concurrency_count: number
+  concurrency_limit: number
+  affinity_reserved_concurrency: number
+  available_concurrency: number
 }
 
 export interface CommandUsageResponse {
@@ -213,6 +229,28 @@ export interface CommandUsageResponse {
   message?: string
   data?: CommandUsageSnapshot
 }
+
+export interface ChannelConcurrencyUsageSnapshot {
+  channel_id: number
+  rpm_count: number
+  rpm_limit: number
+  rpm_reset_at: number
+  affinity_reserved_rpm: number
+  available_rpm: number
+  concurrency_count: number
+  concurrency_limit: number
+  affinity_reserved_concurrency: number
+  available_concurrency: number
+}
+
+export interface ChannelConcurrencyUsageResponse {
+  success: boolean
+  message?: string
+  data?: ChannelConcurrencyUsageSnapshot
+}
+
+export type ChannelRPMUsageSnapshot = ChannelConcurrencyUsageSnapshot
+export type ChannelRPMUsageResponse = ChannelConcurrencyUsageResponse
 
 export interface CodeProviderUsageOverrideRequest {
   five_hour_used_usd: number
@@ -234,6 +272,8 @@ export interface GetChannelsResponse {
     page: number
     page_size: number
     type_counts?: Record<string, number>
+    fallback_channel_ids?: number[]
+    fallback_channels?: Channel[]
   }
 }
 
@@ -244,6 +284,7 @@ export interface SearchChannelsResponse {
     items: Channel[]
     total: number
     type_counts?: Record<string, number>
+    fallback_channel_ids?: number[]
   }
 }
 

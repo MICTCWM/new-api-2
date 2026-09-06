@@ -34,16 +34,17 @@ const (
 )
 
 type CommandChannelUsage struct {
-	ID             int   `json:"id"`
-	ChannelID      int   `json:"channel_id" gorm:"uniqueIndex"`
-	FiveHourUsed   int64 `json:"five_hour_used"`
-	FiveHourStart  int64 `json:"five_hour_start"`
-	WeekUsed       int64 `json:"week_used"`
-	WeekStart      int64 `json:"week_start"`
-	MonthUsed      int64 `json:"month_used"`
-	MonthStart     int64 `json:"month_start"`
-	RPMWindowStart int64 `json:"rpm_window_start"`
-	RPMCount       int   `json:"rpm_count"`
+	ID               int   `json:"id"`
+	ChannelID        int   `json:"channel_id" gorm:"uniqueIndex"`
+	FiveHourUsed     int64 `json:"five_hour_used"`
+	FiveHourStart    int64 `json:"five_hour_start"`
+	WeekUsed         int64 `json:"week_used"`
+	WeekStart        int64 `json:"week_start"`
+	MonthUsed        int64 `json:"month_used"`
+	MonthStart       int64 `json:"month_start"`
+	RPMWindowStart   int64 `json:"rpm_window_start"`
+	RPMCount         int   `json:"rpm_count"`
+	ConcurrencyCount int   `json:"concurrency_count"`
 	// QuotaDisabledUntil identifies an automatic disable caused by the rolling
 	// quota windows. A zero value means this channel is not quota-disabled.
 	QuotaDisabledUntil int64 `json:"quota_disabled_until" gorm:"index"`
@@ -57,18 +58,24 @@ type CommandPoolUsage struct {
 }
 
 type CommandUsageSnapshot struct {
-	ChannelID     int                 `json:"channel_id"`
-	FiveHour      OpencodeUsageWindow `json:"five_hour"`
-	Week          OpencodeUsageWindow `json:"week"`
-	Month         OpencodeUsageWindow `json:"month"`
-	Pool          OpencodeUsageWindow `json:"pool"`
-	FlashPool     OpencodeUsageWindow `json:"flash_pool"`
-	ProPool       OpencodeUsageWindow `json:"pro_pool"`
-	SplitPools    bool                `json:"split_pools"`
-	PricingPeriod string              `json:"pricing_period"`
-	RPMCount      int                 `json:"rpm_count"`
-	RPMLimit      int                 `json:"rpm_limit"`
-	RPMResetAt    int64               `json:"rpm_reset_at"`
+	ChannelID                   int                 `json:"channel_id"`
+	FiveHour                    OpencodeUsageWindow `json:"five_hour"`
+	Week                        OpencodeUsageWindow `json:"week"`
+	Month                       OpencodeUsageWindow `json:"month"`
+	Pool                        OpencodeUsageWindow `json:"pool"`
+	FlashPool                   OpencodeUsageWindow `json:"flash_pool"`
+	ProPool                     OpencodeUsageWindow `json:"pro_pool"`
+	SplitPools                  bool                `json:"split_pools"`
+	PricingPeriod               string              `json:"pricing_period"`
+	RPMCount                    int                 `json:"rpm_count"`
+	RPMLimit                    int                 `json:"rpm_limit"`
+	RPMResetAt                  int64               `json:"rpm_reset_at"`
+	AffinityReservedRPM         int                 `json:"affinity_reserved_rpm"`
+	AvailableRPM                int                 `json:"available_rpm"`
+	ConcurrencyCount            int                 `json:"concurrency_count"`
+	ConcurrencyLimit            int                 `json:"concurrency_limit"`
+	AffinityReservedConcurrency int                 `json:"affinity_reserved_concurrency"`
+	AvailableConcurrency        int                 `json:"available_concurrency"`
 }
 
 func CommandPoolKey(channelID int) string {
@@ -220,7 +227,7 @@ func commandChannelHasCapacity(channel *Channel, channelID int, modelName string
 		remainingOpencode(usage.WeekUsed, CommandWeekLimitMicroUSD) > CommandMinimumRemainingMicroUSD &&
 		remainingOpencode(usage.MonthUsed, CommandMonthLimitMicroUSD) > CommandMinimumRemainingMicroUSD &&
 		remainingOpencode(pool.Used, poolLimit) > CommandMinimumRemainingMicroUSD &&
-		usage.RPMCount < operation_setting.GetOpencodeRPMLimit(), nil
+		usage.ConcurrencyCount < operation_setting.GetOpencodeConcurrencyLimit(), nil
 }
 
 func commandChannelHasQuotaCapacity(channel *Channel, channelID int, modelName string, now int64) (bool, error) {
@@ -510,18 +517,20 @@ func GetCommandUsageSnapshot(channelID int, now int64) (*CommandUsageSnapshot, e
 		proWindow = makeCommandWindow(proPool.Used, CommandProPoolLimitMicroUSD, proPool.ResetTime)
 	}
 	return &CommandUsageSnapshot{
-		ChannelID:     channelID,
-		FiveHour:      makeCommandWindow(channelUsage.FiveHourUsed, CommandFiveHourLimitMicroUSD, channelUsage.FiveHourStart+5*60*60),
-		Week:          makeCommandWindow(channelUsage.WeekUsed, CommandWeekLimitMicroUSD, channelUsage.WeekStart+7*24*60*60),
-		Month:         makeCommandWindow(channelUsage.MonthUsed, CommandMonthLimitMicroUSD, channelUsage.MonthStart+30*24*60*60),
-		Pool:          poolWindow,
-		FlashPool:     flashWindow,
-		ProPool:       proWindow,
-		SplitPools:    splitPools,
-		PricingPeriod: OpencodePricingPeriodAt(time.Unix(now, 0).UTC()),
-		RPMCount:      normalizeCommandRPM(channelUsage.RPMCount),
-		RPMLimit:      operation_setting.GetOpencodeRPMLimit(),
-		RPMResetAt:    channelUsage.RPMWindowStart + 60,
+		ChannelID:        channelID,
+		FiveHour:         makeCommandWindow(channelUsage.FiveHourUsed, CommandFiveHourLimitMicroUSD, channelUsage.FiveHourStart+5*60*60),
+		Week:             makeCommandWindow(channelUsage.WeekUsed, CommandWeekLimitMicroUSD, channelUsage.WeekStart+7*24*60*60),
+		Month:            makeCommandWindow(channelUsage.MonthUsed, CommandMonthLimitMicroUSD, channelUsage.MonthStart+30*24*60*60),
+		Pool:             poolWindow,
+		FlashPool:        flashWindow,
+		ProPool:          proWindow,
+		SplitPools:       splitPools,
+		PricingPeriod:    OpencodePricingPeriodAt(time.Unix(now, 0).UTC()),
+		RPMCount:         normalizeCommandRPM(channelUsage.RPMCount),
+		RPMLimit:         operation_setting.GetOpencodeConcurrencyLimit(),
+		RPMResetAt:       channelUsage.RPMWindowStart + 60,
+		ConcurrencyCount: normalizeCommandConcurrency(channelUsage.ConcurrencyCount),
+		ConcurrencyLimit: operation_setting.GetOpencodeConcurrencyLimit(),
 	}, nil
 }
 
@@ -542,6 +551,7 @@ func ResetAllCommandUsage() error {
 			usage.MonthStart = now
 			usage.RPMCount = 0
 			usage.RPMWindowStart = now
+			usage.ConcurrencyCount = 0
 			if err := tx.Save(usage).Error; err != nil {
 				return err
 			}
@@ -687,6 +697,7 @@ func ReserveCommandRPM(channelID int, now int64) (bool, int64, error) {
 			return nil
 		}
 		usage.RPMCount++
+		usage.ConcurrencyCount++
 		allowed = true
 		return tx.Save(usage).Error
 	})
@@ -708,6 +719,9 @@ func ReleaseCommandRPM(channelID int, now int64) error {
 			return nil
 		}
 		usage.RPMCount--
+		if usage.ConcurrencyCount > 0 {
+			usage.ConcurrencyCount--
+		}
 		return tx.Save(usage).Error
 	})
 }
@@ -810,4 +824,45 @@ func makeCommandWindow(used, limit, resetAt int64) OpencodeUsageWindow {
 
 func normalizeCommandRPM(count int) int {
 	return int(minMaxOpencode(int64(count), 0, int64(operation_setting.GetOpencodeRPMLimit())))
+}
+
+func normalizeCommandConcurrency(count int) int {
+	return int(minMaxOpencode(int64(count), 0, int64(operation_setting.GetOpencodeConcurrencyLimit())))
+}
+
+func ReserveCommandConcurrency(channelID int) (bool, error) {
+	if channelID <= 0 {
+		return false, errors.New("invalid channel id")
+	}
+	var allowed bool
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		usage, err := getOrCreateCommandChannelUsageTx(tx, channelID, common.GetTimestamp())
+		if err != nil {
+			return err
+		}
+		if usage.ConcurrencyCount >= operation_setting.GetOpencodeConcurrencyLimit() {
+			return nil
+		}
+		usage.ConcurrencyCount++
+		allowed = true
+		return tx.Save(usage).Error
+	})
+	return allowed, err
+}
+
+func ReleaseCommandConcurrency(channelID int) error {
+	if channelID <= 0 {
+		return errors.New("invalid channel id")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		usage, err := getOrCreateCommandChannelUsageTx(tx, channelID, common.GetTimestamp())
+		if err != nil {
+			return err
+		}
+		if usage.ConcurrencyCount <= 0 {
+			return nil
+		}
+		usage.ConcurrencyCount--
+		return tx.Save(usage).Error
+	})
 }

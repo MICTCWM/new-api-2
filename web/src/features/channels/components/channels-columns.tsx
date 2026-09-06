@@ -58,6 +58,7 @@ import { cn, truncateText } from '@/lib/utils'
 import {
   getCodexUsage,
   getCommandUsage,
+  getChannelConcurrencyUsage,
   getOpencodeUsage,
   updateChannelBalance,
 } from '../api'
@@ -78,6 +79,7 @@ import {
   parseModelsList,
   parseGroupsList,
   parseChannelSettings,
+  parseChannelOtherSettings,
   channelsQueryKeys,
   handleUpdateChannelField,
   handleUpdateTagField,
@@ -212,7 +214,8 @@ function SpeedProtectionStatus({ channel }: { channel: Channel }) {
               {t('Speed protection')}: {active ? t('Active') : t('Standby')}
             </div>
             <div>
-              {t('Protected groups')}: {configuredGroups.join(', ') || t('None')}
+              {t('Protected groups')}:{' '}
+              {configuredGroups.join(', ') || t('None')}
             </div>
             <div>
               {t('Active groups')}: {activeGroups.join(', ') || t('None')}
@@ -403,7 +406,11 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
   if (isCommand) {
     if (commandUsage?.split_pools) {
       poolWindows = [
-        [t('Flash pool'), commandUsage.flash_pool ?? commandUsage.pool, 'flash'],
+        [
+          t('Flash pool'),
+          commandUsage.flash_pool ?? commandUsage.pool,
+          'flash',
+        ],
         [t('Pro pool'), commandUsage.pro_pool ?? commandUsage.pool, 'pro'],
       ] as const
     } else {
@@ -497,20 +504,56 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
   )
 }
 
-function CodeProviderLoadCell({ channel }: { channel: Channel }) {
+function ChannelConcurrencyGaugeCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
+  const isFixedCodeChannel = isFixedCodeChannelType(channel.type)
   const isCommand = channel.type === CHANNEL_TYPE_COMMAND
-  const { data } = useQuery({
+  const channelOtherSettings = parseChannelOtherSettings(channel.settings)
+  const channelConcurrencyLimit =
+    channelOtherSettings.channel_concurrency_limit ??
+    channelOtherSettings.channel_rpm_limit ??
+    0
+
+  const { data: codeProviderUsage } = useQuery({
     queryKey: ['code-provider-usage', channel.id],
     queryFn: () =>
       isCommand ? getCommandUsage(channel.id) : getOpencodeUsage(channel.id),
-    enabled: isFixedCodeChannelType(channel.type),
+    enabled: isFixedCodeChannel,
     refetchInterval: 15_000,
   })
-  if (!isFixedCodeChannelType(channel.type) || !data?.data) return null
-  const usage = data.data
-  const count = Math.min(usage.rpm_limit, Math.max(0, usage.rpm_count))
-  const ratio = count / Math.max(1, usage.rpm_limit)
+  const { data: channelConcurrencyUsage } = useQuery({
+    queryKey: ['channel-concurrency-usage', channel.id],
+    queryFn: () => getChannelConcurrencyUsage(channel.id),
+    enabled: !isFixedCodeChannel && channelConcurrencyLimit > 0,
+    refetchInterval: 15_000,
+  })
+
+  const usage = isFixedCodeChannel
+    ? codeProviderUsage?.data
+    : channelConcurrencyUsage?.data
+  if (!usage || usage.concurrency_limit <= 0) return null
+
+  const actualCount = Math.min(
+    usage.concurrency_limit,
+    Math.max(0, usage.concurrency_count)
+  )
+  const affinityReservedCount = Math.max(
+    0,
+    usage.affinity_reserved_concurrency ?? 0
+  )
+  const occupiedCount = Math.min(
+    usage.concurrency_limit,
+    actualCount + affinityReservedCount
+  )
+  const availableCount = Math.min(
+    usage.concurrency_limit,
+    Math.max(
+      0,
+      usage.available_concurrency ??
+        usage.concurrency_limit - actualCount - affinityReservedCount
+    )
+  )
+  const ratio = occupiedCount / Math.max(1, usage.concurrency_limit)
   let color = 'text-green-500'
   if (ratio >= 1) {
     color = 'text-red-500'
@@ -527,9 +570,9 @@ function CodeProviderLoadCell({ channel }: { channel: Channel }) {
             <div
               className={`relative size-10 ${color}`}
               role='img'
-              aria-label={t('Code provider load: {{count}} of {{limit}} RPM', {
-                count,
-                limit: usage.rpm_limit,
+              aria-label={t('Current concurrency: {{count}} / {{limit}}', {
+                count: occupiedCount,
+                limit: usage.concurrency_limit,
               })}
             />
           }
@@ -556,14 +599,25 @@ function CodeProviderLoadCell({ channel }: { channel: Channel }) {
             />
           </svg>
           <span className='absolute inset-0 flex items-center justify-center text-[10px] font-medium tabular-nums'>
-            {count}/{usage.rpm_limit}
+            {occupiedCount}/{usage.concurrency_limit}
           </span>
         </TooltipTrigger>
         <TooltipContent>
-          {t('Current load: {{count}} / {{limit}} RPM', {
-            count,
-            limit: usage.rpm_limit,
-          })}
+          <div className='space-y-1 text-xs'>
+            <div>
+              {t('Occupied concurrency')}: {occupiedCount} /{' '}
+              {usage.concurrency_limit}
+            </div>
+            <div>
+              {t('Actual concurrency')}: {actualCount}
+            </div>
+            <div>
+              {t('Affinity reserved concurrency')}: {affinityReservedCount}
+            </div>
+            <div>
+              {t('Available concurrency')}: {availableCount}
+            </div>
+          </div>
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -1381,10 +1435,13 @@ export function useChannelsColumns(
           isFixedCodeChannelType(row.original.type) ? (
             <div className='flex items-center gap-3'>
               <CodeProviderUsageCell channel={row.original} />
-              <CodeProviderLoadCell channel={row.original} />
+              <ChannelConcurrencyGaugeCell channel={row.original} />
             </div>
           ) : (
-            <BalanceCell channel={row.original} />
+            <div className='flex items-center gap-3'>
+              <BalanceCell channel={row.original} />
+              <ChannelConcurrencyGaugeCell channel={row.original} />
+            </div>
           ),
         size: 300,
       },

@@ -207,7 +207,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if retryParam.OpencodePool {
 		maxAttempts = 4
 	}
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	// 兜底模式下即使超出 maxAttempts 也必须继续，直到兜底序列全部尝试完毕或耗尽。
+	for attempt := 0; attempt < maxAttempts || retryParam.InFallback; attempt++ {
 		if attempt > 0 {
 			retryParam.IncreaseRetry()
 		}
@@ -219,6 +220,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 
 		if channelErr != nil {
+			// 兜底序列全部失败：返回主渠道的首个错误，不再参与全局随机重试。
+			if retryParam.InFallback && !retryParam.HasNextFallback() {
+				if retryParam.FirstError != nil {
+					newAPIError = retryParam.FirstError
+				} else {
+					newAPIError = channelErr
+				}
+				break
+			}
 			if retryParam.OpencodePool {
 				newAPIError = types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 			} else {
@@ -228,33 +238,70 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 
-		rpmReserved := false
+		concurrencyReserved := false
+		channelConcurrencyReserved := false
 		if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand {
 			retryParam.OpencodePool = true
 			if retryParam.AttemptedChannelIDs == nil {
 				retryParam.AttemptedChannelIDs = make(map[int]struct{})
 			}
 			retryParam.AttemptedChannelIDs[channel.Id] = struct{}{}
-			if retryParam.OpencodeRPMReserved {
-				retryParam.OpencodeRPMReserved = false
+			if retryParam.OpencodeConcurrencyReserved {
+				retryParam.OpencodeConcurrencyReserved = false
 			} else {
-				allowed, _, rpmErr := model.ReserveCodeProviderRPM(channel.Type, channel.Id, common.GetTimestamp())
-				if rpmErr != nil {
-					newAPIError = types.NewError(rpmErr, types.ErrorCodeDoRequestFailed)
+				allowed, concurrencyErr := model.ReserveCodeProviderConcurrency(channel.Type, channel.Id)
+				if concurrencyErr != nil {
+					newAPIError = types.NewError(concurrencyErr, types.ErrorCodeDoRequestFailed)
 					break
 				}
 				if !allowed {
-					newAPIError = types.NewErrorWithStatusCode(errors.New("opencode channel rate limit exceeded"), types.ErrorCodeDoRequestFailed, http.StatusTooManyRequests)
+					newAPIError = types.NewErrorWithStatusCode(errors.New("opencode channel concurrency limit exceeded"), types.ErrorCodeDoRequestFailed, http.StatusTooManyRequests)
 					continue
 				}
 			}
 			opencodeAttempts++
-			rpmReserved = true
+			concurrencyReserved = true
+		} else {
+			// The distributor's initial channel is intentionally a lightweight
+			// snapshot. Reload it here so the channel-specific RPM setting is
+			// available before reserving concurrency.
+			if channel.OtherSettings == "" {
+				fullChannel, loadErr := model.CacheGetChannel(channel.Id)
+				if loadErr != nil {
+					newAPIError = types.NewError(loadErr, types.ErrorCodeGetChannelFailed)
+					break
+				}
+				if fullChannel == nil {
+					newAPIError = types.NewError(errors.New("selected channel is missing"), types.ErrorCodeGetChannelFailed)
+					break
+				}
+				channel = fullChannel
+			}
+			if retryParam.AttemptedChannelIDs == nil {
+				retryParam.AttemptedChannelIDs = make(map[int]struct{})
+			}
+			retryParam.AttemptedChannelIDs[channel.Id] = struct{}{}
+			allowed, concurrencyErr := model.ReserveChannelConcurrency(channel, common.GetTimestamp())
+			if concurrencyErr != nil {
+				newAPIError = types.NewError(concurrencyErr, types.ErrorCodeDoRequestFailed)
+				break
+			}
+			if !allowed {
+				newAPIError = types.NewErrorWithStatusCode(errors.New("channel concurrency limit exceeded"), types.ErrorCodeDoRequestFailed, http.StatusTooManyRequests)
+				if service.GetCurrentChannelAffinitySelection(c) == channel.Id {
+					service.ClearCurrentChannelAffinitySelection(c)
+				}
+				continue
+			}
+			channelConcurrencyReserved = true
 		}
 		addUsedChannel(c, channel.Id)
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
-			if rpmReserved {
-				releaseOpencodeRPMOnFailure(c, channel.Id)
+			if concurrencyReserved {
+				releaseOpencodeConcurrency(c, channel.Id)
+			}
+			if channelConcurrencyReserved {
+				releaseChannelConcurrency(c, channel)
 			}
 			newAPIError = billingErr
 			break
@@ -268,8 +315,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			} else {
 				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 			}
-			if rpmReserved {
-				releaseOpencodeRPMOnFailure(c, channel.Id)
+			if concurrencyReserved {
+				releaseOpencodeConcurrency(c, channel.Id)
+			}
+			if channelConcurrencyReserved {
+				releaseChannelConcurrency(c, channel)
 			}
 			break
 		}
@@ -286,12 +336,18 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 
+		if concurrencyReserved {
+			releaseOpencodeConcurrency(c, channel.Id)
+			concurrencyReserved = false
+		}
+		if channelConcurrencyReserved {
+			releaseChannelConcurrency(c, channel)
+			channelConcurrencyReserved = false
+		}
+
 		if newAPIError == nil {
 			relayInfo.LastError = nil
 			return
-		}
-		if rpmReserved {
-			releaseOpencodeRPMOnFailure(c, channel.Id)
 		}
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
@@ -303,6 +359,26 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			// attempt. Keep the existing attempted-channel filter so retrying
 			// still follows the normal multi-channel chain.
 			service.ClearCurrentChannelAffinityCache(c)
+		}
+
+		// ── 兜底序列（Fallback Sequence）失败路由 ──
+		// 仅当尚未启动兜底、且当前失败渠道非 Opencode/Command（不干扰 code-provider 流程）
+		// 并配置了兜底序列时，记录主渠道首个错误并启动兜底。FallbackStarted 启动后即置位，
+		// 兜底渠道自身失败不会再递归触发其自身兜底序列（防无限套娃）。
+		isCodeProviderChannel := channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand
+		if !retryParam.FallbackStarted && !isCodeProviderChannel {
+			fallbackIDs := channel.GetFallbackSequenceIDs()
+			if len(fallbackIDs) > 0 {
+				if retryParam.FirstError == nil {
+					retryParam.FirstError = newAPIError
+				}
+				retryParam.StartFallback(fallbackIDs)
+			}
+		}
+		if retryParam.InFallback {
+			// 兜底渠道失败：不进 shouldRetry 判断，直接 continue 让 getChannel 取出下一个兜底渠道。
+			// 主渠道的首个错误（FirstError）在此过程中保持不变。
+			continue
 		}
 
 		if retryParam.OpencodePool && opencodeAttempts >= 4 {
@@ -340,15 +416,24 @@ func addUsedChannel(c *gin.Context, channelId int) {
 	c.Set("use_channel", useChannel)
 }
 
-func releaseOpencodeRPMOnFailure(c *gin.Context, channelID int) {
+func releaseOpencodeConcurrency(c *gin.Context, channelID int) {
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	if channelType == 0 {
 		channelType = constant.ChannelTypeOpencode
 	}
-	if err := model.ReleaseCodeProviderRPM(channelType, channelID, common.GetTimestamp()); err != nil {
-		logger.LogError(c, fmt.Sprintf("failed to release code provider RPM reservation for channel %d: %s", channelID, err.Error()))
+	if err := model.ReleaseCodeProviderConcurrency(channelType, channelID); err != nil {
+		logger.LogError(c, fmt.Sprintf("failed to release code provider concurrency for channel %d: %s", channelID, err.Error()))
 	}
 	service.NotifyOpencodeQueue()
+}
+
+func releaseChannelConcurrency(c *gin.Context, channel *model.Channel) {
+	if channel == nil {
+		return
+	}
+	if err := model.ReleaseChannelConcurrency(channel); err != nil {
+		logger.LogError(c, fmt.Sprintf("failed to release channel concurrency for channel %d: %s", channel.Id, err.Error()))
+	}
 }
 
 func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
@@ -381,14 +466,59 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+	// ── 兜底序列（Fallback Sequence）路由 ──
+	// 处于兜底模式时，严格按主渠道配置的兜底序列从左到右逐个尝试，绕过 info.ChannelMeta 的池选择。
+	// 若兜底渠道加载失败、已禁用或 Setup 失败，视为该兜底无效并继续尝试下一个；全部耗尽返回哨兵错误。
+	if retryParam != nil && retryParam.InFallback {
+		for retryParam.HasNextFallback() {
+			id, _ := retryParam.NextFallbackID()
+			fallbackChannel, loadErr := model.CacheGetChannel(id)
+			if loadErr != nil || fallbackChannel == nil {
+				// 该兜底渠道不可用，继续尝试下一个
+				if loadErr != nil {
+					logger.LogWarn(c, fmt.Sprintf("fallback channel #%d unavailable: %s", id, loadErr.Error()))
+				} else {
+					logger.LogWarn(c, fmt.Sprintf("fallback channel #%d is nil", id))
+				}
+				continue
+			}
+			if fallbackChannel.Status != common.ChannelStatusEnabled {
+				logger.LogWarn(c, fmt.Sprintf("fallback channel #%d skipped: not enabled (status=%d)", id, fallbackChannel.Status))
+				continue
+			}
+			info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+			setupErr := middleware.SetupContextForSelectedChannel(c, fallbackChannel, info.OriginModelName)
+			if setupErr != nil {
+				// Setup 失败（如无可用 key），视为该兜底无效，继续尝试下一个
+				logger.LogWarn(c, fmt.Sprintf("fallback channel #%d setup failed: %v", id, setupErr))
+				continue
+			}
+			return fallbackChannel, nil
+		}
+		// 兜底序列已全部失败，返回哨兵错误；主循环据此返回主渠道的首个错误。
+		return nil, types.NewError(service.ErrFallbackExhausted, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+
 	if retryParam.OpencodePool {
+		if affinityChannel, _, fast, err := service.TryReserveOpencodeAffinityChannel(retryParam); err != nil {
+			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		} else if fast {
+			info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+			newAPIError := middleware.SetupContextForSelectedChannel(c, affinityChannel, info.OriginModelName)
+			if newAPIError != nil {
+				retryParam.OpencodeConcurrencyReserved = false
+				releaseOpencodeConcurrency(c, affinityChannel.Id)
+				return nil, newAPIError
+			}
+			return affinityChannel, nil
+		}
 		channel, _, err := service.WaitForOpencodeChannel(retryParam, info.GetEstimatePromptTokens())
 		if err != nil {
 			if errors.Is(err, service.ErrOpencodeQueueUnavailable) {
 				fallbackParam := *retryParam
 				fallbackParam.OpencodePool = false
 				fallbackParam.OpencodeIncludeRPMFull = false
-				fallbackParam.OpencodeRPMReserved = false
+				fallbackParam.OpencodeConcurrencyReserved = false
 				fallbackParam.ExcludeCodeProviderChannels = true
 				channel, _, fallbackErr := service.CacheGetRandomSatisfiedChannel(&fallbackParam)
 				if fallbackErr == nil && channel != nil {
@@ -410,8 +540,8 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 		newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
 		if newAPIError != nil {
-			retryParam.OpencodeRPMReserved = false
-			releaseOpencodeRPMOnFailure(c, channel.Id)
+			retryParam.OpencodeConcurrencyReserved = false
+			releaseOpencodeConcurrency(c, channel.Id)
 			return nil, newAPIError
 		}
 		return channel, nil

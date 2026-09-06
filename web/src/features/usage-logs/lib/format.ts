@@ -400,8 +400,9 @@ export function formatDuration(
 const AUDIT_TEMPLATES: Record<string, string> = {
   login: 'Logged in successfully via {{method}}',
   'speed_protection.entered':
-    'Speed protection activated for group {{group}}',
-  'speed_protection.kicked': 'Speed protection removed from group {{group}}',
+    'Channel {{channel_name}} entered speed protection for group {{group}}',
+  'speed_protection.kicked':
+    'Channel {{channel_name}} kicked out of speed protection for group {{group}}',
   // User management
   'user.create': 'Created user {{username}} (role {{role}})',
   'user.update': 'Updated user {{username}} (ID: {{id}})',
@@ -490,11 +491,12 @@ const AUDIT_TEMPLATES: Record<string, string> = {
  */
 export function renderAuditContent(
   other: LogOtherData | null | undefined,
-  t: (key: string, opts?: Record<string, unknown>) => string
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  extraParams?: Record<string, unknown>
 ): string | null {
   const op = other?.op
   if (!op?.action) return null
   const template = AUDIT_TEMPLATES[op.action]
   if (!template) return null
-  return t(template, (op.params ?? {}) as Record<string, unknown>)
+  return t(template, { ...(op.params ?? {}), ...extraParams })
 }

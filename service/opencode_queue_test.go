@@ -27,10 +27,14 @@ func TestOpencodeQueueSeparatesGroupAndModel(t *testing.T) {
 	sameKey := &opencodeQueueEntry{queueKey: opencodeQueueKey{group: "default", model: "deepseek-v4-flash"}}
 	otherGroup := &opencodeQueueEntry{queueKey: opencodeQueueKey{group: "vip", model: "deepseek-v4-flash"}}
 	otherModel := &opencodeQueueEntry{queueKey: opencodeQueueKey{group: "default", model: "deepseek-v4-pro"}}
+	otherChannel := &opencodeQueueEntry{queueKey: opencodeQueueKey{group: "default", model: "deepseek-v4-flash", channelID: 2}}
 
-	opencodeQueue = []*opencodeQueueEntry{first, sameKey, otherGroup, otherModel}
+	first.queueKey.channelID = 1
+	sameKey.queueKey.channelID = 1
+	opencodeQueue = []*opencodeQueueEntry{first, sameKey, otherGroup, otherModel, otherChannel}
 	require.True(t, isOpencodeQueueTurnLocked(first))
 	require.False(t, isOpencodeQueueTurnLocked(sameKey))
 	require.True(t, isOpencodeQueueTurnLocked(otherGroup))
 	require.True(t, isOpencodeQueueTurnLocked(otherModel))
+	require.True(t, isOpencodeQueueTurnLocked(otherChannel))
 }

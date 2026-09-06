@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -52,6 +53,10 @@ type Channel struct {
 	Remark            *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
 	// add after v0.8.5
 	ChannelInfo ChannelInfo `json:"channel_info" gorm:"type:json"`
+
+	// FallbackSequence holds the comma-separated channel IDs (e.g. "3,5,7") this
+	// channel falls back to when its own channel is unavailable. Empty means none.
+	FallbackSequence string `json:"fallback_sequence" gorm:"type:text"`
 
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
@@ -306,6 +311,29 @@ func (channel *Channel) GetGroups() []string {
 	return groups
 }
 
+// GetFallbackSequenceIDs parses the comma-separated fallback_sequence into a
+// deduplicated slice of positive channel IDs. Empty or invalid entries are
+// skipped.
+func (channel *Channel) GetFallbackSequenceIDs() []int {
+	if strings.TrimSpace(channel.FallbackSequence) == "" {
+		return []int{}
+	}
+	seen := make(map[int]struct{})
+	ids := make([]int, 0)
+	for _, part := range strings.Split(channel.FallbackSequence, ",") {
+		id, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 func (channel *Channel) GetOtherInfo() map[string]interface{} {
 	otherInfo := make(map[string]interface{})
 	if channel.OtherInfo != "" {
@@ -412,6 +440,15 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	whereClause := "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
 	args := []any{common.String2Int(keyword), "%" + keyword + "%", keyword, "%" + keyword + "%", "%" + model + "%"}
 	baseQuery = ApplyChannelGroupFilter(baseQuery.Where(whereClause, args...), group)
+	// 排除兜底渠道（被任意渠道 fallback_sequence 引用的渠道），与渠道列表接口语义一致，
+	// 避免兜底渠道在搜索结果中当作普通渠道展示。
+	if fbSet := GetFallbackChannelIDSet(); len(fbSet) > 0 {
+		fbIDs := make([]int, 0, len(fbSet))
+		for id := range fbSet {
+			fbIDs = append(fbIDs, id)
+		}
+		baseQuery = baseQuery.Where("id NOT IN ?", fbIDs)
+	}
 
 	// 执行查询
 	err := order.Apply(baseQuery).Find(&channels).Error
@@ -490,6 +527,41 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 		return 0, err
 	}
 	return deletedCount, nil
+}
+
+// CleanupFallbackSequenceReferences removes a deleted channel ID from every
+// channel's fallback_sequence, clearing the field when nothing remains.
+// It works regardless of whether the memory cache is enabled.
+func CleanupFallbackSequenceReferences(channelId int) error {
+	var channels []*Channel
+	if err := DB.Model(&Channel{}).Where("fallback_sequence != ?", "").Find(&channels).Error; err != nil {
+		return err
+	}
+	for _, channel := range channels {
+		ids := channel.GetFallbackSequenceIDs()
+		filtered := make([]int, 0, len(ids))
+		for _, id := range ids {
+			if id != channelId {
+				filtered = append(filtered, id)
+			}
+		}
+		if len(filtered) == len(ids) {
+			continue
+		}
+		newSeq := ""
+		if len(filtered) > 0 {
+			parts := make([]string, 0, len(filtered))
+			for _, id := range filtered {
+				parts = append(parts, strconv.Itoa(id))
+			}
+			newSeq = strings.Join(parts, ",")
+		}
+		channel.FallbackSequence = newSeq
+		if err := DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("fallback_sequence", newSeq).Error; err != nil {
+			common.SysError(fmt.Sprintf("failed to clean up fallback sequence: channel_id=%d, error=%v", channel.Id, err))
+		}
+	}
+	return nil
 }
 
 func (channel *Channel) GetPriority() int64 {
@@ -902,12 +974,38 @@ func updateChannelUsedQuota(id int, quota int) {
 }
 
 func DeleteChannelByStatus(status int64) (int64, error) {
+	var ids []int
+	if err := DB.Model(&Channel{}).Where("status = ?", status).Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
 	result := DB.Where("status = ?", status).Delete(&Channel{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	for _, id := range ids {
+		if err := CleanupFallbackSequenceReferences(id); err != nil {
+			common.SysError(fmt.Sprintf("failed to clean up fallback sequence references: channel_id=%d, error=%v", id, err))
+		}
+	}
 	return result.RowsAffected, result.Error
 }
 
 func DeleteDisabledChannel() (int64, error) {
+	var ids []int
+	if err := DB.Model(&Channel{}).
+		Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).
+		Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
 	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	for _, id := range ids {
+		if err := CleanupFallbackSequenceReferences(id); err != nil {
+			common.SysError(fmt.Sprintf("failed to clean up fallback sequence references: channel_id=%d, error=%v", id, err))
+		}
+	}
 	return result.RowsAffected, result.Error
 }
 
@@ -1003,6 +1101,12 @@ func (channel *Channel) ValidateSettings() error {
 		}
 	}
 	if err := ValidateSpeedProtectionSettings(channel, *channelOtherSettings); err != nil {
+		return err
+	}
+	if err := ValidateChannelRPMLimit(channelOtherSettings.ChannelRPMLimit); err != nil {
+		return err
+	}
+	if err := ValidateChannelConcurrencyLimit(channelOtherSettings.ChannelConcurrencyLimit); err != nil {
 		return err
 	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom && channelOtherSettings.UpstreamModelUpdateCheckEnabled {

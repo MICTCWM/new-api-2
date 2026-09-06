@@ -36,16 +36,17 @@ const (
 )
 
 type OpencodeChannelUsage struct {
-	ID             int   `json:"id"`
-	ChannelID      int   `json:"channel_id" gorm:"uniqueIndex"`
-	FiveHourUsed   int64 `json:"five_hour_used"`
-	FiveHourStart  int64 `json:"five_hour_start"`
-	WeekUsed       int64 `json:"week_used"`
-	WeekStart      int64 `json:"week_start"`
-	MonthUsed      int64 `json:"month_used"`
-	MonthStart     int64 `json:"month_start"`
-	RPMWindowStart int64 `json:"rpm_window_start"`
-	RPMCount       int   `json:"rpm_count"`
+	ID               int   `json:"id"`
+	ChannelID        int   `json:"channel_id" gorm:"uniqueIndex"`
+	FiveHourUsed     int64 `json:"five_hour_used"`
+	FiveHourStart    int64 `json:"five_hour_start"`
+	WeekUsed         int64 `json:"week_used"`
+	WeekStart        int64 `json:"week_start"`
+	MonthUsed        int64 `json:"month_used"`
+	MonthStart       int64 `json:"month_start"`
+	RPMWindowStart   int64 `json:"rpm_window_start"`
+	RPMCount         int   `json:"rpm_count"`
+	ConcurrencyCount int   `json:"concurrency_count"`
 
 	// Calibration state is kept with the local counters so each channel has an
 	// independent schedule and a failed upstream read cannot erase local usage.
@@ -79,18 +80,24 @@ type OpencodeUsageWindow struct {
 }
 
 type OpencodeUsageSnapshot struct {
-	ChannelID     int                         `json:"channel_id"`
-	FiveHour      OpencodeUsageWindow         `json:"five_hour"`
-	Week          OpencodeUsageWindow         `json:"week"`
-	Month         OpencodeUsageWindow         `json:"month"`
-	Pool          OpencodeUsageWindow         `json:"pool"`
-	PeakPool      OpencodeUsageWindow         `json:"peak_pool"`
-	OffPeakPool   OpencodeUsageWindow         `json:"off_peak_pool"`
-	PricingPeriod string                      `json:"pricing_period"`
-	RPMCount      int                         `json:"rpm_count"`
-	RPMLimit      int                         `json:"rpm_limit"`
-	RPMResetAt    int64                       `json:"rpm_reset_at"`
-	Calibration   OpencodeCalibrationSnapshot `json:"calibration"`
+	ChannelID                   int                         `json:"channel_id"`
+	FiveHour                    OpencodeUsageWindow         `json:"five_hour"`
+	Week                        OpencodeUsageWindow         `json:"week"`
+	Month                       OpencodeUsageWindow         `json:"month"`
+	Pool                        OpencodeUsageWindow         `json:"pool"`
+	PeakPool                    OpencodeUsageWindow         `json:"peak_pool"`
+	OffPeakPool                 OpencodeUsageWindow         `json:"off_peak_pool"`
+	PricingPeriod               string                      `json:"pricing_period"`
+	RPMCount                    int                         `json:"rpm_count"`
+	RPMLimit                    int                         `json:"rpm_limit"`
+	RPMResetAt                  int64                       `json:"rpm_reset_at"`
+	AffinityReservedRPM         int                         `json:"affinity_reserved_rpm"`
+	AvailableRPM                int                         `json:"available_rpm"`
+	ConcurrencyCount            int                         `json:"concurrency_count"`
+	ConcurrencyLimit            int                         `json:"concurrency_limit"`
+	AffinityReservedConcurrency int                         `json:"affinity_reserved_concurrency"`
+	AvailableConcurrency        int                         `json:"available_concurrency"`
+	Calibration                 OpencodeCalibrationSnapshot `json:"calibration"`
 }
 
 type OpencodeCalibrationSnapshot struct {
@@ -152,7 +159,7 @@ func GetOpencodeCapacitySnapshot(now int64) (*OpencodeCapacitySnapshot, error) {
 		return nil, err
 	}
 
-	limit := operation_setting.GetOpencodeRPMLimit()
+	limit := operation_setting.GetOpencodeConcurrencyLimit()
 	snapshot := &OpencodeCapacitySnapshot{TotalCapacity: len(channels) * limit}
 	for _, channel := range channels {
 		if channel == nil {
@@ -173,7 +180,7 @@ func GetOpencodeCapacitySnapshot(now int64) (*OpencodeCapacitySnapshot, error) {
 			return nil, err
 		}
 		resetOpencodeChannelWindows(usage, now)
-		available := limit - normalizeOpencodeRPM(usage.RPMCount)
+		available := limit - normalizeOpencodeConcurrency(usage.ConcurrencyCount)
 		if available > 0 {
 			snapshot.AvailableCapacity += available
 		}
@@ -195,7 +202,7 @@ func OpencodeChannelHasCapacity(channelID int, now int64) (bool, error) {
 		remainingOpencode(usage.WeekUsed, OpencodeWeekLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
 		remainingOpencode(usage.MonthUsed, OpencodeMonthLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
 		remainingOpencode(pool.Used, OpencodePoolLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
-		usage.RPMCount < operation_setting.GetOpencodeRPMLimit(), nil
+		usage.ConcurrencyCount < operation_setting.GetOpencodeConcurrencyLimit(), nil
 }
 
 func OpencodeChannelHasQuotaCapacity(channelID int, now int64) (bool, error) {
@@ -212,6 +219,61 @@ func OpencodeChannelHasQuotaCapacity(channelID int, now int64) (bool, error) {
 		remainingOpencode(usage.WeekUsed, OpencodeWeekLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
 		remainingOpencode(usage.MonthUsed, OpencodeMonthLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD &&
 		remainingOpencode(pool.Used, OpencodePoolLimitMicroUSD) > OpencodeMinimumRemainingMicroUSD, nil
+}
+
+func GetCodeProviderConcurrencyUsage(channelType, channelID int, now int64) (int, int, error) {
+	if channelID <= 0 {
+		return 0, 0, errors.New("invalid code provider channel id")
+	}
+	if now <= 0 {
+		now = common.GetTimestamp()
+	}
+	switch channelType {
+	case constant.ChannelTypeOpencode:
+		usage, err := getOrCreateOpencodeChannelUsage(channelID, now)
+		if err != nil {
+			return 0, 0, err
+		}
+		resetOpencodeChannelWindows(usage, now)
+		return normalizeOpencodeConcurrency(usage.ConcurrencyCount), operation_setting.GetOpencodeConcurrencyLimit(), nil
+	case constant.ChannelTypeCommand:
+		usage, err := getOrCreateCommandChannelUsage(channelID, now)
+		if err != nil {
+			return 0, 0, err
+		}
+		resetCommandChannelWindows(usage, now)
+		return normalizeCommandConcurrency(usage.ConcurrencyCount), operation_setting.GetOpencodeConcurrencyLimit(), nil
+	default:
+		return 0, 0, fmt.Errorf("unsupported code provider channel type: %d", channelType)
+	}
+}
+
+func GetCodeProviderRPMUsage(channelType, channelID int, now int64) (int, int, error) {
+	return GetCodeProviderConcurrencyUsage(channelType, channelID, now)
+}
+
+func CodeProviderChannelHasGeneralCapacity(channel *Channel, modelName string, now int64, reservedConcurrency int) (bool, error) {
+	if channel == nil {
+		return false, errors.New("code provider channel is missing")
+	}
+	quotaAvailable, err := CodeProviderChannelHasCapacity(channel, modelName, now, false)
+	if err != nil || !quotaAvailable {
+		return quotaAvailable, err
+	}
+	usedConcurrency, concurrencyLimit, err := GetCodeProviderConcurrencyUsage(channel.Type, channel.Id, now)
+	if err != nil {
+		return false, err
+	}
+	if concurrencyLimit <= 0 {
+		return true, nil
+	}
+	if reservedConcurrency < 0 {
+		reservedConcurrency = 0
+	}
+	if reservedConcurrency > concurrencyLimit {
+		reservedConcurrency = concurrencyLimit
+	}
+	return usedConcurrency < concurrencyLimit-reservedConcurrency, nil
 }
 
 func CalculateOpencodeCostMicroUSD(usage *dto.Usage, now time.Time) (int64, error) {
@@ -381,17 +443,19 @@ func GetOpencodeUsageSnapshot(channelID int, now int64) (*OpencodeUsageSnapshot,
 		}
 	}
 	return &OpencodeUsageSnapshot{
-		ChannelID:     channelID,
-		FiveHour:      makeOpencodeWindow(channelUsage.FiveHourUsed, OpencodeFiveHourLimitMicroUSD, channelUsage.FiveHourStart+5*60*60),
-		Week:          makeOpencodeWindow(channelUsage.WeekUsed, OpencodeWeekLimitMicroUSD, channelUsage.WeekStart+7*24*60*60),
-		Month:         makeOpencodeWindow(channelUsage.MonthUsed, OpencodeMonthLimitMicroUSD, channelUsage.MonthStart+30*24*60*60),
-		Pool:          makeOpencodeWindow(poolUsage.Used, OpencodePoolLimitMicroUSD, poolUsage.ResetTime),
-		PeakPool:      makeOpencodeWindow(peakPoolUsage.Used, OpencodePoolLimitMicroUSD, peakPoolUsage.ResetTime),
-		OffPeakPool:   makeOpencodeWindow(offPeakPoolUsage.Used, OpencodePoolLimitMicroUSD, offPeakPoolUsage.ResetTime),
-		PricingPeriod: OpencodePricingPeriodAt(time.Unix(now, 0).UTC()),
-		RPMCount:      normalizeOpencodeRPM(channelUsage.RPMCount),
-		RPMLimit:      operation_setting.GetOpencodeRPMLimit(),
-		RPMResetAt:    channelUsage.RPMWindowStart + 60,
+		ChannelID:        channelID,
+		FiveHour:         makeOpencodeWindow(channelUsage.FiveHourUsed, OpencodeFiveHourLimitMicroUSD, channelUsage.FiveHourStart+5*60*60),
+		Week:             makeOpencodeWindow(channelUsage.WeekUsed, OpencodeWeekLimitMicroUSD, channelUsage.WeekStart+7*24*60*60),
+		Month:            makeOpencodeWindow(channelUsage.MonthUsed, OpencodeMonthLimitMicroUSD, channelUsage.MonthStart+30*24*60*60),
+		Pool:             makeOpencodeWindow(poolUsage.Used, OpencodePoolLimitMicroUSD, poolUsage.ResetTime),
+		PeakPool:         makeOpencodeWindow(peakPoolUsage.Used, OpencodePoolLimitMicroUSD, peakPoolUsage.ResetTime),
+		OffPeakPool:      makeOpencodeWindow(offPeakPoolUsage.Used, OpencodePoolLimitMicroUSD, offPeakPoolUsage.ResetTime),
+		PricingPeriod:    OpencodePricingPeriodAt(time.Unix(now, 0).UTC()),
+		RPMCount:         normalizeOpencodeRPM(channelUsage.RPMCount),
+		RPMLimit:         operation_setting.GetOpencodeConcurrencyLimit(),
+		RPMResetAt:       channelUsage.RPMWindowStart + 60,
+		ConcurrencyCount: normalizeOpencodeConcurrency(channelUsage.ConcurrencyCount),
+		ConcurrencyLimit: operation_setting.GetOpencodeConcurrencyLimit(),
 		Calibration: OpencodeCalibrationSnapshot{
 			LastAttemptAt: channelUsage.LastCalibrationAttemptAt,
 			LastSuccessAt: channelUsage.LastCalibratedAt,
@@ -418,6 +482,7 @@ func ResetAllOpencodeUsage() error {
 			usage.MonthStart = now
 			usage.RPMCount = 0
 			usage.RPMWindowStart = now
+			usage.ConcurrencyCount = 0
 			if err := tx.Save(usage).Error; err != nil {
 				return err
 			}
@@ -587,6 +652,7 @@ func ReserveOpencodeRPM(channelID int, now int64) (bool, int64, error) {
 			return nil
 		}
 		usage.RPMCount++
+		usage.ConcurrencyCount++
 		allowed = true
 		return tx.Save(usage).Error
 	})
@@ -608,12 +674,56 @@ func ReleaseOpencodeRPM(channelID int, now int64) error {
 			return nil
 		}
 		usage.RPMCount--
+		if usage.ConcurrencyCount > 0 {
+			usage.ConcurrencyCount--
+		}
 		return tx.Save(usage).Error
 	})
 }
 
 func normalizeOpencodeRPM(count int) int {
 	return int(minMaxOpencode(int64(count), 0, int64(operation_setting.GetOpencodeRPMLimit())))
+}
+
+func normalizeOpencodeConcurrency(count int) int {
+	return int(minMaxOpencode(int64(count), 0, int64(operation_setting.GetOpencodeConcurrencyLimit())))
+}
+
+func ReserveOpencodeConcurrency(channelID int) (bool, error) {
+	if channelID <= 0 {
+		return false, errors.New("invalid channel id")
+	}
+	var allowed bool
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		usage, err := getOrCreateOpencodeChannelUsageTx(tx, channelID, common.GetTimestamp())
+		if err != nil {
+			return err
+		}
+		if usage.ConcurrencyCount >= operation_setting.GetOpencodeConcurrencyLimit() {
+			return nil
+		}
+		usage.ConcurrencyCount++
+		allowed = true
+		return tx.Save(usage).Error
+	})
+	return allowed, err
+}
+
+func ReleaseOpencodeConcurrency(channelID int) error {
+	if channelID <= 0 {
+		return errors.New("invalid channel id")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		usage, err := getOrCreateOpencodeChannelUsageTx(tx, channelID, common.GetTimestamp())
+		if err != nil {
+			return err
+		}
+		if usage.ConcurrencyCount <= 0 {
+			return nil
+		}
+		usage.ConcurrencyCount--
+		return tx.Save(usage).Error
+	})
 }
 
 func minMaxOpencode(value, minimum, maximum int64) int64 {
@@ -807,7 +917,7 @@ func getCodeProviderCapacitySnapshot(group, modelName string, now int64) (*Openc
 		return nil, err
 	}
 
-	limit := operation_setting.GetOpencodeRPMLimit()
+	limit := operation_setting.GetOpencodeConcurrencyLimit()
 	snapshot := &OpencodeCapacitySnapshot{}
 	for _, channel := range channels {
 		if channel == nil {
@@ -840,7 +950,7 @@ func getCodeProviderCapacitySnapshot(group, modelName string, now int64) (*Openc
 				return nil, usageErr
 			}
 			resetOpencodeChannelWindows(usage, now)
-			rpmCount = normalizeOpencodeRPM(usage.RPMCount)
+			rpmCount = normalizeOpencodeConcurrency(usage.ConcurrencyCount)
 		case constant.ChannelTypeCommand:
 			if group != "" && modelName != "" {
 				quotaAvailable, err = CommandChannelHasQuotaCapacityForModel(channel, modelName, now)
@@ -855,7 +965,7 @@ func getCodeProviderCapacitySnapshot(group, modelName string, now int64) (*Openc
 				return nil, usageErr
 			}
 			resetCommandChannelWindows(usage, now)
-			rpmCount = normalizeCommandRPM(usage.RPMCount)
+			rpmCount = normalizeCommandConcurrency(usage.ConcurrencyCount)
 		}
 		if !quotaAvailable {
 			if quotaErr := ReconcileCodeProviderQuotaChannel(channel.Id, now); quotaErr != nil {
@@ -869,6 +979,28 @@ func getCodeProviderCapacitySnapshot(group, modelName string, now int64) (*Openc
 		}
 	}
 	return snapshot, nil
+}
+
+func ReserveCodeProviderConcurrency(channelType, channelID int) (bool, error) {
+	switch channelType {
+	case constant.ChannelTypeOpencode:
+		return ReserveOpencodeConcurrency(channelID)
+	case constant.ChannelTypeCommand:
+		return ReserveCommandConcurrency(channelID)
+	default:
+		return false, fmt.Errorf("unsupported code provider channel type: %d", channelType)
+	}
+}
+
+func ReleaseCodeProviderConcurrency(channelType, channelID int) error {
+	switch channelType {
+	case constant.ChannelTypeOpencode:
+		return ReleaseOpencodeConcurrency(channelID)
+	case constant.ChannelTypeCommand:
+		return ReleaseCommandConcurrency(channelID)
+	default:
+		return fmt.Errorf("unsupported code provider channel type: %d", channelType)
+	}
 }
 
 func ReserveCodeProviderRPM(channelType, channelID int, now int64) (bool, int64, error) {

@@ -26,6 +26,8 @@ const (
 	ginKeyChannelAffinityLogInfo    = "channel_affinity_log_info"
 	ginKeyChannelAffinitySkipRetry  = "channel_affinity_skip_retry_on_failure"
 	ginKeyChannelAffinitySelectedID = "channel_affinity_selected_channel_id"
+	ginKeyChannelAffinityCacheHit   = "channel_affinity_cache_hit"
+	ginKeyChannelAffinityPendingID  = "channel_affinity_pending_channel_id"
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
@@ -39,7 +41,15 @@ var (
 	channelAffinityUsageCacheStatsCache *cachex.HybridCache[ChannelAffinityUsageCacheCounters]
 
 	channelAffinityRegexCache sync.Map // map[string]*regexp.Regexp
+
+	channelAffinityProtectionMu sync.Mutex
+	channelAffinityProtections  = make(map[string]channelAffinityProtectionLease)
 )
+
+type channelAffinityProtectionLease struct {
+	ChannelID int
+	ExpiresAt int64
+}
 
 type channelAffinityMeta struct {
 	CacheKey       string
@@ -617,6 +627,8 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 			return 0, false
 		}
 		if found {
+			rememberChannelAffinityProtection(cacheKeyFull, channelID, ttlSeconds)
+			c.Set(ginKeyChannelAffinityCacheHit, true)
 			return channelID, true
 		}
 		return 0, false
@@ -647,11 +659,14 @@ func ClearCurrentChannelAffinityCache(c *gin.Context) bool {
 		return false
 	}
 	c.Set(ginKeyChannelAffinitySkipRetry, false)
+	c.Set(ginKeyChannelAffinityCacheHit, false)
+	c.Set(ginKeyChannelAffinityPendingID, 0)
 	ClearCurrentChannelAffinitySelection(c)
 	cacheKey, _, ok := getChannelAffinityContext(c)
 	if !ok || cacheKey == "" {
 		return false
 	}
+	forgetChannelAffinityProtection(cacheKey)
 
 	cache := getChannelAffinityCache()
 	deleted, err := cache.DeleteMany([]string{cacheKey})
@@ -685,7 +700,64 @@ func ClearCurrentChannelAffinitySelection(c *gin.Context) {
 		return
 	}
 	c.Set(ginKeyChannelAffinitySelectedID, 0)
+	c.Set(ginKeyChannelAffinityPendingID, 0)
 	c.Set(ginKeyChannelAffinitySkipRetry, false)
+}
+
+// MarkChannelAffinityPending keeps a temporarily rate-limited affinity target
+// attached to the request so the OpenCode queue can wait for this exact channel.
+func MarkChannelAffinityPending(c *gin.Context, selectedGroup string, channelID int) {
+	if c == nil || channelID <= 0 {
+		return
+	}
+	meta, ok := getChannelAffinityMeta(c)
+	if !ok {
+		return
+	}
+	c.Set(ginKeyChannelAffinitySelectedID, channelID)
+	c.Set(ginKeyChannelAffinityPendingID, channelID)
+	c.Set(ginKeyChannelAffinitySkipRetry, meta.SkipRetry)
+	MarkChannelAffinityUsed(c, selectedGroup, channelID)
+}
+
+func GetPendingChannelAffinitySelection(c *gin.Context) int {
+	if c == nil {
+		return 0
+	}
+	return c.GetInt(ginKeyChannelAffinityPendingID)
+}
+
+func touchChannelAffinityProtection(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	cacheKey, ttlSeconds, ok := getChannelAffinityContext(c)
+	if ok {
+		rememberChannelAffinityProtection(cacheKey, GetCurrentChannelAffinitySelection(c), ttlSeconds)
+	}
+}
+
+func GetChannelAffinityReservedConcurrency(channelID int, now int64) int {
+	if channelID <= 0 || now <= 0 {
+		return 0
+	}
+	channelAffinityProtectionMu.Lock()
+	defer channelAffinityProtectionMu.Unlock()
+	reserved := 0
+	for cacheKey, lease := range channelAffinityProtections {
+		if lease.ExpiresAt <= now {
+			delete(channelAffinityProtections, cacheKey)
+			continue
+		}
+		if lease.ChannelID == channelID {
+			reserved++
+		}
+	}
+	return reserved
+}
+
+func GetChannelAffinityReservedRPM(channelID int, now int64) int {
+	return GetChannelAffinityReservedConcurrency(channelID, now)
 }
 
 func ShouldKeepChannelAffinityOnChannelDisabled() bool {
@@ -742,6 +814,11 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	if setting == nil || !setting.Enabled {
 		return
 	}
+	if cacheHit, ok := c.Get(ginKeyChannelAffinityCacheHit); ok && cacheHit == true && GetCurrentChannelAffinitySelection(c) != channelID {
+		// A cache hit may temporarily fall back while its channel is rate
+		// limited. Keep the existing mapping instead of pinning the fallback.
+		return
+	}
 	if setting.SwitchOnSuccess && c != nil {
 		if successChannelID := c.GetInt("channel_id"); successChannelID > 0 {
 			channelID = successChannelID
@@ -760,7 +837,31 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	cache := getChannelAffinityCache()
 	if err := cache.SetWithTTL(cacheKey, channelID, time.Duration(ttlSeconds)*time.Second); err != nil {
 		common.SysError(fmt.Sprintf("channel affinity cache set failed: key=%s, err=%v", cacheKey, err))
+		return
 	}
+	rememberChannelAffinityProtection(cacheKey, channelID, ttlSeconds)
+	c.Set(ginKeyChannelAffinityPendingID, 0)
+}
+
+func rememberChannelAffinityProtection(cacheKey string, channelID, ttlSeconds int) {
+	if cacheKey == "" || channelID <= 0 || ttlSeconds <= 0 {
+		return
+	}
+	channelAffinityProtectionMu.Lock()
+	channelAffinityProtections[cacheKey] = channelAffinityProtectionLease{
+		ChannelID: channelID,
+		ExpiresAt: time.Now().Unix() + operation_setting.ChannelAffinityProtectionLeaseSeconds,
+	}
+	channelAffinityProtectionMu.Unlock()
+}
+
+func forgetChannelAffinityProtection(cacheKey string) {
+	if cacheKey == "" {
+		return
+	}
+	channelAffinityProtectionMu.Lock()
+	delete(channelAffinityProtections, cacheKey)
+	channelAffinityProtectionMu.Unlock()
 }
 
 type ChannelAffinityUsageCacheStats struct {

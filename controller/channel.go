@@ -95,6 +95,27 @@ func buildChannelListQuery(group string, statusFilter int, typeFilter int) *gorm
 	return query
 }
 
+// excludeFallbackChannelIDs narrows a query to ordinary (non-fallback) channels,
+// i.e. it excludes channel IDs referenced by any channel's fallback_sequence.
+func excludeFallbackChannelIDs(query *gorm.DB, fallbackSet map[int]struct{}) *gorm.DB {
+	if query == nil || len(fallbackSet) == 0 {
+		return query
+	}
+	ids := make([]int, 0, len(fallbackSet))
+	for id := range fallbackSet {
+		ids = append(ids, id)
+	}
+	return query.Where("id NOT IN ?", ids)
+}
+
+func fallbackChannelIDSlice(fallbackSet map[int]struct{}) []int {
+	ids := make([]int, 0, len(fallbackSet))
+	for id := range fallbackSet {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 func GetChannelOps(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{
 		"retry_times": common.RetryTimes,
@@ -121,6 +142,7 @@ func GetOpencodeChannelUsage(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	attachChannelAffinityConcurrencyUsage(usage.ChannelID, usage.ConcurrencyCount, usage.ConcurrencyLimit, usage)
 	common.ApiSuccess(c, usage)
 }
 
@@ -144,7 +166,52 @@ func GetCommandChannelUsage(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	attachChannelAffinityConcurrencyUsage(usage.ChannelID, usage.ConcurrencyCount, usage.ConcurrencyLimit, usage)
 	common.ApiSuccess(c, usage)
+}
+
+func GetChannelConcurrencyUsage(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	usage, err := model.GetChannelConcurrencyUsageSnapshot(id, common.GetTimestamp())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	attachChannelAffinityConcurrencyUsage(usage.ChannelID, usage.ConcurrencyCount, usage.ConcurrencyLimit, usage)
+	common.ApiSuccess(c, usage)
+}
+
+func GetChannelRPMUsage(c *gin.Context) {
+	GetChannelConcurrencyUsage(c)
+}
+
+func attachChannelAffinityConcurrencyUsage(channelID, usedConcurrency, concurrencyLimit int, usage interface{}) {
+	reservedConcurrency := service.GetChannelAffinityReservedConcurrency(channelID, common.GetTimestamp())
+	availableConcurrency := concurrencyLimit - usedConcurrency - reservedConcurrency
+	if availableConcurrency < 0 {
+		availableConcurrency = 0
+	}
+	switch snapshot := usage.(type) {
+	case *model.OpencodeUsageSnapshot:
+		snapshot.AffinityReservedRPM = reservedConcurrency
+		snapshot.AvailableRPM = availableConcurrency
+		snapshot.AffinityReservedConcurrency = reservedConcurrency
+		snapshot.AvailableConcurrency = availableConcurrency
+	case *model.CommandUsageSnapshot:
+		snapshot.AffinityReservedRPM = reservedConcurrency
+		snapshot.AvailableRPM = availableConcurrency
+		snapshot.AffinityReservedConcurrency = reservedConcurrency
+		snapshot.AvailableConcurrency = availableConcurrency
+	case *model.ChannelRPMUsageSnapshot:
+		snapshot.AffinityReservedRPM = reservedConcurrency
+		snapshot.AvailableRPM = availableConcurrency
+		snapshot.AffinityReservedConcurrency = reservedConcurrency
+		snapshot.AvailableConcurrency = availableConcurrency
+	}
 }
 
 type codeProviderUsageOverrideRequest struct {
@@ -350,6 +417,9 @@ func GetAllChannels(c *gin.Context) {
 	}
 
 	var total int64
+	// 兜底渠道不排除：被任意渠道 fallback_sequence 引用的渠道既保留在主列表正常展示，
+	// 也随下方 fallback_channels / fallback_channel_ids 一并返回兜底专区，方便删除与维护。
+	globalFallbackSet := model.GetFallbackChannelIDSet()
 
 	if enableTagMode {
 		tags, err := model.GetPaginatedChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
@@ -419,12 +489,31 @@ func GetAllChannels(c *gin.Context) {
 	for _, r := range results {
 		typeCounts[r.Type] = r.Count
 	}
+
+	// Load the full fallback channel list (unpaginated, key omitted) so the
+	// frontend can render the fallback channels alongside the ordinary ones.
+	var fallbackChannels []*model.Channel
+	if len(globalFallbackSet) > 0 {
+		fallbackIDs := fallbackChannelIDSlice(globalFallbackSet)
+		if err := model.DB.Where("id IN ?", fallbackIDs).Omit("key").Find(&fallbackChannels).Error; err != nil {
+			common.SysError("failed to load fallback channels: " + err.Error())
+		}
+	}
+	for _, datum := range fallbackChannels {
+		clearChannelInfo(datum)
+	}
+	if err := model.EnrichSpeedProtectionStatuses(fallbackChannels); err != nil {
+		common.SysError("failed to load speed protection status: " + err.Error())
+	}
+
 	common.ApiSuccess(c, gin.H{
-		"items":       channelData,
-		"total":       total,
-		"page":        pageInfo.GetPage(),
-		"page_size":   pageInfo.GetPageSize(),
-		"type_counts": typeCounts,
+		"items":                channelData,
+		"total":                total,
+		"page":                 pageInfo.GetPage(),
+		"page_size":            pageInfo.GetPageSize(),
+		"type_counts":          typeCounts,
+		"fallback_channel_ids": fallbackChannelIDSlice(globalFallbackSet),
+		"fallback_channels":    fallbackChannels,
 	})
 	return
 }
@@ -518,6 +607,7 @@ func SearchChannels(c *gin.Context) {
 	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	channelData := make([]*model.Channel, 0)
+	globalFallbackSet := model.GetFallbackChannelIDSet()
 	if enableTagMode {
 		tags, err := model.SearchTags(keyword, group, modelKeyword, idSort)
 		if err != nil {
@@ -530,7 +620,7 @@ func SearchChannels(c *gin.Context) {
 		for _, tag := range tags {
 			if tag != nil && *tag != "" {
 				var tagChannels []*model.Channel
-				err := sortOptions.Apply(buildChannelListQuery(group, -1, -1).Where("tag = ?", *tag)).
+				err := sortOptions.Apply(excludeFallbackChannelIDs(buildChannelListQuery(group, -1, -1), globalFallbackSet).Where("tag = ?", *tag)).
 					Omit("key").
 					Find(&tagChannels).Error
 				if err != nil {
@@ -625,9 +715,10 @@ func SearchChannels(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"items":       pagedData,
-			"total":       total,
-			"type_counts": typeCounts,
+			"items":                pagedData,
+			"total":                total,
+			"type_counts":          typeCounts,
+			"fallback_channel_ids": fallbackChannelIDSlice(model.GetFallbackChannelIDSet()),
 		},
 	})
 	return
@@ -840,6 +931,20 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		}
 	}
 
+	// fallback_sequence must be empty or a comma-separated list of positive integers.
+	if sequence := strings.TrimSpace(channel.FallbackSequence); sequence != "" {
+		for _, part := range strings.Split(sequence, ",") {
+			id, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || id <= 0 {
+				return fmt.Errorf("fallback_sequence 必须是空串或逗号分隔的正整数")
+			}
+			// 不允许渠道把自身设为兜底：自身引用会造成循环依赖，提交前拦截。
+			if id == channel.Id {
+				return fmt.Errorf("fallback_sequence 不允许包含渠道自身 id")
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1042,6 +1147,10 @@ func DeleteChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// Remove the deleted channel ID from other channels' fallback_sequence.
+	if err := model.CleanupFallbackSequenceReferences(id); err != nil {
+		common.SysError("failed to clean up fallback sequence references: " + err.Error())
+	}
 	model.InitChannelCache()
 	if channelLookupFailed {
 		service.ResetProxyClientCache()
@@ -1223,6 +1332,12 @@ func DeleteChannelBatch(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// Remove the deleted channel IDs from other channels' fallback_sequence.
+	for _, id := range channelBatch.Ids {
+		if err := model.CleanupFallbackSequenceReferences(id); err != nil {
+			common.SysError(fmt.Sprintf("failed to clean up fallback sequence references: channel_id=%d, error=%v", id, err))
+		}
 	}
 	model.InitChannelCache()
 	if deletedCount > 0 {

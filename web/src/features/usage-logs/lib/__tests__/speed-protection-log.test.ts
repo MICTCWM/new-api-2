@@ -8,14 +8,14 @@ describe('speed protection usage log rendering', () => {
       {
         op: {
           action: 'speed_protection.entered',
-          params: { group: 'default' },
+          params: { group: 'default', channel_name: 'Alpha' },
         },
       },
       (key, options) => `${key}::${String(options?.group)}`
     )
 
     expect(rendered).toBe(
-      'Speed protection activated for group {{group}}::default'
+      'Channel {{channel_name}} entered speed protection for group {{group}}::default'
     )
   })
 
@@ -24,14 +24,14 @@ describe('speed protection usage log rendering', () => {
       {
         op: {
           action: 'speed_protection.kicked',
-          params: { group: 'premium' },
+          params: { group: 'premium', channel_name: 'Beta' },
         },
       },
       (key, options) => `${key}::${String(options?.group)}`
     )
 
     expect(rendered).toBe(
-      'Speed protection removed from group {{group}}::premium'
+      'Channel {{channel_name}} kicked out of speed protection for group {{group}}::premium'
     )
   })
 })

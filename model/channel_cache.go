@@ -21,9 +21,98 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 // channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
+
+// fallbackChannelIDSet caches the set of channel IDs referenced by any channel's
+// fallback_sequence (i.e. the fallback channel marking set), refreshed on full sync.
+var fallbackChannelIDSet map[int]struct{}
 var channelSyncLock sync.RWMutex
 
+// fallbackSetTTL bounds how often the fallback marking set is recomputed from the
+// database when the memory cache is disabled, so each relay request does not trigger
+// a full-table scan. fallbackSetDB holds the last successfully loaded set; on a
+// database failure the previous value is retained instead of falling back to empty.
+var (
+	fallbackSetTTL        = 20 * time.Second
+	fallbackSetLastLoaded time.Time
+	fallbackSetDB         map[int]struct{}
+)
+
+// buildFallbackChannelIDSet derives the fallback marking set from the given
+// channels. Channel IDs referenced by any channel's fallback_sequence are kept,
+// even if they no longer exist.
+func buildFallbackChannelIDSet(channels []*Channel) map[int]struct{} {
+	set := make(map[int]struct{})
+	for _, channel := range channels {
+		for _, id := range channel.GetFallbackSequenceIDs() {
+			set[id] = struct{}{}
+		}
+	}
+	return set
+}
+
+// refreshFallbackChannelIDSet recomputes the fallback marking set directly from
+// the database. It returns the freshly built set or an error when the query fails.
+// Used when the memory cache is disabled, where the result is cached with a TTL.
+func refreshFallbackChannelIDSet() (map[int]struct{}, error) {
+	var channels []*Channel
+	if err := DB.Model(&Channel{}).Where("fallback_sequence != ?", "").Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	return buildFallbackChannelIDSet(channels), nil
+}
+
+// loadFallbackChannelIDSet returns the fallback marking set for DB mode, applying
+// a TTL cache so per-request selection does not rescan the whole table every time.
+// On a failed reload the most recently loaded set is reused rather than empty.
+func loadFallbackChannelIDSet() map[int]struct{} {
+	channelSyncLock.RLock()
+	if fallbackSetDB != nil && time.Since(fallbackSetLastLoaded) < fallbackSetTTL {
+		set := fallbackSetDB
+		channelSyncLock.RUnlock()
+		return set
+	}
+	channelSyncLock.RUnlock()
+
+	set, err := refreshFallbackChannelIDSet()
+
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+	if err != nil {
+		// DB reload failed: retain the last good value; only default to empty the
+		// very first time. Refresh the loaded timestamp to avoid thrashing on every
+		// request while the database is unavailable.
+		if fallbackSetDB == nil {
+			fallbackSetDB = map[int]struct{}{}
+		}
+		fallbackSetLastLoaded = time.Now()
+		return fallbackSetDB
+	}
+	fallbackSetDB = set
+	fallbackSetLastLoaded = time.Now()
+	return fallbackSetDB
+}
+
+// GetFallbackChannelIDSet returns the set of channel IDs referenced by any
+// channel's fallback_sequence. With the memory cache enabled it returns the
+// cached set; otherwise it scans the database live but cached with a short TTL.
+func GetFallbackChannelIDSet() map[int]struct{} {
+	if !common.MemoryCacheEnabled {
+		return loadFallbackChannelIDSet()
+	}
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+	return fallbackChannelIDSet
+}
+
+// IsFallbackChannel reports whether channelID is referenced by any channel's
+// fallback_sequence (i.e. it is a fallback channel).
+func IsFallbackChannel(channelID int) bool {
+	_, ok := GetFallbackChannelIDSet()[channelID]
+	return ok
+}
+
 func InitChannelCache() {
+	initCol()
 	if !common.MemoryCacheEnabled {
 		InvalidatePricingCache()
 		return
@@ -94,6 +183,7 @@ func InitChannelCache() {
 	}
 	channelsIDM = newChannelId2channel
 	channel2advancedCustomConfig = newChannel2advancedCustomConfig
+	fallbackChannelIDSet = buildFallbackChannelIDSet(channels)
 	channelSyncLock.Unlock()
 	// Lock ordering: InvalidatePricingCache acquires updatePricingLock, and
 	// GetPricing (holding updatePricingLock) nests channelSyncLock.RLock via
@@ -112,23 +202,31 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
-	return getRandomSatisfiedChannel(group, model, retry, requestPath, false)
+	return getRandomSatisfiedChannel(group, model, retry, requestPath, nil, false)
+}
+
+func GetRandomSatisfiedChannelWithAttempted(group string, model string, retry int, requestPath string, attempted map[int]struct{}) (*Channel, error) {
+	return getRandomSatisfiedChannel(group, model, retry, requestPath, attempted, false)
 }
 
 // GetRandomSatisfiedOrdinaryChannel selects a channel while excluding the
 // provider-specific OpenCode and Command channel types. This is used only
 // after a fixed code-provider model has no eligible provider channel left.
 func GetRandomSatisfiedOrdinaryChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
-	return getRandomSatisfiedChannel(group, model, retry, requestPath, true)
+	return getRandomSatisfiedChannel(group, model, retry, requestPath, nil, true)
 }
 
-func getRandomSatisfiedChannel(group string, model string, retry int, requestPath string, excludeCodeProviders bool) (*Channel, error) {
+func GetRandomSatisfiedOrdinaryChannelWithAttempted(group string, model string, retry int, requestPath string, attempted map[int]struct{}) (*Channel, error) {
+	return getRandomSatisfiedChannel(group, model, retry, requestPath, attempted, true)
+}
+
+func getRandomSatisfiedChannel(group string, model string, retry int, requestPath string, attempted map[int]struct{}, excludeCodeProviders bool) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
 		if excludeCodeProviders {
-			return GetOrdinaryChannel(group, model, retry, requestPath)
+			return GetOrdinaryChannelWithAttempted(group, model, retry, requestPath, attempted)
 		}
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannelWithAttempted(group, model, retry, requestPath, attempted)
 	}
 
 	channelSyncLock.RLock()
@@ -139,7 +237,13 @@ func getRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	if excludeCodeProviders {
 		channels = filterChannelIDsByCodeProviderType(channels, true)
 	}
-	channels, err := filterChannelIDsByKickedSpeedProtection(channels, group)
+	channels = filterChannelIDsByAttempted(channels, attempted)
+	channels = filterChannelIDsByFallback(channels, fallbackChannelIDSet)
+	channels, err := filterChannelIDsByRPMCapacity(channels, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	channels, err = filterChannelIDsByKickedSpeedProtection(channels, group)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +254,12 @@ func getRandomSatisfiedChannel(group string, model string, retry int, requestPat
 		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
 		if excludeCodeProviders {
 			channels = filterChannelIDsByCodeProviderType(channels, true)
+		}
+		channels = filterChannelIDsByAttempted(channels, attempted)
+		channels = filterChannelIDsByFallback(channels, fallbackChannelIDSet)
+		channels, err = filterChannelIDsByRPMCapacity(channels, time.Now().Unix())
+		if err != nil {
+			return nil, err
 		}
 		channels, err = filterChannelIDsByKickedSpeedProtection(channels, group)
 		if err != nil {
@@ -248,6 +358,58 @@ func filterChannelIDsByCodeProviderType(channelIDs []int, excludeCodeProviders b
 		}
 	}
 	return filtered
+}
+
+func filterChannelIDsByAttempted(channelIDs []int, attempted map[int]struct{}) []int {
+	if len(channelIDs) == 0 || len(attempted) == 0 {
+		return channelIDs
+	}
+	filtered := make([]int, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		if _, ok := attempted[channelID]; !ok {
+			filtered = append(filtered, channelID)
+		}
+	}
+	return filtered
+}
+
+// filterChannelIDsByFallback removes fallback channels (channel IDs referenced
+// by any channel's fallback_sequence) from the candidate pool. fallbackSet must
+// be an already-computed set; internal callers that already hold channelSyncLock
+// pass the cached set directly to avoid a nested read lock.
+func filterChannelIDsByFallback(channelIDs []int, fallbackSet map[int]struct{}) []int {
+	if len(channelIDs) == 0 || len(fallbackSet) == 0 {
+		return channelIDs
+	}
+	filtered := make([]int, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		if _, ok := fallbackSet[channelID]; !ok {
+			filtered = append(filtered, channelID)
+		}
+	}
+	return filtered
+}
+
+func filterChannelIDsByRPMCapacity(channelIDs []int, now int64) ([]int, error) {
+	if len(channelIDs) == 0 {
+		return channelIDs, nil
+	}
+	filtered := make([]int, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		channel := channelsIDM[channelID]
+		if channel == nil {
+			filtered = append(filtered, channelID)
+			continue
+		}
+		available, err := ChannelHasRPMCapacity(channel, now)
+		if err != nil {
+			return nil, err
+		}
+		if available {
+			filtered = append(filtered, channelID)
+		}
+	}
+	return filtered, nil
 }
 
 func filterChannelIDsByKickedSpeedProtection(channelIDs []int, group string) ([]int, error) {

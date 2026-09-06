@@ -106,16 +106,24 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
-	return getChannel(group, model, retry, requestPath, false)
+	return getChannel(group, model, retry, requestPath, nil, false)
+}
+
+func GetChannelWithAttempted(group string, model string, retry int, requestPath string, attempted map[int]struct{}) (*Channel, error) {
+	return getChannel(group, model, retry, requestPath, attempted, false)
 }
 
 // GetOrdinaryChannel is the database-backed counterpart to
 // GetRandomSatisfiedOrdinaryChannel.
 func GetOrdinaryChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
-	return getChannel(group, model, retry, requestPath, true)
+	return getChannel(group, model, retry, requestPath, nil, true)
 }
 
-func getChannel(group string, model string, retry int, requestPath string, excludeCodeProviders bool) (*Channel, error) {
+func GetOrdinaryChannelWithAttempted(group string, model string, retry int, requestPath string, attempted map[int]struct{}) (*Channel, error) {
+	return getChannel(group, model, retry, requestPath, attempted, true)
+}
+
+func getChannel(group string, model string, retry int, requestPath string, attempted map[int]struct{}, excludeCodeProviders bool) (*Channel, error) {
 	var abilities []Ability
 
 	var err error = nil
@@ -142,6 +150,18 @@ func getChannel(group string, model string, retry int, requestPath string, exclu
 			return nil, err
 		}
 	}
+	abilities, err = filterAbilitiesByAttempted(abilities, attempted)
+	if err != nil {
+		return nil, err
+	}
+	abilities, err = filterAbilitiesByFallback(abilities)
+	if err != nil {
+		return nil, err
+	}
+	abilities, err = filterAbilitiesByRPMCapacity(abilities, common.GetTimestamp())
+	if err != nil {
+		return nil, err
+	}
 	channel := Channel{}
 	if len(abilities) > 0 {
 		// Randomly choose one
@@ -164,6 +184,64 @@ func getChannel(group string, model string, retry int, requestPath string, exclu
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+func filterAbilitiesByAttempted(abilities []Ability, attempted map[int]struct{}) ([]Ability, error) {
+	if len(abilities) == 0 || len(attempted) == 0 {
+		return abilities, nil
+	}
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		if _, ok := attempted[ability.ChannelId]; !ok {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered, nil
+}
+
+// filterAbilitiesByFallback removes fallback channels (channel IDs referenced by
+// any channel's fallback_sequence) from the candidate pool.
+func filterAbilitiesByFallback(abilities []Ability) ([]Ability, error) {
+	set := GetFallbackChannelIDSet()
+	if len(abilities) == 0 || len(set) == 0 {
+		return abilities, nil
+	}
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		if _, ok := set[ability.ChannelId]; !ok {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered, nil
+}
+
+func filterAbilitiesByRPMCapacity(abilities []Ability, now int64) ([]Ability, error) {
+	if len(abilities) == 0 {
+		return abilities, nil
+	}
+	channelIDs := make([]int, 0, len(abilities))
+	for _, ability := range abilities {
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+	var channels []Channel
+	if err := DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	channelByID := make(map[int]*Channel, len(channels))
+	for index := range channels {
+		channelByID[channels[index].Id] = &channels[index]
+	}
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		available, err := ChannelHasRPMCapacity(channelByID[ability.ChannelId], now)
+		if err != nil {
+			return nil, err
+		}
+		if available {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered, nil
 }
 
 func filterAbilitiesByCodeProviderType(abilities []Ability) ([]Ability, error) {

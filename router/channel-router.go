@@ -66,6 +66,8 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodPost, path: "/:id/opencode/usage/override", permission: authz.ChannelOperate, handler: controller.SetOpencodeChannelUsageOverride},
 	{method: http.MethodPost, path: "/opencode/usage/reset", permission: authz.ChannelOperate, handler: controller.ResetOpencodeUsage},
 	{method: http.MethodGet, path: "/:id/command/usage", permission: authz.ChannelRead, handler: controller.GetCommandChannelUsage},
+	{method: http.MethodGet, path: "/:id/rpm/usage", permission: authz.ChannelRead, handler: controller.GetChannelRPMUsage},
+	{method: http.MethodGet, path: "/:id/concurrency/usage", permission: authz.ChannelRead, handler: controller.GetChannelConcurrencyUsage},
 	{method: http.MethodPost, path: "/:id/command/usage/override", permission: authz.ChannelOperate, handler: controller.SetCommandChannelUsageOverride},
 	{method: http.MethodPost, path: "/command/usage/reset", permission: authz.ChannelOperate, handler: controller.ResetCommandUsage},
 	{method: http.MethodGet, path: "/:id/codex/usage/reset-credits", permission: authz.ChannelRead, handler: controller.GetCodexChannelRateLimitResetCredits},

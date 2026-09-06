@@ -1,12 +1,14 @@
 package model
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -59,6 +61,32 @@ func TestCommandUsageKeepsRPMPerChannel(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, snapshot.RPMCount)
 	require.NoError(t, ReleaseCommandRPM(502, now+1))
+}
+
+func TestCommandConcurrencyLimitUsesActiveRequests(t *testing.T) {
+	useCommandUsageDB(t)
+	previousLimit := operation_setting.GetOpencodeConcurrencyLimit()
+	t.Cleanup(func() {
+		require.NoError(t, operation_setting.SetOpencodeConcurrencyLimit(strconv.Itoa(previousLimit)))
+	})
+	require.NoError(t, operation_setting.SetOpencodeConcurrencyLimit("1"))
+
+	allowed, err := ReserveCommandConcurrency(503)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	allowed, err = ReserveCommandConcurrency(503)
+	require.NoError(t, err)
+	require.False(t, allowed)
+
+	snapshot, err := GetCommandUsageSnapshot(503, time.Now().Unix()+120)
+	require.NoError(t, err)
+	require.Equal(t, 1, snapshot.ConcurrencyCount)
+
+	require.NoError(t, ReleaseCommandConcurrency(503))
+	allowed, err = ReserveCommandConcurrency(503)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	require.NoError(t, ReleaseCommandConcurrency(503))
 }
 
 func TestCalculateCommandCostMicroUSDForModelUsesProPricing(t *testing.T) {

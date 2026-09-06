@@ -405,6 +405,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
+	// 站内缓存钩子：渠道开启且能提取消息时，计算命中并合并进 billingUsage 的 cached tokens，
+	// 使 calculateTextQuotaSummary 按现有 CacheRatio 自动打折。同时可能改写 extraContent 追加命中日志。
+	extraContent, billingUsage = applyStationCache(relayInfo, billingUsage, extraContent)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
 
 	var tieredResult *billingexpr.TieredResult

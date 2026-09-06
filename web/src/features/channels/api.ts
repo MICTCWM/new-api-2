@@ -26,6 +26,7 @@ import type {
   Channel,
   ChannelBalanceResponse,
   ChannelOpsResponse,
+  ChannelConcurrencyUsageResponse,
   ChannelTestResponse,
   CodeProviderUsageOverrideRequest,
   CommandUsageResponse,
@@ -371,6 +372,16 @@ export async function getCommandUsage(
 ): Promise<CommandUsageResponse> {
   const res = await api.get(
     `/api/channel/${channelId}/command/usage`,
+    channelActionConfig({ disableDuplicate: true })
+  )
+  return res.data
+}
+
+export async function getChannelConcurrencyUsage(
+  channelId: number
+): Promise<ChannelConcurrencyUsageResponse> {
+  const res = await api.get(
+    `/api/channel/${channelId}/concurrency/usage`,
     channelActionConfig({ disableDuplicate: true })
   )
   return res.data

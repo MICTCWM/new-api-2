@@ -167,7 +167,9 @@ func InitOptionMap() {
 	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(setting.CheckSensitiveEnabled)
 	common.OptionMap["DemoSiteEnabled"] = strconv.FormatBool(operation_setting.DemoSiteEnabled)
 	common.OptionMap["SelfUseModeEnabled"] = strconv.FormatBool(operation_setting.SelfUseModeEnabled)
-	common.OptionMap[operation_setting.OpencodeRPMLimitOptionKey] = strconv.Itoa(operation_setting.GetOpencodeRPMLimit())
+	concurrencyLimit := strconv.Itoa(operation_setting.GetOpencodeConcurrencyLimit())
+	common.OptionMap[operation_setting.OpencodeConcurrencyLimitOptionKey] = concurrencyLimit
+	common.OptionMap[operation_setting.OpencodeRPMLimitOptionKey] = concurrencyLimit
 	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.ModelRequestRateLimitEnabled)
 	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
 	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
@@ -177,6 +179,14 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
+
+	// 自动伸缩系统行为配置默认值
+	common.OptionMap[operation_setting.AutoScalingEnabledOptionKey] = strconv.FormatBool(operation_setting.DefaultAutoScalingEnabled)
+	common.OptionMap[operation_setting.AutoScalingRPMLimitOptionKey] = strconv.Itoa(operation_setting.DefaultAutoScalingRPMLimit)
+	common.OptionMap[operation_setting.AutoScalingCooldownMinutesOptionKey] = strconv.Itoa(operation_setting.DefaultAutoScalingCooldownMinutes)
+	common.OptionMap[operation_setting.AutoScalingTokenOptionKey] = ""
+	common.OptionMap[operation_setting.AutoScalingChannelIDsOptionKey] = ""
+	common.OptionMap[operation_setting.AutoScalingInstanceIDsOptionKey] = ""
 
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
@@ -191,6 +201,18 @@ func InitOptionMap() {
 func loadOptionsFromDatabase() {
 	options, _ := AllOption()
 	for _, option := range options {
+		if option.Key == operation_setting.OpencodeConcurrencyLimitOptionKey {
+			continue
+		}
+		err := updateOptionMap(option.Key, option.Value)
+		if err != nil {
+			common.SysLog("failed to update option map: " + err.Error())
+		}
+	}
+	for _, option := range options {
+		if option.Key != operation_setting.OpencodeConcurrencyLimitOptionKey {
+			continue
+		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
@@ -219,8 +241,14 @@ func validateOptionValue(key string, value string) error {
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
-	if key == operation_setting.OpencodeRPMLimitOptionKey {
-		return operation_setting.ValidateOpencodeRPMLimit(value)
+	if key == operation_setting.OpencodeConcurrencyLimitOptionKey || key == operation_setting.OpencodeRPMLimitOptionKey {
+		return operation_setting.ValidateOpencodeConcurrencyLimit(value)
+	}
+	if key == operation_setting.AutoScalingRPMLimitOptionKey {
+		return operation_setting.ValidateAutoScalingRPMLimit(value)
+	}
+	if key == operation_setting.AutoScalingCooldownMinutesOptionKey {
+		return operation_setting.ValidateAutoScalingCooldownMinutes(value)
 	}
 	return nil
 }
@@ -230,16 +258,20 @@ func UpdateOption(key string, value string) error {
 		return err
 	}
 	// Save to database first
-	option := Option{
-		Key: key,
+	optionKeys := []string{key}
+	if key == operation_setting.OpencodeRPMLimitOptionKey {
+		optionKeys = append(optionKeys, operation_setting.OpencodeConcurrencyLimitOptionKey)
 	}
-	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
-	option.Value = value
-	// Save is a combination function.
-	// If save value does not contain primary key, it will execute Create,
-	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	for _, optionKey := range optionKeys {
+		option := Option{Key: optionKey}
+		// https://gorm.io/docs/update.html#Save-All-Fields
+		DB.FirstOrCreate(&option, Option{Key: optionKey})
+		option.Value = value
+		// Save is a combination function.
+		// If save value does not contain primary key, it will execute Create,
+		// otherwise it will execute Update (with all fields).
+		DB.Save(&option)
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }
@@ -258,8 +290,19 @@ func UpdateOptionsBulk(values map[string]string) error {
 			return err
 		}
 	}
+	persistedValues := make(map[string]string, len(values)+1)
+	for k, v := range values {
+		persistedValues[k] = v
+		if k == operation_setting.OpencodeRPMLimitOptionKey {
+			persistedValues[operation_setting.OpencodeConcurrencyLimitOptionKey] = v
+		}
+	}
+	if canonicalValue, ok := values[operation_setting.OpencodeConcurrencyLimitOptionKey]; ok {
+		persistedValues[operation_setting.OpencodeRPMLimitOptionKey] = canonicalValue
+		persistedValues[operation_setting.OpencodeConcurrencyLimitOptionKey] = canonicalValue
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
+		for k, v := range persistedValues {
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
 				return err
@@ -274,7 +317,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	for k, v := range values {
+	for k, v := range persistedValues {
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}
@@ -292,6 +335,12 @@ func updateOptionMap(key string, value string) (err error) {
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
 	common.OptionMap[key] = value
+	if key == operation_setting.OpencodeConcurrencyLimitOptionKey {
+		common.OptionMap[operation_setting.OpencodeRPMLimitOptionKey] = value
+	}
+	if key == operation_setting.OpencodeRPMLimitOptionKey {
+		common.OptionMap[operation_setting.OpencodeConcurrencyLimitOptionKey] = value
+	}
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
 	if handleConfigUpdate(key, value) {
@@ -402,8 +451,8 @@ func updateOptionMap(key string, value string) (err error) {
 		}
 	}
 	switch key {
-	case operation_setting.OpencodeRPMLimitOptionKey:
-		err = operation_setting.SetOpencodeRPMLimit(value)
+	case operation_setting.OpencodeConcurrencyLimitOptionKey, operation_setting.OpencodeRPMLimitOptionKey:
+		err = operation_setting.SetOpencodeConcurrencyLimit(value)
 	case "EmailDomainWhitelist":
 		common.EmailDomainWhitelist = strings.Split(value, ",")
 	case "SMTPServer":
@@ -611,6 +660,18 @@ func updateOptionMap(key string, value string) (err error) {
 		// WaffoPayMethods is read directly from OptionMap via setting.GetWaffoPayMethods().
 		// The value is already stored in OptionMap at the top of this function (line: common.OptionMap[key] = value).
 		// No additional in-memory variable to update.
+	case operation_setting.AutoScalingEnabledOptionKey:
+		err = operation_setting.SetAutoScalingEnabled(value)
+	case operation_setting.AutoScalingRPMLimitOptionKey:
+		err = operation_setting.SetAutoScalingRPMLimit(value)
+	case operation_setting.AutoScalingCooldownMinutesOptionKey:
+		err = operation_setting.SetAutoScalingCooldownMinutes(value)
+	case operation_setting.AutoScalingTokenOptionKey:
+		err = operation_setting.SetAutoScalingToken(value)
+	case operation_setting.AutoScalingChannelIDsOptionKey:
+		err = operation_setting.SetAutoScalingChannelIDs(value)
+	case operation_setting.AutoScalingInstanceIDsOptionKey:
+		err = operation_setting.SetAutoScalingInstanceIDs(value)
 	}
 	return err
 }

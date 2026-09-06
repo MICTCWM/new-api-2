@@ -251,6 +251,7 @@ export const channelFormSchema = z
     weight: z.number().optional(),
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
+    fallback_sequence: z.string().optional(),
     status: z.number(),
     status_code_mapping: z
       .string()
@@ -300,6 +301,7 @@ export const channelFormSchema = z
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
     // Type-specific settings (stored in settings JSON)
+    channel_concurrency_limit: z.number().int().min(0).max(10000).optional(),
     speed_protection_enabled: z.boolean().optional(),
     speed_protection_groups: z.array(z.string()).optional(),
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
@@ -315,6 +317,7 @@ export const channelFormSchema = z
     allow_speed: z.boolean().optional(), // Anthropic: speed mode control
     claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
     disable_task_polling_sleep: z.boolean().optional(),
+    station_cache_enabled: z.boolean().optional(), // Gateway station cache billing discount
     // Upstream model update settings (stored in settings JSON)
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
@@ -505,6 +508,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   weight: 0,
   test_model: '',
   auto_ban: 1,
+  fallback_sequence: '',
   status: CHANNEL_STATUS.ENABLED,
   status_code_mapping: '',
   tag: '',
@@ -528,6 +532,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   system_prompt: '',
   system_prompt_override: false,
   // Type-specific settings
+  channel_concurrency_limit: 0,
   is_enterprise_account: false,
   vertex_key_type: 'json',
   aws_key_type: 'ak_sk',
@@ -541,6 +546,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   allow_speed: false,
   claude_beta_query: false,
   disable_task_polling_sleep: false,
+  station_cache_enabled: false,
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
@@ -599,6 +605,7 @@ export function transformChannelToFormDefaults(
   let azureResponsesVersion = ''
   let isEnterpriseAccount = false
   let awsKeyType: 'ak_sk' | 'api_key' = 'ak_sk'
+  let channelConcurrencyLimit = 0
   let allowServiceTier = false
   let disableStore = false
   let allowSafetyIdentifier = false
@@ -607,6 +614,7 @@ export function transformChannelToFormDefaults(
   let allowSpeed = false
   let claudeBetaQuery = false
   let disableTaskPollingSleep = false
+  let stationCacheEnabled = false
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
@@ -621,6 +629,15 @@ export function transformChannelToFormDefaults(
       azureResponsesVersion = parsed.azure_responses_version || ''
       isEnterpriseAccount = parsed.openrouter_enterprise === true
       awsKeyType = parsed.aws_key_type || 'ak_sk'
+      const parsedConcurrencyLimit =
+        parsed.channel_concurrency_limit ?? parsed.channel_rpm_limit
+      channelConcurrencyLimit =
+        typeof parsedConcurrencyLimit === 'number' &&
+        Number.isInteger(parsedConcurrencyLimit) &&
+        parsedConcurrencyLimit >= 0 &&
+        parsedConcurrencyLimit <= 10000
+          ? parsedConcurrencyLimit
+          : 0
       allowServiceTier = parsed.allow_service_tier === true
       disableStore = parsed.disable_store === true
       allowSafetyIdentifier = parsed.allow_safety_identifier === true
@@ -629,6 +646,7 @@ export function transformChannelToFormDefaults(
       allowSpeed = parsed.allow_speed === true
       claudeBetaQuery = parsed.claude_beta_query === true
       disableTaskPollingSleep = parsed.disable_task_polling_sleep === true
+      stationCacheEnabled = parsed.station_cache_enabled === true
       upstreamModelUpdateCheckEnabled =
         parsed.upstream_model_update_check_enabled === true
       upstreamModelUpdateAutoSyncEnabled =
@@ -675,6 +693,7 @@ export function transformChannelToFormDefaults(
     weight: channel.weight || 0,
     auto_ban: channel.auto_ban ?? 1,
     status: channel.status,
+    fallback_sequence: channel.fallback_sequence || '',
     status_code_mapping: channel.status_code_mapping || '',
     tag: channel.tag || '',
     remark: channel.remark || '',
@@ -690,6 +709,7 @@ export function transformChannelToFormDefaults(
     // Channel extra settings
     ...extraSettings,
     // Type-specific settings
+    channel_concurrency_limit: channelConcurrencyLimit,
     is_enterprise_account: isEnterpriseAccount,
     vertex_key_type: vertexKeyType,
     azure_responses_version: azureResponsesVersion,
@@ -701,6 +721,7 @@ export function transformChannelToFormDefaults(
     allow_speed: allowSpeed,
     claude_beta_query: claudeBetaQuery,
     disable_task_polling_sleep: disableTaskPollingSleep,
+    station_cache_enabled: stationCacheEnabled,
     allow_safety_identifier: allowSafetyIdentifier,
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
@@ -837,7 +858,10 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   settingsObj.disable_task_polling_sleep =
     formData.disable_task_polling_sleep === true
 
-  settingsObj.speed_protection_enabled = formData.speed_protection_enabled === true
+  settingsObj.station_cache_enabled = formData.station_cache_enabled === true
+
+  settingsObj.speed_protection_enabled =
+    formData.speed_protection_enabled === true
   settingsObj.speed_protection_groups = [
     ...new Set(
       (formData.speed_protection_groups || [])
@@ -845,6 +869,16 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
         .filter(Boolean)
     ),
   ]
+
+  if (isFixedCodeChannelType(formData.type)) {
+    delete settingsObj.channel_concurrency_limit
+    delete settingsObj.channel_rpm_limit
+  } else {
+    delete settingsObj.channel_rpm_limit
+    settingsObj.channel_concurrency_limit = Math.trunc(
+      formData.channel_concurrency_limit || 0
+    )
+  }
 
   // Upstream model update settings (for model-fetchable channel types)
   if (MODEL_FETCHABLE_TYPES.has(formData.type)) {
@@ -924,6 +958,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     weight: formData.weight || null,
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
+    fallback_sequence: formData.fallback_sequence || null,
     status: formData.status,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,
@@ -979,6 +1014,7 @@ export function transformFormDataToUpdatePayload(
     weight: formData.weight || null,
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
+    fallback_sequence: formData.fallback_sequence || null,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,
     remark: formData.remark || '',
@@ -1011,6 +1047,7 @@ export function transformFormDataToUpdatePayload(
   payload.status_code_mapping = formData.status_code_mapping || ''
   payload.param_override = formData.param_override || ''
   payload.header_override = formData.header_override || ''
+  payload.fallback_sequence = formData.fallback_sequence || ''
 
   return payload
 }

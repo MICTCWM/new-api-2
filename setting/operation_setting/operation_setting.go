@@ -11,37 +11,55 @@ var DemoSiteEnabled = false
 var SelfUseModeEnabled = false
 
 const (
-	OpencodeRPMLimitOptionKey = "OpencodeRPMLimit"
-	DefaultOpencodeRPMLimit   = 3
-	MinOpencodeRPMLimit       = 1
-	MaxOpencodeRPMLimit       = 1000
+	OpencodeConcurrencyLimitOptionKey = "OpencodeConcurrencyLimit"
+	OpencodeRPMLimitOptionKey         = "OpencodeRPMLimit" // legacy option key
+	DefaultOpencodeConcurrencyLimit   = 3
+	MinOpencodeConcurrencyLimit       = 1
+	MaxOpencodeConcurrencyLimit       = 1000
+	DefaultOpencodeRPMLimit           = DefaultOpencodeConcurrencyLimit
+	MinOpencodeRPMLimit               = MinOpencodeConcurrencyLimit
+	MaxOpencodeRPMLimit               = MaxOpencodeConcurrencyLimit
 )
 
-var opencodeRPMLimit atomic.Int64
+var opencodeConcurrencyLimit atomic.Int64
 
 func init() {
-	opencodeRPMLimit.Store(DefaultOpencodeRPMLimit)
+	opencodeConcurrencyLimit.Store(DefaultOpencodeConcurrencyLimit)
 }
 
-func GetOpencodeRPMLimit() int {
-	return int(opencodeRPMLimit.Load())
+func GetOpencodeConcurrencyLimit() int {
+	return int(opencodeConcurrencyLimit.Load())
 }
 
-func ValidateOpencodeRPMLimit(value string) error {
+func ValidateOpencodeConcurrencyLimit(value string) error {
 	limit, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil || limit < MinOpencodeRPMLimit || limit > MaxOpencodeRPMLimit {
-		return fmt.Errorf("OpenCode RPM must be an integer from %d to %d", MinOpencodeRPMLimit, MaxOpencodeRPMLimit)
+	if err != nil || limit < MinOpencodeConcurrencyLimit || limit > MaxOpencodeConcurrencyLimit {
+		return fmt.Errorf("OpenCode concurrency must be an integer from %d to %d", MinOpencodeConcurrencyLimit, MaxOpencodeConcurrencyLimit)
 	}
 	return nil
 }
 
-func SetOpencodeRPMLimit(value string) error {
-	if err := ValidateOpencodeRPMLimit(value); err != nil {
+func SetOpencodeConcurrencyLimit(value string) error {
+	if err := ValidateOpencodeConcurrencyLimit(value); err != nil {
 		return err
 	}
 	limit, _ := strconv.Atoi(strings.TrimSpace(value))
-	opencodeRPMLimit.Store(int64(limit))
+	opencodeConcurrencyLimit.Store(int64(limit))
 	return nil
+}
+
+// GetOpencodeRPMLimit is kept for callers and stored options from the RPM
+// implementation. Runtime routing uses the concurrency limit.
+func GetOpencodeRPMLimit() int {
+	return GetOpencodeConcurrencyLimit()
+}
+
+func ValidateOpencodeRPMLimit(value string) error {
+	return ValidateOpencodeConcurrencyLimit(value)
+}
+
+func SetOpencodeRPMLimit(value string) error {
+	return SetOpencodeConcurrencyLimit(value)
 }
 
 var AutomaticDisableKeywords = []string{

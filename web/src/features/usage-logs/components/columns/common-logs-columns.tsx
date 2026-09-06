@@ -115,7 +115,13 @@ function buildTypeDetailSegments(
   // Audit, login, and system state-transition logs: render localized content
   // from the structured op descriptor instead of the raw fallback content.
   if (log.type === 3 || log.type === 4 || log.type === 7) {
-    const text = renderAuditContent(other, t)
+    const text = renderAuditContent(
+      other,
+      t,
+      log.channel_name
+        ? { channel_name: log.channel_name }
+        : undefined
+    )
     return text ? [{ text }] : []
   }
 

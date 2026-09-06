@@ -59,6 +59,24 @@ func TestValidateChannelProxy(t *testing.T) {
 	}
 }
 
+func TestValidateChannelRejectsSelfFallbackReference(t *testing.T) {
+	// fallback_sequence 不允许引用渠道自身：会造成循环依赖。
+	channel := &model.Channel{
+		Id:               3,
+		Type:             constant.ChannelTypeOpenAI,
+		FallbackSequence: "1,3",
+	}
+	require.ErrorContains(t, validateChannel(channel, false), "不允许包含渠道自身 id")
+
+	// 引用其它渠道、且不包含自身时校验通过。
+	valid := &model.Channel{
+		Id:               3,
+		Type:             constant.ChannelTypeOpenAI,
+		FallbackSequence: "1,5",
+	}
+	require.NoError(t, validateChannel(valid, false))
+}
+
 func TestValidateChannelRequiresNewAPIBaseURL(t *testing.T) {
 	tests := []struct {
 		name    string

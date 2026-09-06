@@ -20,6 +20,8 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
+  ArrowUp,
+  ArrowDown,
   AlertCircle,
   Boxes,
   CheckCircle2,
@@ -130,6 +132,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import {
   fetchModels,
   getAllModels,
+  getChannels,
   getChannel,
   getChannelKey,
   getGroups,
@@ -242,6 +245,26 @@ const createEmptyModelMappingGuardrail = (): ModelMappingGuardrail => ({
 const formatModelNames = (models: string[]): string =>
   models.map((model) => `"${model}"`).join(', ')
 
+/**
+ * Parse a comma-separated channel id string (e.g. "3,5,7") into an ordered list
+ * of id strings, dropping empty entries and deduplicating (first occurrence wins,
+ * matching the backend GetFallbackSequenceIDs semantics).
+ */
+const parseFallbackSequence = (
+  value: string | undefined
+): string[] => {
+  const seen = new Set<string>()
+  return String(value || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => {
+      if (!id) return false
+      if (seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+}
+
 const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
   source: string
   target: string
@@ -305,6 +328,7 @@ const SENSITIVE_FORM_FIELDS = [
   'allow_speed',
   'claude_beta_query',
   'disable_task_polling_sleep',
+  'station_cache_enabled',
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
   'upstream_model_update_ignored_models',
@@ -690,6 +714,54 @@ export function ChannelMutateDrawer({
     queryFn: () => getPrefillGroups('model'),
   })
 
+  // Fetch all channels for the fallback sequence picker
+  const { data: allChannelsData } = useQuery({
+    queryKey: ['channel', 'fallback-options'],
+    queryFn: () => getChannels({ p: 1, page_size: 10000 }),
+    staleTime: 30_000,
+  })
+
+  // Channels available for fallback, excluding the channel currently being edited.
+  // Merge regular channels with channels referenced by fallback of other channels
+  // (fallback_channels) so those names still resolve instead of showing as #id.
+  const fallbackChannelOptions = useMemo(() => {
+    const items = allChannelsData?.data?.items ?? []
+    const fallbackChannels = allChannelsData?.data?.fallback_channels ?? []
+    const seen = new Set<number>()
+    return [...items, ...fallbackChannels]
+      .filter((item) => {
+        if (seen.has(item.id)) return false
+        seen.add(item.id)
+        return item.id !== channelId
+      })
+      .map((item) => ({ label: item.name, value: String(item.id) }))
+  }, [
+    allChannelsData?.data?.items,
+    allChannelsData?.data?.fallback_channels,
+    channelId,
+  ])
+
+  // Reorder the selected fallback list (dir: -1 move up, +1 move down)
+  const reorderFallback = useCallback(
+    (current: string | undefined, index: number, dir: -1 | 1) => {
+      const ids = parseFallbackSequence(current)
+      const target = index + dir
+      if (target < 0 || target >= ids.length) return
+      const next = [...ids]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next.join(',')
+    },
+    []
+  )
+
+  const removeFallback = useCallback(
+    (current: string | undefined, id: string) => {
+      const ids = parseFallbackSequence(current).filter((item) => item !== id)
+      return ids.join(',')
+    },
+    []
+  )
+
   const { copyToClipboard } = useCopyToClipboard()
 
   const {
@@ -746,6 +818,7 @@ export function ChannelMutateDrawer({
   const currentWeight = form.watch('weight')
   const currentTestModel = form.watch('test_model')
   const currentAutoBan = form.watch('auto_ban')
+  const currentFallbackSequence = form.watch('fallback_sequence')
   const currentTag = form.watch('tag')
   const currentRemark = form.watch('remark')
   const currentStatusCodeMapping = form.watch('status_code_mapping')
@@ -757,10 +830,10 @@ export function ChannelMutateDrawer({
   const currentDisableTaskPollingSleep = form.watch(
     'disable_task_polling_sleep'
   )
-  const currentSpeedProtectionEnabled = form.watch(
-    'speed_protection_enabled'
-  )
+  const currentStationCacheEnabled = form.watch('station_cache_enabled')
+  const currentSpeedProtectionEnabled = form.watch('speed_protection_enabled')
   const currentSpeedProtectionGroups = form.watch('speed_protection_groups')
+  const currentChannelConcurrencyLimit = form.watch('channel_concurrency_limit')
   const currentProxy = form.watch('proxy')
   const currentHttpProtocol = form.watch('http_protocol')
   const currentHttp2ConnectionShards = form.watch('http2_connection_shards')
@@ -1031,7 +1104,8 @@ export function ChannelMutateDrawer({
     currentPriority ||
     currentWeight ||
     currentTestModel?.trim() ||
-    (currentAutoBan ?? 1) !== 1
+    (currentAutoBan ?? 1) !== 1 ||
+    currentFallbackSequence?.trim()
   )
   const internalNotesConfigured = Boolean(
     currentTag?.trim() || currentRemark?.trim()
@@ -1046,8 +1120,10 @@ export function ChannelMutateDrawer({
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
     currentDisableTaskPollingSleep ||
+    currentStationCacheEnabled ||
     currentSpeedProtectionEnabled ||
     (currentSpeedProtectionGroups?.length ?? 0) > 0 ||
+    (currentChannelConcurrencyLimit ?? 0) > 0 ||
     currentProxy?.trim() ||
     currentSystemPrompt?.trim() ||
     currentSystemPromptOverride ||
@@ -3887,6 +3963,141 @@ export function ChannelMutateDrawer({
                                 </FormItem>
                               )}
                             />
+
+                            <div className='grid gap-4'>
+                              <FormField
+                                control={form.control}
+                                name='fallback_sequence'
+                                render={({ field }) => {
+                                  const selectedIds = parseFallbackSequence(
+                                    field.value
+                                  )
+                                  const labelMap = new Map(
+                                    fallbackChannelOptions.map((option) => [
+                                      option.value,
+                                      option.label,
+                                    ])
+                                  )
+                                  return (
+                                    <FormItem>
+                                      <FormLabel>
+                                        {t('Fallback Sequence')}
+                                      </FormLabel>
+                                      {fallbackChannelOptions.length === 0 ? (
+                                        <FormControl>
+                                          <div className='text-muted-foreground rounded-md border border-dashed px-3 py-2 text-sm'>
+                                            {t('No available channels')}
+                                          </div>
+                                        </FormControl>
+                                      ) : (
+                                        <FormControl>
+                                          <MultiSelect
+                                            id='fallback_sequence'
+                                            options={fallbackChannelOptions}
+                                            selected={selectedIds}
+                                            onChange={(ids) =>
+                                              field.onChange(ids.join(','))
+                                            }
+                                            placeholder={t(
+                                              'Select channels to retry in sequence'
+                                            )}
+                                            emptyText={t(
+                                              'No available channels'
+                                            )}
+                                          />
+                                        </FormControl>
+                                      )}
+                                      <FormDescription>
+                                        {t(
+                                          'If the primary channel fails, requests are retried against these channels in order; if all of them fail, the first error is returned.'
+                                        )}
+                                      </FormDescription>
+                                      <FormMessage />
+                                      {selectedIds.length > 0 && (
+                                        <div className='rounded-md border'>
+                                          <div className='bg-muted text-muted-foreground px-3 py-1.5 text-xs font-medium'>
+                                            {t('Fallback order')}
+                                          </div>
+                                          <ul className='divide-y'>
+                                            {selectedIds.map((id, index) => (
+                                              <li
+                                                key={id}
+                                                className='flex items-center gap-2 px-2.5 py-1.5'
+                                              >
+                                                <span className='text-muted-foreground w-4 shrink-0 text-center font-mono text-xs'>
+                                                  {index + 1}
+                                                </span>
+                                                <span className='min-w-0 flex-1 truncate text-sm'>
+                                                  {labelMap.get(id) ?? `#${id}`}
+                                                </span>
+                                                <span className='flex shrink-0 items-center'>
+                                                  <Button
+                                                    type='button'
+                                                    variant='ghost'
+                                                    size='icon-xs'
+                                                    disabled={index === 0}
+                                                    aria-label={t('Move up')}
+                                                    onClick={() => {
+                                                      const next = reorderFallback(
+                                                        field.value,
+                                                        index,
+                                                        -1
+                                                      )
+                                                      if (next !== undefined) {
+                                                        field.onChange(next)
+                                                      }
+                                                    }}
+                                                  >
+                                                    <ArrowUp />
+                                                  </Button>
+                                                  <Button
+                                                    type='button'
+                                                    variant='ghost'
+                                                    size='icon-xs'
+                                                    disabled={
+                                                      index ===
+                                                      selectedIds.length - 1
+                                                    }
+                                                    aria-label={t('Move down')}
+                                                    onClick={() => {
+                                                      const next = reorderFallback(
+                                                        field.value,
+                                                        index,
+                                                        1
+                                                      )
+                                                      if (next !== undefined) {
+                                                        field.onChange(next)
+                                                      }
+                                                    }}
+                                                  >
+                                                    <ArrowDown />
+                                                  </Button>
+                                                  <Button
+                                                    type='button'
+                                                    variant='ghost'
+                                                    size='icon-xs'
+                                                    aria-label={t('Remove')}
+                                                    onClick={() => {
+                                                      const next = removeFallback(
+                                                        field.value,
+                                                        id
+                                                      )
+                                                      field.onChange(next)
+                                                    }}
+                                                  >
+                                                    <Trash2 />
+                                                  </Button>
+                                                </span>
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      )}
+                                    </FormItem>
+                                  )
+                                }}
+                              />
+                            </div>
                           </div>
 
                           <div
@@ -4222,6 +4433,90 @@ export function ChannelMutateDrawer({
                             className='space-y-4 disabled:opacity-60'
                           >
                             <div className='divide-border space-y-0 divide-y border-y'>
+                              {!isFixedCodeChannelType(currentType) && (
+                                <FormField
+                                  control={form.control}
+                                  name='channel_concurrency_limit'
+                                  render={({ field }) => {
+                                    const isCustom = (field.value || 0) > 0
+                                    return (
+                                      <FormItem className='space-y-3 px-4 py-3'>
+                                        <div className='space-y-1'>
+                                          <FormLabel>
+                                            {t('Channel concurrency limit')}
+                                          </FormLabel>
+                                          <FormDescription>
+                                            {t(
+                                              'Use a separate simultaneous request limit for this channel.'
+                                            )}
+                                          </FormDescription>
+                                        </div>
+                                        <Select
+                                          value={
+                                            isCustom ? 'custom' : 'unlimited'
+                                          }
+                                          onValueChange={(value) => {
+                                            field.onChange(
+                                              value === 'custom'
+                                                ? Math.max(1, field.value || 1)
+                                                : 0
+                                            )
+                                          }}
+                                        >
+                                          <FormControl>
+                                            <SelectTrigger>
+                                              <SelectValue />
+                                            </SelectTrigger>
+                                          </FormControl>
+                                          <SelectContent
+                                            alignItemWithTrigger={false}
+                                          >
+                                            <SelectGroup>
+                                              <SelectItem value='unlimited'>
+                                                {t('Unlimited')}
+                                              </SelectItem>
+                                              <SelectItem value='custom'>
+                                                {t('Custom')}
+                                              </SelectItem>
+                                            </SelectGroup>
+                                          </SelectContent>
+                                        </Select>
+                                        {isCustom && (
+                                          <div className='space-y-1'>
+                                            <FormLabel className='text-xs'>
+                                              {t('Concurrent requests')}
+                                            </FormLabel>
+                                            <FormControl>
+                                              <Input
+                                                type='number'
+                                                min={1}
+                                                max={10000}
+                                                step={1}
+                                                value={field.value || 1}
+                                                onChange={(event) => {
+                                                  const value = Number(
+                                                    event.target.value
+                                                  )
+                                                  field.onChange(
+                                                    Number.isInteger(value) &&
+                                                      value >= 1
+                                                      ? Math.min(value, 10000)
+                                                      : 1
+                                                  )
+                                                }}
+                                              />
+                                            </FormControl>
+                                          </div>
+                                        )}
+                                        <FormDescription>
+                                          {t('0 means unlimited')}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )
+                                  }}
+                                />
+                              )}
                               <FormField
                                 control={form.control}
                                 name='speed_protection_enabled'
@@ -4378,6 +4673,31 @@ export function ChannelMutateDrawer({
                                       <FormDescription>
                                         {t(
                                           'Do not wait one second between polling async tasks for this channel'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='station_cache_enabled'
+                                render={({ field }) => (
+                                  <FormItem className='flex items-center justify-between px-4 py-3'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>
+                                        {t('Enable Station Cache')}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'Apply the gateway station cache billing discount to text requests on this channel'
                                         )}
                                       </FormDescription>
                                     </div>

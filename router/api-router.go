@@ -189,6 +189,14 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/return", controller.SubscriptionEpayReturn)
 		apiRouter.POST("/subscription/epay/return", anonymousRequestBodyLimit, controller.SubscriptionEpayReturn)
+		autoscalingRoute := apiRouter.Group("/autoscaling")
+		autoscalingRoute.Use(middleware.RootAuth())
+		{
+			autoscalingRoute.POST("/test", controller.TestAutoScalingConnection)
+			autoscalingRoute.GET("/status", controller.GetAutoScalingStatus)
+			autoscalingRoute.GET("/instances", controller.GetAutoScalingInstances)
+		}
+
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{

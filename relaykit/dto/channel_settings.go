@@ -66,6 +66,11 @@ const (
 )
 
 type ChannelOtherSettings struct {
+	// ChannelConcurrencyLimit controls this channel's simultaneous request
+	// limit. Zero means unlimited. ChannelRPMLimit is retained as a legacy
+	// alias for settings written by older versions.
+	ChannelConcurrencyLimit               int                   `json:"channel_concurrency_limit,omitempty"`
+	ChannelRPMLimit                       int                   `json:"channel_rpm_limit,omitempty"`
 	SpeedProtectionEnabled                bool                  `json:"speed_protection_enabled,omitempty"`
 	SpeedProtectionGroups                 []string              `json:"speed_protection_groups,omitempty"`
 	AzureResponsesVersion                 string                `json:"azure_responses_version,omitempty"`
@@ -79,6 +84,7 @@ type ChannelOtherSettings struct {
 	DisableStore                          bool                  `json:"disable_store,omitempty"`              // 是否禁用 store 透传（默认允许透传，禁用后可能导致 Codex 无法使用）
 	AllowIncludeObfuscation               bool                  `json:"allow_include_obfuscation,omitempty"`  // 是否允许 stream_options.include_obfuscation 透传（默认过滤以避免关闭流混淆保护）
 	DisableTaskPollingSleep               bool                  `json:"disable_task_polling_sleep,omitempty"` // 是否跳过异步任务轮询间隔
+	StationCacheEnabled                   bool                  `json:"station_cache_enabled,omitempty"`      // 是否启用站内缓存（上游不提供 prompt 缓存时网关自建）
 	AwsKeyType                            AwsKeyType            `json:"aws_key_type,omitempty"`
 	UpstreamModelUpdateCheckEnabled       bool                  `json:"upstream_model_update_check_enabled,omitempty"`        // 是否检测上游模型更新
 	UpstreamModelUpdateAutoSyncEnabled    bool                  `json:"upstream_model_update_auto_sync_enabled,omitempty"`    // 是否自动同步上游模型更新

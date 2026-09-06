@@ -40,8 +40,9 @@ type opencodeQueueEntry struct {
 }
 
 type opencodeQueueKey struct {
-	group string
-	model string
+	group     string
+	model     string
+	channelID int
 }
 
 var (
@@ -60,8 +61,15 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 	}
 
 	entry := &opencodeQueueEntry{
-		item:     newOpencodeQueueItem(param, inputTokens),
-		queueKey: opencodeQueueKey{group: queueGroupForParam(param), model: param.ModelName},
+		item: newOpencodeQueueItem(param, inputTokens),
+		queueKey: opencodeQueueKey{
+			group:     queueGroupForParam(param),
+			model:     param.ModelName,
+			channelID: GetPendingChannelAffinitySelection(param.Ctx),
+		},
+	}
+	if entry.queueKey.channelID <= 0 {
+		entry.queueKey.channelID = GetCurrentChannelAffinitySelection(param.Ctx)
 	}
 	opencodeQueueMu.Lock()
 	entry.item.Position = len(opencodeQueue) + 1
@@ -85,9 +93,52 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 			}
 			if channel != nil {
 				removeOpencodeQueueEntryLocked(entry)
+				param.OpencodeConcurrencyReserved = true
 				param.OpencodeRPMReserved = true
 				opencodeQueueMu.Unlock()
 				return channel, group, nil
+			}
+
+			if entry.queueKey.channelID > 0 {
+				if GetPendingChannelAffinitySelection(param.Ctx) <= 0 && GetCurrentChannelAffinitySelection(param.Ctx) <= 0 {
+					entry.queueKey.channelID = 0
+				} else {
+					wake := opencodeQueueWake
+					opencodeQueueMu.Unlock()
+					timer := time.NewTimer(time.Second)
+					select {
+					case <-ctx.Done():
+						if !timer.Stop() {
+							<-timer.C
+						}
+						opencodeQueueMu.Lock()
+						removeOpencodeQueueEntryLocked(entry)
+						opencodeQueueMu.Unlock()
+						return nil, "", ctx.Err()
+					case <-wake:
+						if !timer.Stop() {
+							<-timer.C
+						}
+					case <-timer.C:
+					}
+					continue
+				}
+			}
+
+			// A code-provider channel can have quota remaining while every
+			// channel in this group is currently at its RPM limit. Do not make
+			// requests wait behind that queue when an ordinary channel can serve
+			// the same model in the same group.
+			fallbackChannel, fallbackGroup, fallbackErr := selectOrdinaryChannelFallback(param)
+			if fallbackErr != nil {
+				removeOpencodeQueueEntryLocked(entry)
+				opencodeQueueMu.Unlock()
+				return nil, "", fallbackErr
+			}
+			if fallbackChannel != nil {
+				removeOpencodeQueueEntryLocked(entry)
+				opencodeQueueMu.Unlock()
+				return fallbackChannel, fallbackGroup, nil
 			}
 
 			quotaParam := *param
@@ -124,6 +175,47 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 		case <-timer.C:
 		}
 	}
+}
+
+// TryReserveOpencodeAffinityChannel reserves the current affinity target
+// without entering the shared queue. A full concurrency limit returns fast=false so
+// the caller can keep the affinity target and use the normal queue.
+func TryReserveOpencodeAffinityChannel(param *RetryParam) (*model.Channel, string, bool, error) {
+	if param == nil || param.Ctx == nil {
+		return nil, "", false, nil
+	}
+	channel, group, err := selectQueuedAffinityCandidate(param)
+	if err != nil || channel == nil {
+		return nil, group, false, err
+	}
+	allowed, err := model.ReserveCodeProviderConcurrency(channel.Type, channel.Id)
+	if err != nil || !allowed {
+		return nil, group, false, err
+	}
+	param.OpencodeConcurrencyReserved = true
+	param.OpencodeRPMReserved = true
+	return channel, group, true, nil
+}
+
+func selectOrdinaryChannelFallback(param *RetryParam) (*model.Channel, string, error) {
+	selection := *param
+	selection.OpencodePool = false
+	selection.OpencodeIncludeRPMFull = false
+	selection.OpencodeRPMReserved = false
+	selection.OpencodeConcurrencyReserved = false
+	selection.ExcludeCodeProviderChannels = true
+	selection.AttemptedChannelIDs = copyChannelIDs(param.AttemptedChannelIDs)
+
+	channel, group, err := CacheGetRandomSatisfiedChannel(&selection)
+	if err != nil || channel == nil {
+		return channel, group, err
+	}
+	param.OpencodePool = false
+	param.OpencodeIncludeRPMFull = false
+	param.OpencodeRPMReserved = false
+	param.OpencodeConcurrencyReserved = false
+	param.ExcludeCodeProviderChannels = true
+	return channel, group, nil
 }
 
 func queueGroupForParam(param *RetryParam) string {
@@ -176,6 +268,16 @@ func newOpencodeQueueItem(param *RetryParam, inputTokens int) OpencodeQueueItem 
 }
 
 func tryReserveOpencodeChannel(param *RetryParam) (*model.Channel, string, error) {
+	if affinityChannel, group, err := selectQueuedAffinityCandidate(param); err != nil || affinityChannel != nil {
+		if err != nil || affinityChannel == nil {
+			return nil, group, err
+		}
+		allowed, err := model.ReserveCodeProviderConcurrency(affinityChannel.Type, affinityChannel.Id)
+		if err != nil || !allowed {
+			return nil, group, err
+		}
+		return affinityChannel, group, nil
+	}
 	selection := *param
 	selection.OpencodeIncludeRPMFull = false
 	selection.AttemptedChannelIDs = copyChannelIDs(param.AttemptedChannelIDs)
@@ -184,7 +286,7 @@ func tryReserveOpencodeChannel(param *RetryParam) (*model.Channel, string, error
 		if err != nil || channel == nil {
 			return channel, group, err
 		}
-		allowed, _, err := model.ReserveCodeProviderRPM(channel.Type, channel.Id, common.GetTimestamp())
+		allowed, err := model.ReserveCodeProviderConcurrency(channel.Type, channel.Id)
 		if err != nil {
 			return nil, group, err
 		}
@@ -251,8 +353,8 @@ func GetOpencodeQueueSnapshot() (*OpencodeQueueSnapshot, error) {
 			capacity.TotalCapacity += keyCapacity.TotalCapacity
 			capacity.AvailableCapacity += keyCapacity.AvailableCapacity
 			totalCapacity := keyCapacity.TotalCapacity
-			if totalCapacity < operation_setting.GetOpencodeRPMLimit() {
-				totalCapacity = operation_setting.GetOpencodeRPMLimit()
+			if totalCapacity < operation_setting.GetOpencodeConcurrencyLimit() {
+				totalCapacity = operation_setting.GetOpencodeConcurrencyLimit()
 			}
 			keyWaitMinutes := (count + totalCapacity - 1) / totalCapacity
 			if keyWaitMinutes < 1 {

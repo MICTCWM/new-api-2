@@ -568,7 +568,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
 
   // Localized operation text rendered from the language-independent op
   // descriptor (shared by audit type=3 and login type=7).
-  const operationText = renderAuditContent(other, t)
+  const operationText = renderAuditContent(
+    other,
+    t,
+    props.log.channel_name
+      ? { channel_name: props.log.channel_name }
+      : undefined
+  )
   const speedProtectionEvent =
     props.log.type === 4 ? other?.speed_protection : undefined
   let speedProtectionTrigger: string | undefined

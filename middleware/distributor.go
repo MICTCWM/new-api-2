@@ -104,82 +104,44 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				protectedParam := &service.RetryParam{
-					Ctx:                 c,
-					TokenGroup:          usingGroup,
-					ModelName:           modelRequest.Model,
-					RequestPath:         c.Request.URL.Path,
-					Retry:               common.GetPointer(0),
-					AttemptedChannelIDs: make(map[int]struct{}),
-					OpencodePool:        isCodeProviderModel,
-				}
-				protected, protectedGroup, protectedErr := service.GetSpeedProtectedChannel(protectedParam)
-				if protectedErr != nil {
-					abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
-					return
-				} else if protected != nil {
-					channel = protected
-					selectGroup = protectedGroup
-					common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
-				} else if isCodeProviderModel {
-					// A fixed Command/OpenCode model may also be configured on a
-					// normal OpenAI channel. Only fall back after the protected
-					// code-provider candidates are exhausted; code-provider routing
-					// and its queue remain unchanged while candidates exist.
-					protectedParam.OpencodePool = false
-					protected, protectedGroup, protectedErr = service.GetSpeedProtectedChannel(protectedParam)
-					if protectedErr != nil {
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
-						return
-					}
-					if protected != nil {
-						channel = protected
-						selectGroup = protectedGroup
-						common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
-					}
+				if affinityChannel, affinityGroup, affinityFound := selectAffinityChannel(c, modelRequest.Model, usingGroup); affinityFound {
+					channel = affinityChannel
+					selectGroup = affinityGroup
 				}
 
 				if channel == nil {
-					if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
-						affinityUsable := false
-						preferred, err := model.CacheGetChannel(preferredChannelID)
-						if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-							channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
-							if preferred.Type == constant.ChannelTypeOpencode || preferred.Type == constant.ChannelTypeCommand {
-								capacity, capacityErr := model.CodeProviderChannelHasCapacity(preferred, modelRequest.Model, time.Now().Unix(), true)
-								if capacityErr != nil || !capacity {
-									preferred = nil
-								}
-							}
+					protectedParam := &service.RetryParam{
+						Ctx:                 c,
+						TokenGroup:          usingGroup,
+						ModelName:           modelRequest.Model,
+						RequestPath:         c.Request.URL.Path,
+						Retry:               common.GetPointer(0),
+						AttemptedChannelIDs: make(map[int]struct{}),
+						OpencodePool:        isCodeProviderModel,
+					}
+					protected, protectedGroup, protectedErr := service.GetSpeedProtectedChannel(protectedParam)
+					if protectedErr != nil {
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
+						return
+					} else if protected != nil {
+						channel = protected
+						selectGroup = protectedGroup
+						common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
+					} else if isCodeProviderModel {
+						// A fixed Command/OpenCode model may also be configured on a
+						// normal OpenAI channel. Only fall back after the protected
+						// code-provider candidates are exhausted; code-provider routing
+						// and its queue remain unchanged while candidates exist.
+						protectedParam.OpencodePool = false
+						protected, protectedGroup, protectedErr = service.GetSpeedProtectedChannel(protectedParam)
+						if protectedErr != nil {
+							abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
+							return
 						}
-						if preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-							channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
-							if usingGroup == "auto" {
-								userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-								autoGroups := service.GetRequestAutoGroups(c, userGroup)
-								for _, g := range autoGroups {
-									kicked, kickErr := model.IsSpeedProtectionChannelKicked(preferred, g)
-									if kickErr != nil || kicked {
-										continue
-									}
-									if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
-										selectGroup = g
-										common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
-										channel = preferred
-										affinityUsable = true
-										service.MarkChannelAffinityUsed(c, g, preferred.Id)
-										break
-									}
-								}
-							} else if kicked, kickErr := model.IsSpeedProtectionChannelKicked(preferred, usingGroup); kickErr == nil && !kicked && model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
-								channel = preferred
-								selectGroup = usingGroup
-								affinityUsable = true
-								service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
-							}
-						}
-						if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
-							service.ClearCurrentChannelAffinityCache(c)
+						if protected != nil {
+							channel = protected
+							selectGroup = protectedGroup
+							common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
 						}
 					}
 				}
@@ -228,6 +190,78 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func selectAffinityChannel(c *gin.Context, modelName string, usingGroup string) (*model.Channel, string, bool) {
+	preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelName, usingGroup)
+	if !found {
+		return nil, "", false
+	}
+
+	preferred, err := model.CacheGetChannel(preferredChannelID)
+	keepAffinityCache := false
+	rateLimitedAffinity := false
+	if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+		channelSupportsRequestPath(preferred, c.Request.URL.Path, modelName) {
+		if preferred.Type == constant.ChannelTypeOpencode || preferred.Type == constant.ChannelTypeCommand {
+			quotaAvailable, quotaErr := model.CodeProviderChannelHasCapacity(preferred, modelName, time.Now().Unix(), false)
+			if quotaErr != nil || !quotaAvailable {
+				preferred = nil
+			} else {
+				capacity, capacityErr := model.CodeProviderChannelHasCapacity(preferred, modelName, time.Now().Unix(), true)
+				if capacityErr != nil {
+					preferred = nil
+				} else if !capacity {
+					preferred = nil
+					keepAffinityCache = true
+					rateLimitedAffinity = true
+					service.MarkChannelAffinityPending(c, usingGroup, preferredChannelID)
+				}
+			}
+		} else {
+			capacity, capacityErr := model.ChannelHasRPMCapacity(preferred, time.Now().Unix())
+			if capacityErr != nil {
+				preferred = nil
+			} else if !capacity {
+				preferred = nil
+				keepAffinityCache = true
+			}
+		}
+	}
+	if rateLimitedAffinity {
+		preferred, err = model.CacheGetChannel(preferredChannelID)
+	}
+	if preferred == nil || preferred.Status != common.ChannelStatusEnabled ||
+		!channelSupportsRequestPath(preferred, c.Request.URL.Path, modelName) {
+		if !keepAffinityCache && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
+			service.ClearCurrentChannelAffinityCache(c)
+		}
+		return nil, "", false
+	}
+
+	if usingGroup == "auto" {
+		userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+		for _, group := range service.GetRequestAutoGroups(c, userGroup) {
+			kicked, kickErr := model.IsSpeedProtectionChannelKicked(preferred, group)
+			if kickErr != nil || kicked || !model.IsChannelEnabledForGroupModel(group, modelName, preferred.Id) {
+				continue
+			}
+			common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
+			service.MarkChannelAffinityUsed(c, group, preferred.Id)
+			return preferred, group, true
+		}
+	} else {
+		kicked, kickErr := model.IsSpeedProtectionChannelKicked(preferred, usingGroup)
+		if kickErr == nil && !kicked && model.IsChannelEnabledForGroupModel(usingGroup, modelName, preferred.Id) {
+			service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
+			return preferred, usingGroup, true
+		}
+	}
+
+	if !service.ShouldKeepChannelAffinityOnChannelDisabled() {
+		service.ClearCurrentChannelAffinityCache(c)
+	}
+	return nil, "", false
 }
 
 // channelSupportsRequestPath reports whether a channel can serve the request path.

@@ -425,3 +425,38 @@ func TestOpencodeUsageSnapshotClampsCorruptCounters(t *testing.T) {
 	require.Equal(t, int64(0), usage.Pool.UsedMicroUSD)
 	require.Equal(t, 0, usage.RPMCount)
 }
+
+func TestOpencodeConcurrencyLimitUsesActiveRequestsAndExplicitRelease(t *testing.T) {
+	useOpencodeUsageDB(t)
+	previousLimit := operation_setting.GetOpencodeConcurrencyLimit()
+	t.Cleanup(func() {
+		require.NoError(t, operation_setting.SetOpencodeConcurrencyLimit(strconv.Itoa(previousLimit)))
+	})
+	require.NoError(t, operation_setting.SetOpencodeConcurrencyLimit("2"))
+
+	allowed, err := ReserveOpencodeConcurrency(701)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	allowed, err = ReserveOpencodeConcurrency(701)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	allowed, err = ReserveOpencodeConcurrency(701)
+	require.NoError(t, err)
+	require.False(t, allowed)
+
+	snapshot, err := GetOpencodeUsageSnapshot(701, time.Now().Unix()+120)
+	require.NoError(t, err)
+	require.Equal(t, 2, snapshot.ConcurrencyCount)
+	require.Equal(t, 2, snapshot.ConcurrencyLimit)
+
+	require.NoError(t, ReleaseOpencodeConcurrency(701))
+	allowed, err = ReserveOpencodeConcurrency(701)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	require.NoError(t, ReleaseOpencodeConcurrency(701))
+	require.NoError(t, ReleaseOpencodeConcurrency(701))
+
+	snapshot, err = GetOpencodeUsageSnapshot(701, time.Now().Unix())
+	require.NoError(t, err)
+	require.Zero(t, snapshot.ConcurrencyCount)
+}

@@ -342,7 +342,13 @@ export type OperationsSettings = {
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean
-  OpencodeRPMLimit: number
+  OpencodeConcurrencyLimit: number
+  AutoScalingEnabled: boolean
+  AutoScalingRPMLimit: number
+  AutoScalingCooldownMinutes: number
+  AutoScalingToken: string
+  AutoScalingChannelIDs: string
+  AutoScalingInstanceIDs: string
   QuotaRemindThreshold: string
   SMTPServer: string
   SMTPPort: string

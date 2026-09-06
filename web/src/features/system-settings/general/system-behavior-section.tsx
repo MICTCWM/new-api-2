@@ -42,15 +42,22 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { AutoScalingFields } from './auto-scaling-fields'
 
 const behaviorSchema = z.object({
   DefaultCollapseSidebar: z.boolean(),
   DemoSiteEnabled: z.boolean(),
   SelfUseModeEnabled: z.boolean(),
-  OpencodeRPMLimit: z.number().int().min(1).max(1000),
+  OpencodeConcurrencyLimit: z.number().int().min(1).max(1000),
+  AutoScalingEnabled: z.boolean(),
+  AutoScalingRPMLimit: z.number().int().min(1),
+  AutoScalingCooldownMinutes: z.number().int().min(1).max(1440),
+  AutoScalingToken: z.string(),
+  AutoScalingChannelIDs: z.string(),
+  AutoScalingInstanceIDs: z.string(),
 })
 
-type BehaviorFormValues = z.infer<typeof behaviorSchema>
+export type BehaviorFormValues = z.infer<typeof behaviorSchema>
 
 type SystemBehaviorSectionProps = {
   defaultValues: BehaviorFormValues
@@ -152,12 +159,12 @@ export function SystemBehaviorSection({
 
           <FormField
             control={form.control}
-            name='OpencodeRPMLimit'
+            name='OpencodeConcurrencyLimit'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('OpenCode RPM per channel')}</FormLabel>
+                <FormLabel>{t('OpenCode concurrency per channel')}</FormLabel>
                 <FormDescription>
-                  {t('Maximum requests per minute for each OpenCode channel')}
+                  {t('Maximum simultaneous requests for each OpenCode channel')}
                 </FormDescription>
                 <FormControl>
                   <Input
@@ -178,6 +185,7 @@ export function SystemBehaviorSection({
               </FormItem>
             )}
           />
+          <AutoScalingFields control={form.control} />
         </SettingsForm>
       </Form>
     </SettingsSection>
