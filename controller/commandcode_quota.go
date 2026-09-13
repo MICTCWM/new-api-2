@@ -70,5 +70,10 @@ func GetCommandcodeChannelQuota(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	// 每次额度查询即一次校准：小时/周/月窗口以上游为准（尽力而为，
+	// 校准失败不影响本次查询结果）。
+	if _, calibErr := service.CalibrateCommandChannelWithClient(c.Request.Context(), ch, client, time.Now().UTC(), true); calibErr != nil {
+		common.SysError("command usage calibration failed: " + calibErr.Error())
+	}
 	common.ApiSuccess(c, report)
 }

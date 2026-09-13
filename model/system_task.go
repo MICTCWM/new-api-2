@@ -19,6 +19,7 @@ const (
 	SystemTaskTypeLogCleanup      = "log_cleanup"
 	SystemTaskTypeChannelTest     = "channel_test"
 	SystemTaskTypeOpencodeUsage   = "opencode_usage_calibration"
+	SystemTaskTypeCommandUsage    = "command_usage_calibration"
 	SystemTaskTypeSpeedProtection = "speed_protection"
 	SystemTaskTypeModelUpdate     = "model_update"
 	SystemTaskTypeMidjourneyPoll  = "midjourney_poll"

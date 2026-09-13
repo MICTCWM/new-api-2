@@ -21,9 +21,10 @@ const (
 	CanonicalURL = BaseURL + "/chat/completions"
 	Model        = "deepseek/deepseek-v4-flash"
 	ProModel     = "deepseek/deepseek-v4-pro"
+	V41Model     = "deepseek/deepseek-v4.1-flash"
 )
 
-var ModelList = []string{Model, ProModel}
+var ModelList = []string{Model, ProModel, V41Model}
 
 var ChannelName = "command"
 
@@ -59,7 +60,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	}
 	isModelMapped := info != nil && info.ChannelMeta != nil && info.ChannelMeta.IsModelMapped
 	if !isModelMapped {
-		if request.Model != "" && request.Model != Model && request.Model != ProModel {
+		if request.Model != "" && request.Model != Model && request.Model != ProModel && request.Model != V41Model {
 			return nil, types.NewError(errors.New("command channel: unsupported model"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
 		if request.Model == "" {

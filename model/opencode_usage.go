@@ -137,10 +137,18 @@ type CodeProviderUsageOverride struct {
 	PeakPoolUsedMicroUSD    *int64 // deprecated for OpenCode
 	OffPeakPoolUsedMicroUSD *int64 // deprecated for OpenCode
 	FlashPoolUsedMicroUSD   *int64
+	V41PoolUsedMicroUSD     *int64
 	ProPoolUsedMicroUSD     *int64
 }
 
+// IsOpencodePeak 报告 t 是否处于 DeepSeek 系模型（V4.1 Flash / V4 Pro / V4
+// Flash / V4 Flash Vision Exp）的 Peak 时段：周一至周五的 01:00-04:00 与
+// 06:00-10:00（UTC），周末全天 Off-Peak。
 func IsOpencodePeak(t time.Time) bool {
+	weekday := t.UTC().Weekday()
+	if weekday == time.Saturday || weekday == time.Sunday {
+		return false
+	}
 	hour := t.UTC().Hour()
 	return (hour >= 1 && hour < 4) || (hour >= 6 && hour < 10)
 }
@@ -858,7 +866,7 @@ func channelSupportsCodeProviderModel(channel *Channel, modelName string) bool {
 			return true
 		}
 	case constant.ChannelTypeCommand:
-		if modelName == CommandFlashModel || modelName == CommandProModel {
+		if modelName == CommandFlashModel || modelName == CommandProModel || modelName == CommandV41FlashModel {
 			return true
 		}
 	default:
@@ -877,7 +885,7 @@ func channelSupportsCodeProviderModel(channel *Channel, modelName string) bool {
 // they do not bypass the provider-specific quota checks.
 func IsCodeProviderModel(modelName string) bool {
 	modelName = strings.TrimSpace(modelName)
-	if IsOpencodeNativeModel(modelName) || modelName == CommandFlashModel || modelName == CommandProModel {
+	if IsOpencodeNativeModel(modelName) || modelName == CommandFlashModel || modelName == CommandProModel || modelName == CommandV41FlashModel {
 		return true
 	}
 	if DB == nil || modelName == "" || !DB.Migrator().HasTable("channels") {

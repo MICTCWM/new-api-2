@@ -90,7 +90,11 @@ import {
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
-import type { Channel, CommandUsageSnapshot } from '../types'
+import type {
+  Channel,
+  CommandUsageSnapshot,
+  OpencodeUsageWindow,
+} from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
@@ -408,19 +412,41 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
   let poolWindows
   if (isCommand) {
     if (commandUsage?.split_pools) {
-      poolWindows = [
-        [
+      poolWindows = [] as [string, OpencodeUsageWindow, string][]
+      if (commandUsage.flash_pool_active !== false) {
+        poolWindows.push([
           t('Flash pool'),
           commandUsage.flash_pool ?? commandUsage.pool,
           'flash',
-        ],
-        [t('Pro pool'), commandUsage.pro_pool ?? commandUsage.pool, 'pro'],
-      ] as const
+        ])
+      }
+      if (commandUsage.v41_pool_active) {
+        poolWindows.push([
+          t('4.1 pool'),
+          commandUsage.v41_pool ?? commandUsage.pool,
+          'v41',
+        ])
+      }
+      if (commandUsage.pro_pool_active !== false) {
+        poolWindows.push([
+          t('Pro pool'),
+          commandUsage.pro_pool ?? commandUsage.pool,
+          'pro',
+        ])
+      }
     } else {
-      poolWindows = [[t('Total pool'), usage.pool, 'combined']] as const
+      poolWindows = [[t('Total pool'), usage.pool, 'combined']] as [
+        string,
+        OpencodeUsageWindow,
+        string,
+      ][]
     }
   } else {
-    poolWindows = [[t('Total pool'), usage.pool, 'combined']] as const
+    poolWindows = [[t('Total pool'), usage.pool, 'combined']] as [
+      string,
+      OpencodeUsageWindow,
+      string,
+    ][]
   }
   return (
     <div className='flex min-w-52 items-center gap-2'>

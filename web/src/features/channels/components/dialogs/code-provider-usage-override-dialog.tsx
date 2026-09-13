@@ -49,6 +49,7 @@ type UsageField =
   | 'peak_pool_used_usd'
   | 'off_peak_pool_used_usd'
   | 'flash_pool_used_usd'
+  | 'v41_pool_used_usd'
   | 'pro_pool_used_usd'
 
 type UsageForm = Record<UsageField, string>
@@ -61,6 +62,7 @@ const emptyUsageForm: UsageForm = {
   peak_pool_used_usd: '0',
   off_peak_pool_used_usd: '0',
   flash_pool_used_usd: '0',
+  v41_pool_used_usd: '0',
   pro_pool_used_usd: '0',
 }
 
@@ -76,6 +78,7 @@ function getUsageWindowValue(data: {
   peak_pool?: OpencodeUsageWindow
   off_peak_pool?: OpencodeUsageWindow
   flash_pool?: OpencodeUsageWindow
+  v41_pool?: OpencodeUsageWindow
   pro_pool?: OpencodeUsageWindow
 }): UsageForm {
   return {
@@ -86,6 +89,7 @@ function getUsageWindowValue(data: {
     peak_pool_used_usd: formatUsageValue(data.peak_pool),
     off_peak_pool_used_usd: formatUsageValue(data.off_peak_pool),
     flash_pool_used_usd: formatUsageValue(data.flash_pool),
+    v41_pool_used_usd: formatUsageValue(data.v41_pool),
     pro_pool_used_usd: formatUsageValue(data.pro_pool),
   }
 }
@@ -107,6 +111,11 @@ export function CodeProviderUsageOverrideDialog({
   const [errorMessage, setErrorMessage] = useState('')
   const [fields, setFields] = useState<UsageForm>(emptyUsageForm)
   const [splitPools, setSplitPools] = useState(false)
+  const [activePools, setActivePools] = useState<{
+    flash: boolean
+    v41: boolean
+    pro: boolean
+  }>({ flash: true, v41: false, pro: true })
 
   const isCodeProvider =
     currentRow?.type === CHANNEL_TYPE_COMMAND ||
@@ -138,6 +147,17 @@ export function CodeProviderUsageOverrideDialog({
             response.data.split_pools
           )
         )
+        setActivePools({
+          flash:
+            !('flash_pool_active' in response.data) ||
+            Boolean(response.data.flash_pool_active),
+          v41:
+            'v41_pool_active' in response.data &&
+            Boolean(response.data.v41_pool_active),
+          pro:
+            !('pro_pool_active' in response.data) ||
+            Boolean(response.data.pro_pool_active),
+        })
       } catch (error) {
         if (cancelled) return
         setErrorMessage(
@@ -167,14 +187,18 @@ export function CodeProviderUsageOverrideDialog({
   }
 
   const handleSave = async () => {
+    const poolFields: UsageField[] = []
+    if (isCommand && splitPools) {
+      if (activePools.flash) poolFields.push('flash_pool_used_usd')
+      if (activePools.v41) poolFields.push('v41_pool_used_usd')
+      if (activePools.pro) poolFields.push('pro_pool_used_usd')
+    }
     const requiredFields: UsageField[] = [
       'five_hour_used_usd',
       'week_used_usd',
       'month_used_usd',
       'pool_used_usd',
-      ...(isCommand && splitPools
-        ? (['flash_pool_used_usd', 'pro_pool_used_usd'] as UsageField[])
-        : []),
+      ...poolFields,
     ]
     const values = new Map<UsageField, number>()
     for (const field of requiredFields) {
@@ -188,14 +212,15 @@ export function CodeProviderUsageOverrideDialog({
 
     const microAmount = (field: UsageField) =>
       Math.round((values.get(field) ?? 0) * 1_000_000)
-    if (
-      isCommand &&
-      splitPools &&
-      microAmount('pool_used_usd') !==
-        microAmount('flash_pool_used_usd') + microAmount('pro_pool_used_usd')
-    ) {
-      setErrorMessage(t('Total pool must equal Flash and Pro pool usage'))
-      return
+    if (isCommand && splitPools) {
+      const poolSum = poolFields.reduce(
+        (sum, field) => sum + microAmount(field),
+        0
+      )
+      if (microAmount('pool_used_usd') !== poolSum) {
+        setErrorMessage(t('Total pool must equal the enabled model pool usage'))
+        return
+      }
     }
 
     const valueFor = (field: UsageField) => values.get(field) ?? 0
@@ -207,8 +232,15 @@ export function CodeProviderUsageOverrideDialog({
     if (isCommand) {
       data.pool_used_usd = valueFor('pool_used_usd')
       if (splitPools) {
-        data.flash_pool_used_usd = valueFor('flash_pool_used_usd')
-        data.pro_pool_used_usd = valueFor('pro_pool_used_usd')
+        if (activePools.flash) {
+          data.flash_pool_used_usd = valueFor('flash_pool_used_usd')
+        }
+        if (activePools.v41) {
+          data.v41_pool_used_usd = valueFor('v41_pool_used_usd')
+        }
+        if (activePools.pro) {
+          data.pro_pool_used_usd = valueFor('pro_pool_used_usd')
+        }
       }
     } else {
       data.pool_used_usd = valueFor('pool_used_usd')
@@ -309,10 +341,13 @@ export function CodeProviderUsageOverrideDialog({
             {renderField('week_used_usd', 'Weekly used')}
             {renderField('month_used_usd', 'Monthly used')}
             {renderField('pool_used_usd', 'Total pool used')}
-            {isCommand && splitPools
+            {isCommand && splitPools && activePools.flash
               ? renderField('flash_pool_used_usd', 'Flash pool used')
               : null}
-            {isCommand && splitPools
+            {isCommand && splitPools && activePools.v41
+              ? renderField('v41_pool_used_usd', '4.1 pool used')
+              : null}
+            {isCommand && splitPools && activePools.pro
               ? renderField('pro_pool_used_usd', 'Pro pool used')
               : null}
           </div>

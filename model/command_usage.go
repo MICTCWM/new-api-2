@@ -18,6 +18,7 @@ import (
 const (
 	CommandFlashModel                      = "deepseek/deepseek-v4-flash"
 	CommandProModel                        = "deepseek/deepseek-v4-pro"
+	CommandV41FlashModel                   = "deepseek/deepseek-v4.1-flash"
 	CommandModel                           = CommandFlashModel
 	CommandFiveHourLimitMicroUSD     int64 = 14_000_000
 	CommandWeekLimitMicroUSD         int64 = 35_000_000
@@ -25,13 +26,42 @@ const (
 	CommandCombinedPoolLimitMicroUSD int64 = 60_000_000
 	CommandFlashPoolLimitMicroUSD    int64 = 50_000_000
 	CommandProPoolLimitMicroUSD      int64 = 20_000_000
+	// CommandV41PoolLimitMicroUSD 是 v4.1-flash 专用池（4.1 池）额度。
+	CommandV41PoolLimitMicroUSD int64 = 40_000_000
 	// CommandPoolLimitMicroUSD is the legacy single-model pool limit.
 	CommandPoolLimitMicroUSD        = CommandCombinedPoolLimitMicroUSD
 	CommandMinimumRemainingMicroUSD = 200_000
 	CommandPoolKeyPrefix            = "command"
 	CommandFlashPoolKeySuffix       = "flash"
 	CommandProPoolKeySuffix         = "pro"
+	CommandV41PoolKeySuffix         = "v41"
 )
+
+// commandModelPricing 是一个 Command 上游模型在某计费时段的
+// 输入/输出/缓存命中单价（USD / 百万 token）。
+type commandModelPricing struct {
+	input  string
+	output string
+	cache  string
+}
+
+var commandModelPricingTable = map[string]struct {
+	offPeak commandModelPricing
+	peak    commandModelPricing
+}{
+	CommandFlashModel: {
+		offPeak: commandModelPricing{input: "0.22", output: "0.66", cache: "0.007"},
+		peak:    commandModelPricing{input: "0.44", output: "1.32", cache: "0.014"},
+	},
+	CommandV41FlashModel: {
+		offPeak: commandModelPricing{input: "0.15", output: "0.60", cache: "0.003"},
+		peak:    commandModelPricing{input: "0.30", output: "1.20", cache: "0.006"},
+	},
+	CommandProModel: {
+		offPeak: commandModelPricing{input: "0.66", output: "1.98", cache: "0.022"},
+		peak:    commandModelPricing{input: "1.32", output: "3.96", cache: "0.044"},
+	},
+}
 
 type CommandChannelUsage struct {
 	ID               int   `json:"id"`
@@ -48,6 +78,10 @@ type CommandChannelUsage struct {
 	// QuotaDisabledUntil identifies an automatic disable caused by the rolling
 	// quota windows. A zero value means this channel is not quota-disabled.
 	QuotaDisabledUntil int64 `json:"quota_disabled_until" gorm:"index"`
+	// 校准（commandcode.ai 额度查询）登记：下次到期时间、最近尝试与错误。
+	LastCalibrationAttemptAt int64  `json:"last_calibration_attempt_at"`
+	NextCalibrationAt        int64  `json:"next_calibration_at"`
+	CalibrationLastError     string `json:"calibration_last_error"`
 }
 
 type CommandPoolUsage struct {
@@ -58,24 +92,30 @@ type CommandPoolUsage struct {
 }
 
 type CommandUsageSnapshot struct {
-	ChannelID                   int                 `json:"channel_id"`
-	FiveHour                    OpencodeUsageWindow `json:"five_hour"`
-	Week                        OpencodeUsageWindow `json:"week"`
-	Month                       OpencodeUsageWindow `json:"month"`
-	Pool                        OpencodeUsageWindow `json:"pool"`
-	FlashPool                   OpencodeUsageWindow `json:"flash_pool"`
-	ProPool                     OpencodeUsageWindow `json:"pro_pool"`
-	SplitPools                  bool                `json:"split_pools"`
-	PricingPeriod               string              `json:"pricing_period"`
-	RPMCount                    int                 `json:"rpm_count"`
-	RPMLimit                    int                 `json:"rpm_limit"`
-	RPMResetAt                  int64               `json:"rpm_reset_at"`
-	AffinityReservedRPM         int                 `json:"affinity_reserved_rpm"`
-	AvailableRPM                int                 `json:"available_rpm"`
-	ConcurrencyCount            int                 `json:"concurrency_count"`
-	ConcurrencyLimit            int                 `json:"concurrency_limit"`
-	AffinityReservedConcurrency int                 `json:"affinity_reserved_concurrency"`
-	AvailableConcurrency        int                 `json:"available_concurrency"`
+	ChannelID  int                 `json:"channel_id"`
+	FiveHour   OpencodeUsageWindow `json:"five_hour"`
+	Week       OpencodeUsageWindow `json:"week"`
+	Month      OpencodeUsageWindow `json:"month"`
+	Pool       OpencodeUsageWindow `json:"pool"`
+	FlashPool  OpencodeUsageWindow `json:"flash_pool"`
+	V41Pool    OpencodeUsageWindow `json:"v41_pool"`
+	ProPool    OpencodeUsageWindow `json:"pro_pool"`
+	SplitPools bool                `json:"split_pools"`
+	// *_pool_active 标记该模型池是否随当前渠道模型列表启用，
+	// 前端只展示启用的池。
+	FlashPoolActive             bool   `json:"flash_pool_active"`
+	V41PoolActive               bool   `json:"v41_pool_active"`
+	ProPoolActive               bool   `json:"pro_pool_active"`
+	PricingPeriod               string `json:"pricing_period"`
+	RPMCount                    int    `json:"rpm_count"`
+	RPMLimit                    int    `json:"rpm_limit"`
+	RPMResetAt                  int64  `json:"rpm_reset_at"`
+	AffinityReservedRPM         int    `json:"affinity_reserved_rpm"`
+	AvailableRPM                int    `json:"available_rpm"`
+	ConcurrencyCount            int    `json:"concurrency_count"`
+	ConcurrencyLimit            int    `json:"concurrency_limit"`
+	AffinityReservedConcurrency int    `json:"affinity_reserved_concurrency"`
+	AvailableConcurrency        int    `json:"available_concurrency"`
 }
 
 func CommandPoolKey(channelID int) string {
@@ -90,12 +130,18 @@ func CommandProPoolKey(channelID int) string {
 	return fmt.Sprintf("%s:%d:%s", CommandPoolKeyPrefix, channelID, CommandProPoolKeySuffix)
 }
 
-func commandChannelUsesSplitPools(channel *Channel) bool {
-	if channel == nil || channel.Type != constant.ChannelTypeCommand {
+func CommandV41PoolKey(channelID int) string {
+	return fmt.Sprintf("%s:%d:%s", CommandPoolKeyPrefix, channelID, CommandV41PoolKeySuffix)
+}
+
+// commandChannelServesModel 报告渠道是否以该上游模型计费：模型在模型列表中，
+// 或某个模型映射的解析目标命中该模型。
+func commandChannelServesModel(channel *Channel, targetModel string) bool {
+	if channel == nil {
 		return false
 	}
 	for _, modelName := range channel.GetModels() {
-		if strings.TrimSpace(modelName) == CommandProModel {
+		if strings.TrimSpace(modelName) == targetModel {
 			return true
 		}
 	}
@@ -103,13 +149,32 @@ func commandChannelUsesSplitPools(channel *Channel) bool {
 	if raw := strings.TrimSpace(channel.GetModelMapping()); raw != "" {
 		if common.UnmarshalJsonStr(raw, &mapping) == nil {
 			for sourceModel := range mapping {
-				if ResolveCommandModel(channel, sourceModel) == CommandProModel {
+				if ResolveCommandModel(channel, sourceModel) == targetModel {
 					return true
 				}
 			}
 		}
 	}
 	return false
+}
+
+// commandChannelUsesSplitPools 报告渠道是否启用模型分池：渠道可以服务
+// v4-pro 或 v4.1-flash（两者绑定出现）时，按模型拆分额度池。
+func commandChannelUsesSplitPools(channel *Channel) bool {
+	if channel == nil || channel.Type != constant.ChannelTypeCommand {
+		return false
+	}
+	return commandChannelServesModel(channel, CommandProModel) ||
+		commandChannelServesModel(channel, CommandV41FlashModel)
+}
+
+// commandChannelPoolStats 描述一个已启用的模型池。
+type commandChannelPoolStats struct {
+	active    bool
+	key       string
+	limit     int64
+	used      int64
+	resetTime int64
 }
 
 func CommandChannelUsesSplitPools(channelID int) (bool, error) {
@@ -122,7 +187,8 @@ func CommandChannelUsesSplitPools(channelID int) (bool, error) {
 
 // ResolveCommandModel follows a channel's model mapping to determine which
 // upstream model is billed. Unknown mapped targets intentionally fall back to
-// Flash pricing because Command only has a separate pool for the Pro model.
+// Flash pricing because each Command model has its own dedicated pool only
+// when the channel serves several Command models.
 func ResolveCommandModel(channel *Channel, modelName string) string {
 	currentModel := strings.TrimSpace(modelName)
 	if currentModel == "" {
@@ -150,14 +216,28 @@ func ResolveCommandModel(channel *Channel, modelName string) string {
 	return currentModel
 }
 
+// commandPoolForModel 返回某请求应计入的模型池及其限额：
+// v4.1-flash → 4.1 池（$40）；v4-pro → 4p 池（$20）；
+// v4-flash 在分池渠道计入 flash 池（$50），单模型渠道走合并总池（$60）。
+// channel 必须非 nil（调用方保证）。
 func commandPoolForModel(channel *Channel, modelName string) (string, int64) {
-	if !commandChannelUsesSplitPools(channel) {
-		return CommandPoolKey(channel.Id), CommandCombinedPoolLimitMicroUSD
+	resolved := ResolveCommandModel(channel, modelName)
+	if commandChannelUsesSplitPools(channel) {
+		switch resolved {
+		case CommandV41FlashModel:
+			return CommandV41PoolKey(channel.Id), CommandV41PoolLimitMicroUSD
+		case CommandProModel:
+			return CommandProPoolKey(channel.Id), CommandProPoolLimitMicroUSD
+		}
+		return CommandFlashPoolKey(channel.Id), CommandFlashPoolLimitMicroUSD
 	}
-	if ResolveCommandModel(channel, modelName) == CommandProModel {
+	switch resolved {
+	case CommandV41FlashModel:
+		return CommandV41PoolKey(channel.Id), CommandV41PoolLimitMicroUSD
+	case CommandProModel:
 		return CommandProPoolKey(channel.Id), CommandProPoolLimitMicroUSD
 	}
-	return CommandFlashPoolKey(channel.Id), CommandFlashPoolLimitMicroUSD
+	return CommandPoolKey(channel.Id), CommandCombinedPoolLimitMicroUSD
 }
 
 func CommandChannelHasCapacity(channelID int, now int64) (bool, error) {
@@ -255,18 +335,22 @@ func commandChannelHasQuotaCapacity(channel *Channel, channelID int, modelName s
 		remainingOpencode(pool.Used, poolLimit) > CommandMinimumRemainingMicroUSD, nil
 }
 
+// CommandChannelHasAnyQuotaCapacity 报告渠道是否还有任一启用模型的额度：
+// 任一模型池（flash/4.1/4p）未耗尽即视为有容量，供候选渠道过滤使用。
 func CommandChannelHasAnyQuotaCapacity(channel *Channel, now int64) (bool, error) {
 	if channel == nil {
 		return false, errors.New("command channel is missing")
 	}
-	if !commandChannelUsesSplitPools(channel) {
-		return CommandChannelHasQuotaCapacityForModel(channel, CommandFlashModel, now)
+	for _, target := range []string{CommandFlashModel, CommandV41FlashModel, CommandProModel} {
+		if !commandChannelServesModel(channel, target) {
+			continue
+		}
+		available, err := CommandChannelHasQuotaCapacityForModel(channel, target, now)
+		if err != nil || available {
+			return available, err
+		}
 	}
-	flashAvailable, err := CommandChannelHasQuotaCapacityForModel(channel, CommandFlashModel, now)
-	if err != nil || flashAvailable {
-		return flashAvailable, err
-	}
-	return CommandChannelHasQuotaCapacityForModel(channel, CommandProModel, now)
+	return false, nil
 }
 
 func CalculateCommandCostMicroUSD(usage *dto.Usage, now time.Time) (int64, error) {
@@ -288,25 +372,18 @@ func CalculateCommandCostMicroUSDForModel(usage *dto.Usage, modelName string, no
 		cached = prompt
 	}
 	uncached := prompt - cached
-	inputPrice := decimal.RequireFromString("0.22")
-	outputPrice := decimal.RequireFromString("0.66")
-	cachePrice := decimal.RequireFromString("0.007")
-	if modelName == CommandProModel {
-		inputPrice = decimal.RequireFromString("0.66")
-		outputPrice = decimal.RequireFromString("1.98")
-		cachePrice = decimal.RequireFromString("0.022")
+	pricing, ok := commandModelPricingTable[modelName]
+	if !ok {
+		// 未知模型按 Flash 计价兜底（映射解析结果由上游保证）。
+		pricing = commandModelPricingTable[CommandFlashModel]
 	}
+	rates := pricing.offPeak
 	if IsOpencodePeak(now) {
-		if modelName == CommandProModel {
-			inputPrice = decimal.RequireFromString("1.32")
-			outputPrice = decimal.RequireFromString("3.96")
-			cachePrice = decimal.RequireFromString("0.044")
-		} else {
-			inputPrice = decimal.RequireFromString("0.44")
-			outputPrice = decimal.RequireFromString("1.32")
-			cachePrice = decimal.RequireFromString("0.014")
-		}
+		rates = pricing.peak
 	}
+	inputPrice := decimal.RequireFromString(rates.input)
+	outputPrice := decimal.RequireFromString(rates.output)
+	cachePrice := decimal.RequireFromString(rates.cache)
 	costMicroUSD := decimal.NewFromInt(uncached).Mul(inputPrice).
 		Add(decimal.NewFromInt(completion).Mul(outputPrice)).
 		Add(decimal.NewFromInt(cached).Mul(cachePrice))
@@ -393,7 +470,7 @@ func SetCommandUsageOverride(channelID int, override CodeProviderUsageOverride, 
 	splitPools := commandChannelUsesSplitPools(channel)
 	poolLimit := CommandCombinedPoolLimitMicroUSD
 	if splitPools {
-		poolLimit = CommandFlashPoolLimitMicroUSD + CommandProPoolLimitMicroUSD
+		poolLimit = CommandFlashPoolLimitMicroUSD + CommandV41PoolLimitMicroUSD + CommandProPoolLimitMicroUSD
 	}
 	if err := validateCodeProviderUsageOverride(override, CommandFiveHourLimitMicroUSD, CommandWeekLimitMicroUSD, CommandMonthLimitMicroUSD); err != nil {
 		return err
@@ -402,14 +479,45 @@ func SetCommandUsageOverride(channelID int, override CodeProviderUsageOverride, 
 		return errors.New("command pool usage exceeds the limit")
 	}
 	if splitPools {
-		if override.FlashPoolUsedMicroUSD == nil || override.ProPoolUsedMicroUSD == nil {
-			return errors.New("command flash and pro pool usage are required")
+		hasFlash := commandChannelServesModel(channel, CommandFlashModel)
+		hasV41 := commandChannelServesModel(channel, CommandV41FlashModel)
+		hasPro := commandChannelServesModel(channel, CommandProModel)
+		// 启用的模型池必须提供用量；未启用的池不允许传值。
+		if hasFlash && override.FlashPoolUsedMicroUSD == nil {
+			return errors.New("command flash pool usage is required")
 		}
-		if *override.FlashPoolUsedMicroUSD < 0 || *override.FlashPoolUsedMicroUSD > CommandFlashPoolLimitMicroUSD ||
-			*override.ProPoolUsedMicroUSD < 0 || *override.ProPoolUsedMicroUSD > CommandProPoolLimitMicroUSD {
-			return errors.New("command model pool usage exceeds the limit")
+		if hasV41 && override.V41PoolUsedMicroUSD == nil {
+			return errors.New("command v4.1 pool usage is required")
 		}
-		if *override.FlashPoolUsedMicroUSD+*override.ProPoolUsedMicroUSD != override.PoolUsedMicroUSD {
+		if hasPro && override.ProPoolUsedMicroUSD == nil {
+			return errors.New("command pro pool usage is required")
+		}
+		if override.FlashPoolUsedMicroUSD != nil {
+			if *override.FlashPoolUsedMicroUSD < 0 || *override.FlashPoolUsedMicroUSD > CommandFlashPoolLimitMicroUSD {
+				return errors.New("command flash pool usage exceeds the limit")
+			}
+		}
+		if override.V41PoolUsedMicroUSD != nil {
+			if *override.V41PoolUsedMicroUSD < 0 || *override.V41PoolUsedMicroUSD > CommandV41PoolLimitMicroUSD {
+				return errors.New("command v4.1 pool usage exceeds the limit")
+			}
+		}
+		if override.ProPoolUsedMicroUSD != nil {
+			if *override.ProPoolUsedMicroUSD < 0 || *override.ProPoolUsedMicroUSD > CommandProPoolLimitMicroUSD {
+				return errors.New("command pro pool usage exceeds the limit")
+			}
+		}
+		poolSum := int64(0)
+		if override.FlashPoolUsedMicroUSD != nil {
+			poolSum += *override.FlashPoolUsedMicroUSD
+		}
+		if override.V41PoolUsedMicroUSD != nil {
+			poolSum += *override.V41PoolUsedMicroUSD
+		}
+		if override.ProPoolUsedMicroUSD != nil {
+			poolSum += *override.ProPoolUsedMicroUSD
+		}
+		if poolSum != override.PoolUsedMicroUSD {
 			return errors.New("command model pool usage must equal the total pool usage")
 		}
 	}
@@ -444,20 +552,28 @@ func SetCommandUsageOverride(channelID int, override CodeProviderUsageOverride, 
 			return tx.Save(pool).Error
 		}
 
-		flash, err := getOrCreateCommandPoolUsageByKeyTx(tx, CommandFlashPoolKey(channelID), now)
-		if err != nil {
-			return err
+		poolWrites := []struct {
+			key  string
+			used *int64
+		}{
+			{CommandFlashPoolKey(channelID), override.FlashPoolUsedMicroUSD},
+			{CommandV41PoolKey(channelID), override.V41PoolUsedMicroUSD},
+			{CommandProPoolKey(channelID), override.ProPoolUsedMicroUSD},
 		}
-		pro, err := getOrCreateCommandPoolUsageByKeyTx(tx, CommandProPoolKey(channelID), now)
-		if err != nil {
-			return err
+		for _, write := range poolWrites {
+			if write.used == nil {
+				continue
+			}
+			pool, err := getOrCreateCommandPoolUsageByKeyTx(tx, write.key, now)
+			if err != nil {
+				return err
+			}
+			pool.Used, pool.ResetTime = *write.used, now
+			if err := tx.Save(pool).Error; err != nil {
+				return err
+			}
 		}
-		flash.Used, flash.ResetTime = *override.FlashPoolUsedMicroUSD, now
-		pro.Used, pro.ResetTime = *override.ProPoolUsedMicroUSD, now
-		if err := tx.Save(flash).Error; err != nil {
-			return err
-		}
-		return tx.Save(pro).Error
+		return nil
 	})
 }
 
@@ -483,12 +599,33 @@ func GetCommandUsageSnapshot(channelID int, now int64) (*CommandUsageSnapshot, e
 		return nil, err
 	}
 	splitPools := found && commandChannelUsesSplitPools(channel)
+	hasFlash := found && commandChannelServesModel(channel, CommandFlashModel)
+	hasV41 := found && commandChannelServesModel(channel, CommandV41FlashModel)
+	hasPro := found && commandChannelServesModel(channel, CommandProModel)
 	flashPool := poolUsage
+	v41Pool := &CommandPoolUsage{}
 	proPool := &CommandPoolUsage{}
 	poolLimit := int64(CommandCombinedPoolLimitMicroUSD)
 	if splitPools {
-		poolLimit = CommandFlashPoolLimitMicroUSD + CommandProPoolLimitMicroUSD
+		// 总池额度 = 当前启用的模型池限额之和（未启用池不计入）。
+		poolLimit = 0
+		if hasFlash {
+			poolLimit += CommandFlashPoolLimitMicroUSD
+		}
+		if hasV41 {
+			poolLimit += CommandV41PoolLimitMicroUSD
+		}
+		if hasPro {
+			poolLimit += CommandProPoolLimitMicroUSD
+		}
+		if poolLimit == 0 {
+			poolLimit = CommandFlashPoolLimitMicroUSD + CommandV41PoolLimitMicroUSD + CommandProPoolLimitMicroUSD
+		}
 		flashPool, err = getOrCreateCommandPoolUsageByKey(CommandFlashPoolKey(channelID), now)
+		if err != nil {
+			return nil, err
+		}
+		v41Pool, err = getOrCreateCommandPoolUsageByKey(CommandV41PoolKey(channelID), now)
 		if err != nil {
 			return nil, err
 		}
@@ -501,9 +638,22 @@ func GetCommandUsageSnapshot(channelID int, now int64) (*CommandUsageSnapshot, e
 	poolUsed := poolUsage.Used
 	poolResetAt := poolUsage.ResetTime
 	if splitPools {
-		poolUsed = addCapped(poolUsed, flashPool.Used, poolLimit)
-		poolUsed = addCapped(poolUsed, proPool.Used, poolLimit)
+		if hasFlash {
+			poolUsed = addCapped(poolUsed, flashPool.Used, poolLimit)
+		}
+		if hasV41 {
+			poolUsed = addCapped(poolUsed, v41Pool.Used, poolLimit)
+		}
+		if hasPro {
+			poolUsed = addCapped(poolUsed, proPool.Used, poolLimit)
+		}
 		poolResetAt = flashPool.ResetTime
+		if hasV41 {
+			poolResetAt = v41Pool.ResetTime
+		}
+		if hasPro {
+			poolResetAt = proPool.ResetTime
+		}
 	}
 	poolWindow := makeCommandWindow(poolUsed, poolLimit, poolResetAt)
 	flashWindow := makeCommandWindow(flashPool.Used, func() int64 {
@@ -512,6 +662,10 @@ func GetCommandUsageSnapshot(channelID int, now int64) (*CommandUsageSnapshot, e
 		}
 		return CommandCombinedPoolLimitMicroUSD
 	}(), flashPool.ResetTime)
+	v41Window := OpencodeUsageWindow{}
+	if splitPools {
+		v41Window = makeCommandWindow(v41Pool.Used, CommandV41PoolLimitMicroUSD, v41Pool.ResetTime)
+	}
 	proWindow := OpencodeUsageWindow{}
 	if splitPools {
 		proWindow = makeCommandWindow(proPool.Used, CommandProPoolLimitMicroUSD, proPool.ResetTime)
@@ -523,8 +677,12 @@ func GetCommandUsageSnapshot(channelID int, now int64) (*CommandUsageSnapshot, e
 		Month:            makeCommandWindow(channelUsage.MonthUsed, CommandMonthLimitMicroUSD, channelUsage.MonthStart+30*24*60*60),
 		Pool:             poolWindow,
 		FlashPool:        flashWindow,
+		V41Pool:          v41Window,
 		ProPool:          proWindow,
 		SplitPools:       splitPools,
+		FlashPoolActive:  hasFlash,
+		V41PoolActive:    hasV41,
+		ProPoolActive:    hasPro,
 		PricingPeriod:    OpencodePricingPeriodAt(time.Unix(now, 0).UTC()),
 		RPMCount:         normalizeCommandRPM(channelUsage.RPMCount),
 		RPMLimit:         operation_setting.GetOpencodeConcurrencyLimit(),
@@ -625,6 +783,15 @@ func ensureCommandPoolUsageRowsTx(tx *gorm.DB, channel *Channel, now int64) erro
 				return err
 			}
 		}
+		_, v41Found, err := findCommandPoolUsageTx(tx, CommandV41PoolKey(channel.Id), now)
+		if err != nil {
+			return err
+		}
+		if !v41Found {
+			if err := tx.Create(&CommandPoolUsage{PoolKey: CommandV41PoolKey(channel.Id), ResetTime: now}).Error; err != nil {
+				return err
+			}
+		}
 		_, proFound, err := findCommandPoolUsageTx(tx, CommandProPoolKey(channel.Id), now)
 		if err != nil {
 			return err
@@ -647,14 +814,21 @@ func ensureCommandPoolUsageRowsTx(tx *gorm.DB, channel *Channel, now int64) erro
 	if err != nil {
 		return err
 	}
+	v41, v41Found, err := findCommandPoolUsageTx(tx, CommandV41PoolKey(channel.Id), now)
+	if err != nil {
+		return err
+	}
 	pro, proFound, err := findCommandPoolUsageTx(tx, CommandProPoolKey(channel.Id), now)
 	if err != nil {
 		return err
 	}
-	if flashFound || proFound {
+	if flashFound || proFound || v41Found {
 		if legacy.Used == 0 {
 			if flashFound {
 				legacy.Used = addCapped(legacy.Used, flash.Used, CommandCombinedPoolLimitMicroUSD)
+			}
+			if v41Found {
+				legacy.Used = addCapped(legacy.Used, v41.Used, CommandCombinedPoolLimitMicroUSD)
 			}
 			if proFound {
 				legacy.Used = addCapped(legacy.Used, pro.Used, CommandCombinedPoolLimitMicroUSD)
@@ -667,6 +841,12 @@ func ensureCommandPoolUsageRowsTx(tx *gorm.DB, channel *Channel, now int64) erro
 		if flashFound {
 			flash.Used = 0
 			if err := tx.Save(flash).Error; err != nil {
+				return err
+			}
+		}
+		if v41Found {
+			v41.Used = 0
+			if err := tx.Save(v41).Error; err != nil {
 				return err
 			}
 		}

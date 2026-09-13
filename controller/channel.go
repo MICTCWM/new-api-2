@@ -222,6 +222,7 @@ type codeProviderUsageOverrideRequest struct {
 	PeakPoolUsedUSD    *float64 `json:"peak_pool_used_usd"`
 	OffPeakPoolUsedUSD *float64 `json:"off_peak_pool_used_usd"`
 	FlashPoolUsedUSD   *float64 `json:"flash_pool_used_usd"`
+	V41PoolUsedUSD     *float64 `json:"v41_pool_used_usd"`
 	ProPoolUsedUSD     *float64 `json:"pro_pool_used_usd"`
 }
 
@@ -340,7 +341,7 @@ func SetCommandChannelUsageOverride(c *gin.Context) {
 	}
 	limits := model.CommandCombinedPoolLimitMicroUSD
 	if splitPools {
-		limits = model.CommandFlashPoolLimitMicroUSD + model.CommandProPoolLimitMicroUSD
+		limits = model.CommandFlashPoolLimitMicroUSD + model.CommandV41PoolLimitMicroUSD + model.CommandProPoolLimitMicroUSD
 	}
 	override, err := parseCodeProviderUsageOverride(req, [3]int64{
 		model.CommandFiveHourLimitMicroUSD,
@@ -358,21 +359,31 @@ func SetCommandChannelUsageOverride(c *gin.Context) {
 	}
 	override.PoolUsedMicroUSD = poolUsed
 	if splitPools {
-		flashPoolUsed, err := usageOverrideMicroUSD(req.FlashPoolUsedUSD, "flash_pool_used_usd", model.CommandFlashPoolLimitMicroUSD)
-		if err != nil {
-			common.ApiError(c, err)
-			return
+		// 各池的"启用必填 / 总和一致"校验由 SetCommandUsageOverride 按渠道
+		// 当前模型列表统一裁决，这里只做数值与限额转换。
+		if req.FlashPoolUsedUSD != nil {
+			flashPoolUsed, poolErr := usageOverrideMicroUSD(req.FlashPoolUsedUSD, "flash_pool_used_usd", model.CommandFlashPoolLimitMicroUSD)
+			if poolErr != nil {
+				common.ApiError(c, poolErr)
+				return
+			}
+			override.FlashPoolUsedMicroUSD = &flashPoolUsed
 		}
-		override.FlashPoolUsedMicroUSD = &flashPoolUsed
-		proPoolUsed, err := usageOverrideMicroUSD(req.ProPoolUsedUSD, "pro_pool_used_usd", model.CommandProPoolLimitMicroUSD)
-		if err != nil {
-			common.ApiError(c, err)
-			return
+		if req.V41PoolUsedUSD != nil {
+			v41PoolUsed, poolErr := usageOverrideMicroUSD(req.V41PoolUsedUSD, "v41_pool_used_usd", model.CommandV41PoolLimitMicroUSD)
+			if poolErr != nil {
+				common.ApiError(c, poolErr)
+				return
+			}
+			override.V41PoolUsedMicroUSD = &v41PoolUsed
 		}
-		override.ProPoolUsedMicroUSD = &proPoolUsed
-		if *override.FlashPoolUsedMicroUSD+*override.ProPoolUsedMicroUSD != override.PoolUsedMicroUSD {
-			common.ApiError(c, fmt.Errorf("pool_used_usd must equal flash_pool_used_usd plus pro_pool_used_usd"))
-			return
+		if req.ProPoolUsedUSD != nil {
+			proPoolUsed, poolErr := usageOverrideMicroUSD(req.ProPoolUsedUSD, "pro_pool_used_usd", model.CommandProPoolLimitMicroUSD)
+			if poolErr != nil {
+				common.ApiError(c, poolErr)
+				return
+			}
+			override.ProPoolUsedMicroUSD = &proPoolUsed
 		}
 	}
 	if err := model.SetCommandUsageOverride(id, override, common.GetTimestamp()); err != nil {

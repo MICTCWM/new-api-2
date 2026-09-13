@@ -22,6 +22,7 @@ import {
   CHANNEL_TYPE_COMMAND,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_STATUS,
+  COMMAND_MODEL_BINDING,
   getFixedCodeChannelModels,
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   ERROR_MESSAGES,
@@ -403,7 +404,7 @@ export const channelFormSchema = z
       )
       const fixedModelError =
         data.type === CHANNEL_TYPE_COMMAND
-          ? 'Command supports Flash, Pro, and model mapping source models'
+          ? 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
           : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, and model mapping source models'
       if (invalidModels.length > 0) {
         addRequiredIssue(ctx, 'models', fixedModelError)
@@ -418,9 +419,24 @@ export const channelFormSchema = z
           ctx,
           'models',
           data.type === CHANNEL_TYPE_COMMAND
-            ? 'Command must include deepseek/deepseek-v4-flash'
+            ? 'Command must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash'
             : 'Opencode must include deepseek-v4-flash or glm-5.3-flash'
         )
+      }
+      if (data.type === CHANNEL_TYPE_COMMAND) {
+        // v4.1-flash 与 v4-pro 绑定：选中 4.1 必须同时启用 Pro。
+        const missingBinding = configuredModels.some((model) =>
+          (COMMAND_MODEL_BINDING[model] ?? []).some(
+            (required) => !configuredModels.includes(required)
+          )
+        )
+        if (missingBinding) {
+          addRequiredIssue(
+            ctx,
+            'models',
+            'deepseek/deepseek-v4.1-flash requires deepseek/deepseek-v4-pro to be enabled'
+          )
+        }
       }
     }
 

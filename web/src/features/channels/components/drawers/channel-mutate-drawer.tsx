@@ -146,6 +146,7 @@ import {
   CHANNEL_TYPE_COMMAND,
   CHANNEL_TYPE_OPTIONS,
   CHANNEL_TYPE_WARNINGS,
+  COMMAND_MODEL_BINDING,
   ERROR_MESSAGES,
   FIELD_PASSTHROUGH_TYPES,
   FIELD_DESCRIPTIONS,
@@ -1750,6 +1751,17 @@ export function ChannelMutateDrawer({
         nextModels = selected.filter(
           (model) => nativeModels.includes(model) || mappingSources.has(model)
         )
+        if (currentType === CHANNEL_TYPE_COMMAND) {
+          // v4.1-flash 与 v4-pro 绑定：选中 4.1 自动带出 Pro，保证
+          // 4.1 池与 4p 池成对启用（如需移除 Pro，先移除 4.1）。
+          const bound = new Set<string>()
+          for (const model of nextModels) {
+            for (const required of COMMAND_MODEL_BINDING[model] ?? []) {
+              bound.add(required)
+            }
+          }
+          nextModels = Array.from(new Set([...nextModels, ...bound]))
+        }
       }
       form.setValue('models', nextModels.join(','))
     },
@@ -3009,7 +3021,7 @@ export function ChannelMutateDrawer({
                                 <AlertDescription>
                                   {t(
                                     currentType === CHANNEL_TYPE_COMMAND
-                                      ? 'Fixed endpoint: https://api.commandcode.ai/provider/v1. Supports deepseek/deepseek-v4-flash and deepseek/deepseek-v4-pro.'
+                                      ? 'Fixed endpoint: https://api.commandcode.ai/provider/v1. Supports deepseek/deepseek-v4-flash, deepseek/deepseek-v4-pro, and deepseek/deepseek-v4.1-flash (v4-pro is enabled together with v4.1-flash).'
                                       : 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and glm-5.3-flash.'
                                   )}
                                 </AlertDescription>

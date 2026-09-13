@@ -198,3 +198,126 @@ func TestSetCommandUsageOverrideUpdatesConfiguredPoolsAndPreservesRPM(t *testing
 	require.Equal(t, flash+pro, snapshot.Pool.UsedMicroUSD)
 	require.Equal(t, 1, snapshot.RPMCount)
 }
+
+func TestCalculateCommandCostMicroUSDForV41Flash(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     2_000_000,
+		CompletionTokens: 1_000_000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 500_000,
+		},
+	}
+	// 周三 00:00 UTC = Off-Peak；01:00 = Peak；周日 02:00 = Off-Peak。
+	wedOffPeak := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
+	wedPeak := time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC)
+	sunPeakHour := time.Date(2026, time.August, 23, 2, 0, 0, 0, time.UTC)
+	// uncached 1.5M × 0.15 + output 1M × 0.60 + cached 0.5M × 0.003
+	offPeakCost, err := CalculateCommandCostMicroUSDForModel(usage, CommandV41FlashModel, wedOffPeak)
+	require.NoError(t, err)
+	require.Equal(t, int64(826_500), offPeakCost)
+	// uncached 1.5M × 0.30 + output 1M × 1.20 + cached 0.5M × 0.006
+	peakCost, err := CalculateCommandCostMicroUSDForModel(usage, CommandV41FlashModel, wedPeak)
+	require.NoError(t, err)
+	require.Equal(t, int64(1_653_000), peakCost)
+	// 周末不进入 Peak 时段。
+	weekendCost, err := CalculateCommandCostMicroUSDForModel(usage, CommandV41FlashModel, sunPeakHour)
+	require.NoError(t, err)
+	require.Equal(t, offPeakCost, weekendCost)
+}
+
+func TestCommandV41FlashBindsProAndSplitsPools(t *testing.T) {
+	useCommandUsageDB(t)
+	channel := &Channel{
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    "command-key",
+		Models: CommandV41FlashModel + "," + CommandProModel,
+		Group:  "default",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	require.True(t, commandChannelUsesSplitPools(channel))
+	now := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, SettleCommandCostForModel(channel.Id, CommandV41FlashModel, 5_000_000, now))
+	require.NoError(t, SettleCommandCostForModel(channel.Id, CommandProModel, 3_000_000, now))
+
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now.Unix())
+	require.NoError(t, err)
+	require.True(t, snapshot.SplitPools)
+	require.True(t, snapshot.V41PoolActive)
+	require.True(t, snapshot.ProPoolActive)
+	require.False(t, snapshot.FlashPoolActive)
+	require.Equal(t, int64(40_000_000), snapshot.V41Pool.LimitMicroUSD)
+	require.Equal(t, int64(5_000_000), snapshot.V41Pool.UsedMicroUSD)
+	require.Equal(t, int64(3_000_000), snapshot.ProPool.UsedMicroUSD)
+	require.Equal(t, int64(8_000_000), snapshot.Pool.UsedMicroUSD)
+	require.Equal(t, int64(60_000_000), snapshot.Pool.LimitMicroUSD)
+}
+
+func TestCommandV41PoolExhaustedStopsRouting(t *testing.T) {
+	useCommandUsageDB(t)
+	channel := &Channel{
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    "command-key",
+		Models: CommandV41FlashModel + "," + CommandProModel,
+		Group:  "default",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	now := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
+	// 直接把 4.1 池行打满（不经过 Settle，避免同时填满共享的 5h/周/月窗口）。
+	require.NoError(t, DB.Create(&CommandPoolUsage{
+		PoolKey:   CommandV41PoolKey(channel.Id),
+		Used:      CommandV41PoolLimitMicroUSD,
+		ResetTime: now.Unix(),
+	}).Error)
+
+	v41Available, err := CommandChannelHasQuotaCapacityForModel(channel, CommandV41FlashModel, now.Unix())
+	require.NoError(t, err)
+	require.False(t, v41Available, "4.1 池耗尽后 v4.1-flash 请求不应再路由到该渠道")
+	proAvailable, err := CommandChannelHasQuotaCapacityForModel(channel, CommandProModel, now.Unix())
+	require.NoError(t, err)
+	require.True(t, proAvailable, "4p 池仍有余量时 v4-pro 请求应可路由")
+	anyAvailable, err := CommandChannelHasAnyQuotaCapacity(channel, now.Unix())
+	require.NoError(t, err)
+	require.True(t, anyAvailable)
+}
+
+func TestSetCommandUsageOverrideWithV41Pool(t *testing.T) {
+	useCommandUsageDB(t)
+	channel := &Channel{
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    "command-key",
+		Models: CommandV41FlashModel + "," + CommandProModel,
+		Group:  "default",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	now := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
+
+	v41 := int64(7_000_000)
+	pro := int64(2_000_000)
+	// 缺少 v41 池用量时必须报错。
+	require.Error(t, SetCommandUsageOverride(channel.Id, CodeProviderUsageOverride{
+		FiveHourUsedMicroUSD: 1_000_000,
+		WeekUsedMicroUSD:     2_000_000,
+		MonthUsedMicroUSD:    3_000_000,
+		PoolUsedMicroUSD:     pro,
+		ProPoolUsedMicroUSD:  &pro,
+	}, now.Unix()))
+
+	require.NoError(t, SetCommandUsageOverride(channel.Id, CodeProviderUsageOverride{
+		FiveHourUsedMicroUSD: 1_000_000,
+		WeekUsedMicroUSD:     2_000_000,
+		MonthUsedMicroUSD:    3_000_000,
+		PoolUsedMicroUSD:     v41 + pro,
+		V41PoolUsedMicroUSD:  &v41,
+		ProPoolUsedMicroUSD:  &pro,
+	}, now.Unix()))
+
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now.Unix())
+	require.NoError(t, err)
+	require.Equal(t, v41, snapshot.V41Pool.UsedMicroUSD)
+	require.Equal(t, pro, snapshot.ProPool.UsedMicroUSD)
+	require.Equal(t, v41+pro, snapshot.Pool.UsedMicroUSD)
+}

@@ -21,10 +21,32 @@ import (
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(opencodeUsageCalibrationHandler{})
+	service.RegisterSystemTaskHandler(commandUsageCalibrationHandler{})
 	service.RegisterSystemTaskHandler(speedProtectionHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+}
+
+type commandUsageCalibrationHandler struct{}
+
+func (commandUsageCalibrationHandler) Type() string { return model.SystemTaskTypeCommandUsage }
+
+func (commandUsageCalibrationHandler) Enabled() bool { return true }
+
+// The scheduler wakes this handler once a minute; each Command channel
+// persists its own ten-minute calibration slot (staggered by channel ID).
+func (commandUsageCalibrationHandler) Interval() time.Duration { return time.Minute }
+
+func (commandUsageCalibrationHandler) NewPayload() any { return nil }
+
+func (commandUsageCalibrationHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	calibrated, err := service.CalibrateDueCommandChannels(ctx, time.Now().UTC())
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int{"calibrated": calibrated}, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, map[string]int{"calibrated": calibrated}, nil)
 }
 
 type opencodeUsageCalibrationHandler struct{}
