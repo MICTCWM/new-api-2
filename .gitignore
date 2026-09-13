@@ -41,3 +41,8 @@ service/relayconvert/chat_responses_live_local_test.go
 service/openaicompat/chat_responses_live_local_test.go
 go.work
 go.work.sum
+
+# Xray 二进制与规则文件由构建前手动放入（见 Dockerfile 注释），不入库
+docker/xray/xray
+docker/xray/*.zip
+docker/xray/*.dat

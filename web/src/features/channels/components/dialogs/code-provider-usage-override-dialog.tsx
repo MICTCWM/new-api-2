@@ -171,12 +171,9 @@ export function CodeProviderUsageOverrideDialog({
       'five_hour_used_usd',
       'week_used_usd',
       'month_used_usd',
-      ...(isCommand ? ['pool_used_usd' as UsageField] : []),
+      'pool_used_usd',
       ...(isCommand && splitPools
         ? (['flash_pool_used_usd', 'pro_pool_used_usd'] as UsageField[])
-        : []),
-      ...(!isCommand
-        ? (['peak_pool_used_usd', 'off_peak_pool_used_usd'] as UsageField[])
         : []),
     ]
     const values = new Map<UsageField, number>()
@@ -214,8 +211,7 @@ export function CodeProviderUsageOverrideDialog({
         data.pro_pool_used_usd = valueFor('pro_pool_used_usd')
       }
     } else {
-      data.peak_pool_used_usd = valueFor('peak_pool_used_usd')
-      data.off_peak_pool_used_usd = valueFor('off_peak_pool_used_usd')
+      data.pool_used_usd = valueFor('pool_used_usd')
     }
 
     setIsSaving(true)
@@ -312,13 +308,7 @@ export function CodeProviderUsageOverrideDialog({
             {renderField('five_hour_used_usd', '5-hour used')}
             {renderField('week_used_usd', 'Weekly used')}
             {renderField('month_used_usd', 'Monthly used')}
-            {isCommand ? renderField('pool_used_usd', 'Total pool used') : null}
-            {!isCommand
-              ? renderField('peak_pool_used_usd', 'Peak pool used')
-              : null}
-            {!isCommand
-              ? renderField('off_peak_pool_used_usd', 'Off-peak pool used')
-              : null}
+            {renderField('pool_used_usd', 'Total pool used')}
             {isCommand && splitPools
               ? renderField('flash_pool_used_usd', 'Flash pool used')
               : null}

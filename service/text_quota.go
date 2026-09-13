@@ -455,8 +455,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		opencodeCost := int64(0)
 		settleAt := time.Now().UTC()
 		pricingPeriod := model.OpencodePricingPeriodAt(settleAt)
+		opencodeModel := strings.TrimSpace(relayInfo.UpstreamModelName)
+		if opencodeModel == "" {
+			opencodeModel = relayInfo.OriginModelName
+		}
 		if billingUsage != nil {
-			calculatedCost, err := model.CalculateOpencodeCostMicroUSD(billingUsage, settleAt)
+			calculatedCost, err := model.CalculateOpencodeCostMicroUSDForModel(billingUsage, opencodeModel, settleAt)
 			if err != nil {
 				logger.LogError(ctx, "failed to calculate opencode provider usage: "+err.Error())
 			} else {

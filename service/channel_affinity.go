@@ -843,6 +843,23 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	c.Set(ginKeyChannelAffinityPendingID, 0)
 }
 
+// ConvertChannelAffinityReservationToActual 在请求实际占用渠道并发位后释放其预留租约。
+// 预留租约预测的是"这个请求即将到达"，而实际并发位已被同一请求占用：两个名额对应同一个
+// 请求，若不同步释放会让渠道负载被重复计数（预留 1→0，实际 0→1），其他请求会看到
+// 一个并不存在的占用而提前规避该渠道。
+// 调用时机：并发位预留成功之后（含 OpenCode 队列占位）；请求成功结束时
+// RecordChannelAffinity 会重新武装租约，为下一轮请求继续预留。
+func ConvertChannelAffinityReservationToActual(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	cacheKey, _, ok := getChannelAffinityContext(c)
+	if !ok || cacheKey == "" {
+		return
+	}
+	forgetChannelAffinityProtection(cacheKey)
+}
+
 func rememberChannelAffinityProtection(cacheKey string, channelID, ttlSeconds int) {
 	if cacheKey == "" || channelID <= 0 || ttlSeconds <= 0 {
 		return

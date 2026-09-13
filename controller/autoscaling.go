@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -51,6 +52,80 @@ func TestAutoScalingConnection(c *gin.Context) {
 		"count":       len(list),
 		"deployments": items,
 	})
+}
+
+// TestStartAutoScaling 从 POST JSON body 读取 token（trim，空则回退已保存 cfg.Token），
+// 真实向 AutoDL 发送开机命令以验证连通性。cfg.InstanceIDs 非空时只对选中实例开机，
+// 否则对全部实例开机；成功返回成功操作的实例数。管理员权限。
+// 部分实例失败时仍返回 error，但消息中带上成功操作的实例数，便于管理员评估影响。
+func TestStartAutoScaling(c *gin.Context) {
+	cfg := operation_setting.GetAutoScalingConfig()
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiErrorMsg(c, "请求体解析失败")
+		return
+	}
+	token := strings.TrimSpace(req.Token)
+	if token == "" {
+		token = strings.TrimSpace(cfg.Token)
+	}
+	if token == "" {
+		common.ApiErrorMsg(c, "未配置 AutoDL Token")
+		return
+	}
+	client := autoscaling.NewAutoDLClient(token)
+	var succeeded []string
+	var err error
+	if len(cfg.InstanceIDs) > 0 {
+		succeeded, err = client.StartInstances(cfg.InstanceIDs)
+	} else {
+		succeeded, err = client.StartAllInstances()
+	}
+	if err != nil {
+		logger.LogError(nil, "auto scaling test-start failed: "+err.Error())
+		common.ApiErrorMsg(c, testActionFailMsg("AutoDL 开机失败", succeeded, err))
+		return
+	}
+	common.ApiSuccess(c, gin.H{"count": len(succeeded)})
+}
+
+// TestStopAutoScaling 从 POST JSON body 读取 token（trim，空则回退已保存 cfg.Token），
+// 真实向 AutoDL 发送关机命令以验证连通性。cfg.InstanceIDs 非空时只对选中实例关机，
+// 否则对全部实例关机；成功返回成功操作的实例数。管理员权限。
+// 部分实例失败时仍返回 error，但消息中带上成功操作的实例数，便于管理员评估影响。
+func TestStopAutoScaling(c *gin.Context) {
+	cfg := operation_setting.GetAutoScalingConfig()
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiErrorMsg(c, "请求体解析失败")
+		return
+	}
+	token := strings.TrimSpace(req.Token)
+	if token == "" {
+		token = strings.TrimSpace(cfg.Token)
+	}
+	if token == "" {
+		common.ApiErrorMsg(c, "未配置 AutoDL Token")
+		return
+	}
+	client := autoscaling.NewAutoDLClient(token)
+	var succeeded []string
+	var err error
+	if len(cfg.InstanceIDs) > 0 {
+		succeeded, err = client.StopInstances(cfg.InstanceIDs)
+	} else {
+		succeeded, err = client.StopAllInstances()
+	}
+	if err != nil {
+		logger.LogError(nil, "auto scaling test-stop failed: "+err.Error())
+		common.ApiErrorMsg(c, testActionFailMsg("AutoDL 关机失败", succeeded, err))
+		return
+	}
+	common.ApiSuccess(c, gin.H{"count": len(succeeded)})
 }
 
 // GetAutoScalingInstances 返回当前 AutoDL 账号下可选的容器实例列表，供前端配置勾选。
@@ -109,4 +184,19 @@ func GetAutoScalingStatus(c *gin.Context) {
 		"last_action_at":        state.LastActionAt,
 		"cooldown_left_seconds": cooldownLeft,
 	})
+}
+
+// testActionFailMsg 生成 test-start/test-stop 部分失败时的错误消息。
+// 聚合错误形如 "N/M instances failed"（见 setting/autoscaling 的 operateInstances），
+// 从中解析出总数 M 后拼接为「scene：成功 N/M」；解析失败或拿不到总数时，
+// 至少带上已成功操作的实例数（len(succeeded)），便于管理员评估影响。
+func testActionFailMsg(scene string, succeeded []string, err error) string {
+	msg := fmt.Sprintf("%s：成功 %d", scene, len(succeeded))
+	if err != nil {
+		var failed, total int
+		if n, _ := fmt.Sscanf(err.Error(), "%d/%d instances failed", &failed, &total); n == 2 && total > 0 {
+			msg = fmt.Sprintf("%s：成功 %d/%d", scene, len(succeeded), total)
+		}
+	}
+	return msg
 }

@@ -487,7 +487,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         desc={t(
           channel.type === CHANNEL_TYPE_COMMAND
             ? 'This clears the 5-hour, weekly, monthly, and total-pool allowances for every Command channel.'
-            : 'This clears the 5-hour, weekly, monthly, idle, and busy allowances for every OpenCode channel.'
+            : 'This clears the 5-hour, weekly, monthly, and total pool allowances for every OpenCode channel.'
         )}
         confirmText={t('Reset')}
         destructive

@@ -296,9 +296,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			channelConcurrencyReserved = true
 		}
 		addUsedChannel(c, channel.Id)
+		// 并发位已由本请求实际占用：释放该请求的亲和预留租约，避免"预留 + 实际"
+		// 对同一请求重复计数；请求成功结束时 RecordChannelAffinity 会重新武装租约。
+		if concurrencyReserved || channelConcurrencyReserved {
+			service.ConvertChannelAffinityReservationToActual(c)
+		}
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			if concurrencyReserved {
-				releaseOpencodeConcurrency(c, channel.Id)
+				releaseOpencodeConcurrency(c, channel.Type, channel.Id)
 			}
 			if channelConcurrencyReserved {
 				releaseChannelConcurrency(c, channel)
@@ -316,7 +321,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 			}
 			if concurrencyReserved {
-				releaseOpencodeConcurrency(c, channel.Id)
+				releaseOpencodeConcurrency(c, channel.Type, channel.Id)
 			}
 			if channelConcurrencyReserved {
 				releaseChannelConcurrency(c, channel)
@@ -337,7 +342,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if concurrencyReserved {
-			releaseOpencodeConcurrency(c, channel.Id)
+			releaseOpencodeConcurrency(c, channel.Type, channel.Id)
 			concurrencyReserved = false
 		}
 		if channelConcurrencyReserved {
@@ -416,8 +421,10 @@ func addUsedChannel(c *gin.Context, channelId int) {
 	c.Set("use_channel", useChannel)
 }
 
-func releaseOpencodeConcurrency(c *gin.Context, channelID int) {
-	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
+func releaseOpencodeConcurrency(c *gin.Context, channelType, channelID int) {
+	if channelType == 0 {
+		channelType = common.GetContextKeyInt(c, constant.ContextKeyChannelType)
+	}
 	if channelType == 0 {
 		channelType = constant.ChannelTypeOpencode
 	}
@@ -507,7 +514,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			newAPIError := middleware.SetupContextForSelectedChannel(c, affinityChannel, info.OriginModelName)
 			if newAPIError != nil {
 				retryParam.OpencodeConcurrencyReserved = false
-				releaseOpencodeConcurrency(c, affinityChannel.Id)
+				releaseOpencodeConcurrency(c, affinityChannel.Type, affinityChannel.Id)
 				return nil, newAPIError
 			}
 			return affinityChannel, nil
@@ -541,7 +548,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
 		if newAPIError != nil {
 			retryParam.OpencodeConcurrencyReserved = false
-			releaseOpencodeConcurrency(c, channel.Id)
+			releaseOpencodeConcurrency(c, channel.Type, channel.Id)
 			return nil, newAPIError
 		}
 		return channel, nil

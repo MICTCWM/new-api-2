@@ -513,9 +513,13 @@ func testChannelWithGroup(ctx context.Context, channel *model.Channel, testUserI
 		case constant.ChannelTypeOpencode:
 			cost := int64(0)
 			pricingPeriod := model.OpencodePricingPeriodAt(settleAt)
-			calculatedCost, costErr := model.CalculateOpencodeCostMicroUSD(usage, settleAt)
+			opencodeModel := strings.TrimSpace(info.UpstreamModelName)
+			if opencodeModel == "" {
+				opencodeModel = info.OriginModelName
+			}
+			calculatedCost, costErr := model.CalculateOpencodeCostMicroUSDForModel(usage, opencodeModel, settleAt)
 			if costErr != nil {
-				common.SysError(fmt.Sprintf("failed to calculate OpenCode channel test usage: channel_id=%d err=%v", channel.Id, costErr))
+				common.SysError(fmt.Sprintf("failed to calculate OpenCode channel test usage: channel_id=%d model=%s err=%v", channel.Id, opencodeModel, costErr))
 			} else {
 				cost = calculatedCost
 				if err := model.SettleOpencodeCost(channel.Id, cost, settleAt); err != nil {

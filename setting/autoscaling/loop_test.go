@@ -340,6 +340,118 @@ func insertConsumeLogs(t *testing.T, count int) {
 	}
 }
 
+// TestGetGlobalRPMExcludesAutoScalingLogs 验证自动伸缩自身写入的 "auto-scaling" 使用日志不会污染
+// getGlobalRPM 的实时统计（修复 RPM 自反馈污染）：getGlobalRPM 通过 SumUsedQuota 排除该 model_name，
+// 避免自动伸缩动作后约 60s 内会把自己产生的一条日志也计入 current_rpm。
+func TestGetGlobalRPMExcludesAutoScalingLogs(t *testing.T) {
+	cfg := operation_setting.AutoScalingConfig{RPMLimit: 50, CooldownMinutes: 30}
+	setupRunEnv(t, cfg, AutoscalingState{})
+
+	// 只插入 "auto-scaling" 使用日志，不应计入 RPM。
+	now := time.Now().Unix()
+	for i := 0; i < 5; i++ {
+		require.NoError(t, model.LOG_DB.Create(&model.Log{
+			Type:      model.LogTypeConsume,
+			ModelName: "auto-scaling",
+			CreatedAt: now,
+		}).Error)
+	}
+	rpm, ok := getGlobalRPM()
+	require.True(t, ok)
+	assert.Equal(t, 0, rpm)
+
+	// 插入 1 条普通消费日志，应被计入（证明排除仅针对 auto-scaling，普通请求不受影响）。
+	require.NoError(t, model.LOG_DB.Create(&model.Log{Type: model.LogTypeConsume, CreatedAt: now}).Error)
+	rpm, ok = getGlobalRPM()
+	require.True(t, ok)
+	assert.Equal(t, 1, rpm)
+}
+
+// TestRunAutoScalingOnceWritesUsageLogOnRemoteSuccess 验证远端动作全部成功（ok=true）时写入一条
+// 使用日志（recordUsageLog 被调用且 Content 含中文动作描述与正确数量）。
+// 开机配置了具体实例用数量，关机未配置时回退「全部」。
+func TestRunAutoScalingOnceWritesUsageLogOnRemoteSuccess(t *testing.T) {
+	var recorded []string
+	prevRec := recordUsageLog
+	recordUsageLog = func(content string) {
+		recorded = append(recorded, content)
+	}
+	t.Cleanup(func() { recordUsageLog = prevRec })
+
+	t.Run("开机成功写入含数量", func(t *testing.T) {
+		cfg := operation_setting.AutoScalingConfig{
+			Enabled:         true,
+			RPMLimit:        50,
+			CooldownMinutes: 30,
+			Token:           "test-token",
+			InstanceIDs:     []string{"uu-1", "uu-2"},
+		}
+		setupRunEnv(t, cfg, AutoscalingState{})
+		insertConsumeLogs(t, 50)
+		prevFn := runRemoteActionFn
+		runRemoteActionFn = func(token string, act Action, instanceIDs []string) (bool, error) {
+			assert.True(t, act.StartServer)
+			return true, nil
+		}
+		t.Cleanup(func() { runRemoteActionFn = prevFn })
+
+		runAutoScalingOnce()
+
+		assert.Len(t, recorded, 1)
+		assert.Contains(t, recorded[0], "自动伸缩")
+		assert.Contains(t, recorded[0], "启动")
+		assert.Contains(t, recorded[0], "2")
+		assert.True(t, loadState().ServerStarted)
+	})
+
+	t.Run("开机失败不写使用日志", func(t *testing.T) {
+		recorded = nil
+		cfg := operation_setting.AutoScalingConfig{
+			Enabled:         true,
+			RPMLimit:        50,
+			CooldownMinutes: 30,
+			Token:           "test-token",
+		}
+		setupRunEnv(t, cfg, AutoscalingState{})
+		insertConsumeLogs(t, 50)
+		prevFn := runRemoteActionFn
+		runRemoteActionFn = func(token string, act Action, instanceIDs []string) (bool, error) {
+			return false, errors.New("1/3 instances failed")
+		}
+		t.Cleanup(func() { runRemoteActionFn = prevFn })
+
+		runAutoScalingOnce()
+
+		assert.Empty(t, recorded)
+		assert.False(t, loadState().ServerStarted)
+	})
+
+	t.Run("关机成功写入回退全部", func(t *testing.T) {
+		recorded = nil
+		cfg := operation_setting.AutoScalingConfig{
+			Enabled:         true,
+			RPMLimit:        50,
+			CooldownMinutes: 30,
+			Token:           "test-token",
+		}
+		setupRunEnv(t, cfg, AutoscalingState{ServerStarted: true})
+		prevFn := runRemoteActionFn
+		runRemoteActionFn = func(token string, act Action, instanceIDs []string) (bool, error) {
+			assert.True(t, act.StopServer)
+			return true, nil
+		}
+		t.Cleanup(func() { runRemoteActionFn = prevFn })
+
+		runAutoScalingOnce()
+
+		assert.Len(t, recorded, 1)
+		assert.Contains(t, recorded[0], "自动伸缩")
+		assert.Contains(t, recorded[0], "关闭")
+		assert.Contains(t, recorded[0], "全部")
+		assert.False(t, loadState().ServerStarted)
+	})
+}
+
 // TestRunAutoScalingOnceUsesSelectedInstances 验证指定实例列表时，远端动作按选中的实例执行：
 // runRemoteActionFn 应收到配置中的 InstanceIDs，并把它们传给远端执行器。
 func TestRunAutoScalingOnceUsesSelectedInstances(t *testing.T) {

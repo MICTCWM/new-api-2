@@ -1,0 +1,7 @@
+{
+  "Apply the gateway station cache billing discount to text requests on this channel": "Apply the gateway station cache billing discount to text requests on this channel",
+  "Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and glm-5.3-flash.": "Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and glm-5.3-flash.",
+  "Opencode must include deepseek-v4-flash or glm-5.3-flash": "Opencode must include deepseek-v4-flash or glm-5.3-flash",
+  "Opencode supports deepseek-v4-flash, glm-5.3-flash, and model mapping source models": "Opencode supports deepseek-v4-flash, glm-5.3-flash, and model mapping source models",
+  "Opencode uses a fixed endpoint and supports deepseek-v4-flash and glm-5.3-flash. Batch mode creates one channel per API key.": "Opencode uses a fixed endpoint and supports deepseek-v4-flash and glm-5.3-flash. Batch mode creates one channel per API key."
+}

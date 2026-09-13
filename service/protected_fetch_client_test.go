@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
@@ -314,4 +315,51 @@ func TestProtectedFetchRoundTripperReusesTransportPerProxy(t *testing.T) {
 	require.NotSame(t, direct, proxied)
 	require.True(t, direct.ForceAttemptHTTP2)
 	require.False(t, direct.DisableKeepAlives)
+}
+
+func configureProxySubscriptionFetchSetting(t *testing.T, allowPrivateIP bool) {
+	t.Helper()
+	fetchSetting := system_setting.GetFetchSetting()
+	original := *fetchSetting
+	t.Cleanup(func() {
+		*fetchSetting = original
+	})
+
+	fetchSetting.EnableSSRFProtection = true
+	fetchSetting.AllowPrivateIp = allowPrivateIP
+	fetchSetting.DomainFilterMode = false
+	fetchSetting.IpFilterMode = false
+	fetchSetting.DomainList = nil
+	fetchSetting.IpList = nil
+	// 端口白名单仅保留 80，用于验证订阅 client 不受端口限制。
+	fetchSetting.AllowedPorts = []string{"80"}
+	fetchSetting.ApplyIPFilterForDomain = true
+}
+
+func TestGetProxySubscriptionHTTPClientAllowsNonStandardPort(t *testing.T) {
+	configureProxySubscriptionFetchSetting(t, true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// httptest 使用随机端口（远超 80/443），AllowPrivateIp=true 使回环直连通过。
+	client := GetProxySubscriptionHTTPClient()
+	resp, err := client.Get(server.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestGetProxySubscriptionHTTPClientStillProtectsPrivateIP(t *testing.T) {
+	configureProxySubscriptionFetchSetting(t, false)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := GetProxySubscriptionHTTPClient()
+	_, err := client.Get(server.URL)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "private IP address not allowed")
 }

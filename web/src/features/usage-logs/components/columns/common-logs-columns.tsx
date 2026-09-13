@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
-import { Sparkles, KeyRound } from 'lucide-react'
+import { Sparkles, KeyRound, MessagesSquare } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -336,6 +336,8 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
 
           const other = parseLogOther(log.other)
           const affinity = other?.admin_info?.channel_affinity
+          const sessionAffinity =
+            other?.admin_info?.opencode_session_affinity
           const rawUseChannel = other?.admin_info?.use_channel ?? []
           const useChannel = Array.isArray(rawUseChannel)
             ? rawUseChannel.map(String).filter(Boolean)
@@ -412,6 +414,17 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                         <Sparkles className='size-3 fill-current' />
                       </button>
                     )}
+                    {sessionAffinity?.affinitized &&
+                      sessionAffinity.session_id && (
+                        <MessagesSquare
+                          className='absolute -top-1 -right-7 size-3 fill-current text-cyan-500'
+                          aria-label={`${t('Session Affinity')}: ${
+                            sensitiveVisible
+                              ? sessionAffinity.session_id
+                              : '••••'
+                          }`}
+                        />
+                      )}
                   </div>
                   {log.channel_name && (
                     <span className='text-muted-foreground/70 truncate [font-family:var(--font-body)] !text-xs'>
@@ -450,6 +463,29 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                         </p>
                       </div>
                     )}
+                    {sessionAffinity?.affinitized &&
+                      sessionAffinity.session_id && (
+                        <div className='border-t pt-1 text-xs'>
+                          <p className='font-medium'>
+                            {t('Session Affinity')}
+                          </p>
+                          <p>
+                            {t('Session ID')}:{' '}
+                            <span className='break-all'>
+                              {sensitiveVisible
+                                ? sessionAffinity.session_id
+                                : '••••'}
+                            </span>
+                          </p>
+                          <p>
+                            {t(
+                              sessionAffinity.cache_hit === true
+                                ? 'Reused'
+                                : 'New',
+                            )}
+                          </p>
+                        </div>
+                      )}
                   </div>
                 </TooltipContent>
               </Tooltip>

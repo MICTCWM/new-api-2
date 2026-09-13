@@ -52,8 +52,17 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 }
 
 func checkProtectedFetchRedirect(req *http.Request, via []*http.Request) error {
+	return checkProtectedFetchRedirectWithValidator(req, via, ValidateSSRFProtectedFetchURL)
+}
+
+// checkSubscriptionFetchRedirect 代理订阅拉取专用重定向校验：不限制端口，其余防护保留。
+func checkSubscriptionFetchRedirect(req *http.Request, via []*http.Request) error {
+	return checkProtectedFetchRedirectWithValidator(req, via, validateSubscriptionFetchURL)
+}
+
+func checkProtectedFetchRedirectWithValidator(req *http.Request, via []*http.Request, validate func(string) error) error {
 	urlStr := req.URL.String()
-	if err := ValidateSSRFProtectedFetchURL(urlStr); err != nil {
+	if err := validate(urlStr); err != nil {
 		return fmt.Errorf("redirect to %s blocked: %v", urlStr, err)
 	}
 	if len(via) >= 10 {

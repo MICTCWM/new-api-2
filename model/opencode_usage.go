@@ -17,18 +17,32 @@ import (
 
 const (
 	OpencodeModel                          = "deepseek-v4-flash"
+	OpencodeGlmModel                       = "glm-5.3-flash"
 	OpencodeFiveHourLimitMicroUSD    int64 = 12_000_000
 	OpencodeWeekLimitMicroUSD        int64 = 30_000_000
 	OpencodeMonthLimitMicroUSD       int64 = 60_000_000
 	OpencodeUsageCalibrationInterval       = 10 * time.Minute
-	// Each OpenCode channel has independent 30 USD pools for peak and off-peak pricing.
-	OpencodePoolLimitMicroUSD        int64 = 30_000_000
+	// Each OpenCode channel has one combined pool (formerly peak + off-peak $30 lanes).
+	OpencodePoolLimitMicroUSD        int64 = 60_000_000
 	OpencodeMinimumRemainingMicroUSD int64 = 200_000
 	OpencodePoolKeyPrefix                  = "opencode"
 	// OpencodeRPMLimit is kept as the default for compatibility with existing callers.
 	// Runtime checks use operation_setting.GetOpencodeRPMLimit().
 	OpencodeRPMLimit = operation_setting.DefaultOpencodeRPMLimit
 )
+
+// OpencodeNativeModels are the upstream models this channel type can call
+// directly (without model mapping).
+var OpencodeNativeModels = []string{OpencodeModel, OpencodeGlmModel}
+
+func IsOpencodeNativeModel(modelName string) bool {
+	switch strings.TrimSpace(modelName) {
+	case OpencodeModel, OpencodeGlmModel:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	OpencodePricingPeak    = "peak"
@@ -85,8 +99,8 @@ type OpencodeUsageSnapshot struct {
 	Week                        OpencodeUsageWindow         `json:"week"`
 	Month                       OpencodeUsageWindow         `json:"month"`
 	Pool                        OpencodeUsageWindow         `json:"pool"`
-	PeakPool                    OpencodeUsageWindow         `json:"peak_pool"`
-	OffPeakPool                 OpencodeUsageWindow         `json:"off_peak_pool"`
+	PeakPool                    OpencodeUsageWindow         `json:"peak_pool"`     // deprecated: always empty; kept for API compatibility
+	OffPeakPool                 OpencodeUsageWindow         `json:"off_peak_pool"` // deprecated: always empty; kept for API compatibility
 	PricingPeriod               string                      `json:"pricing_period"`
 	RPMCount                    int                         `json:"rpm_count"`
 	RPMLimit                    int                         `json:"rpm_limit"`
@@ -114,14 +128,14 @@ type OpencodeCapacitySnapshot struct {
 
 // CodeProviderUsageOverride contains the already validated micro-dollar
 // values used by the admin usage editor. Pool fields are optional because
-// OpenCode uses peak/off-peak pools while Command may use split model pools.
+// Command may use split model pools. OpenCode uses a single combined pool.
 type CodeProviderUsageOverride struct {
 	FiveHourUsedMicroUSD    int64
 	WeekUsedMicroUSD        int64
 	MonthUsedMicroUSD       int64
 	PoolUsedMicroUSD        int64
-	PeakPoolUsedMicroUSD    *int64
-	OffPeakPoolUsedMicroUSD *int64
+	PeakPoolUsedMicroUSD    *int64 // deprecated for OpenCode
+	OffPeakPoolUsedMicroUSD *int64 // deprecated for OpenCode
 	FlashPoolUsedMicroUSD   *int64
 	ProPoolUsedMicroUSD     *int64
 }
@@ -138,18 +152,20 @@ func OpencodePricingPeriodAt(t time.Time) string {
 	return OpencodePricingOffPeak
 }
 
-func OpencodePoolKeyAt(channelID int, t time.Time) string {
-	return opencodePoolKeyForPeriod(channelID, OpencodePricingPeriodAt(t))
+func OpencodePoolKeyAt(channelID int, _ time.Time) string {
+	return opencodePoolKey(channelID)
 }
 
 func OpencodePoolKeysForChannel(channelID int) []string {
-	return []string{
-		opencodePoolKeyForPeriod(channelID, OpencodePricingPeak),
-		opencodePoolKeyForPeriod(channelID, OpencodePricingOffPeak),
-	}
+	return []string{opencodePoolKey(channelID)}
 }
 
-func opencodePoolKeyForPeriod(channelID int, pricingPeriod string) string {
+func opencodePoolKey(channelID int) string {
+	return fmt.Sprintf("%s:%d", OpencodePoolKeyPrefix, channelID)
+}
+
+// Legacy peak/off-peak pool keys kept for one-time migration into the combined pool.
+func opencodeLegacyPoolKeyForPeriod(channelID int, pricingPeriod string) string {
 	return fmt.Sprintf("%s:%d:%s", OpencodePoolKeyPrefix, channelID, pricingPeriod)
 }
 
@@ -277,6 +293,12 @@ func CodeProviderChannelHasGeneralCapacity(channel *Channel, modelName string, n
 }
 
 func CalculateOpencodeCostMicroUSD(usage *dto.Usage, now time.Time) (int64, error) {
+	return CalculateOpencodeCostMicroUSDForModel(usage, OpencodeModel, now)
+}
+
+// CalculateOpencodeCostMicroUSDForModel estimates the OpenCode Go provider charge
+// for one request. All OpenCode Go models use flat rates (no peak/off-peak split).
+func CalculateOpencodeCostMicroUSDForModel(usage *dto.Usage, modelName string, _ time.Time) (int64, error) {
 	if usage == nil {
 		return 0, errors.New("opencode usage is missing")
 	}
@@ -291,13 +313,19 @@ func CalculateOpencodeCostMicroUSD(usage *dto.Usage, now time.Time) (int64, erro
 		cached = prompt
 	}
 	uncached := prompt - cached
-	inputPrice := decimal.RequireFromString("0.22")
-	outputPrice := decimal.RequireFromString("0.66")
-	cachePrice := decimal.RequireFromString("0.007")
-	if IsOpencodePeak(now) {
-		inputPrice = decimal.RequireFromString("0.44")
-		outputPrice = decimal.RequireFromString("1.32")
-		cachePrice = decimal.RequireFromString("0.014")
+
+	var inputPrice, outputPrice, cachePrice decimal.Decimal
+	switch strings.TrimSpace(modelName) {
+	case OpencodeGlmModel:
+		// Official OpenCode Go flat pricing for GLM-5.3-Flash.
+		inputPrice = decimal.RequireFromString("0.15")
+		outputPrice = decimal.RequireFromString("0.50")
+		cachePrice = decimal.RequireFromString("0.03")
+	default:
+		// DeepSeek V4 Flash flat rates (former off-peak estimates).
+		inputPrice = decimal.RequireFromString("0.22")
+		outputPrice = decimal.RequireFromString("0.66")
+		cachePrice = decimal.RequireFromString("0.007")
 	}
 	// Prices are dollars per million tokens. Converting the resulting dollars to micro-dollars cancels the million-token denominator.
 	costMicroUSD := decimal.NewFromInt(uncached).Mul(inputPrice).
@@ -310,10 +338,14 @@ func CalculateOpencodeCostMicroUSD(usage *dto.Usage, now time.Time) (int64, erro
 }
 
 func SettleOpencodeUsage(channelID int, usage *dto.Usage, now time.Time) error {
+	return SettleOpencodeUsageForModel(channelID, OpencodeModel, usage, now)
+}
+
+func SettleOpencodeUsageForModel(channelID int, modelName string, usage *dto.Usage, now time.Time) error {
 	if channelID <= 0 || usage == nil {
 		return errors.New("invalid opencode settlement input")
 	}
-	cost, err := CalculateOpencodeCostMicroUSD(usage, now)
+	cost, err := CalculateOpencodeCostMicroUSDForModel(usage, modelName, now)
 	if err != nil {
 		return err
 	}
@@ -321,9 +353,7 @@ func SettleOpencodeUsage(channelID int, usage *dto.Usage, now time.Time) error {
 }
 
 // SettleOpencodeCost applies one already-calculated provider charge to the
-// channel windows and the pool for the current pricing period. Keeping
-// calculation outside the mutation lets the request log and quota state use
-// exactly the same peak/off-peak price when a request crosses a UTC boundary.
+// channel windows and the combined pool.
 func SettleOpencodeCost(channelID int, costMicroUSD int64, now time.Time) error {
 	if channelID <= 0 || costMicroUSD < 0 {
 		return errors.New("invalid opencode settlement input")
@@ -337,7 +367,7 @@ func SettleOpencodeCost(channelID int, costMicroUSD int64, now time.Time) error 
 		if err != nil {
 			return err
 		}
-		poolUsage, err := getOrCreateOpencodePoolUsageTx(tx, OpencodePoolKeyAt(channelID, now), ts)
+		poolUsage, err := getOrCreateOpencodePoolUsageTx(tx, opencodePoolKey(channelID), ts)
 		if err != nil {
 			return err
 		}
@@ -354,7 +384,7 @@ func SettleOpencodeCost(channelID int, costMicroUSD int64, now time.Time) error 
 }
 
 // SetOpencodeUsageOverride replaces the usage counters for one OpenCode
-// channel. It intentionally leaves RPM state untouched.
+// channel. It intentionally leaves RPM/concurrency state untouched.
 func SetOpencodeUsageOverride(channelID int, override CodeProviderUsageOverride, now int64) error {
 	if channelID <= 0 {
 		return errors.New("invalid opencode channel id")
@@ -362,10 +392,22 @@ func SetOpencodeUsageOverride(channelID int, override CodeProviderUsageOverride,
 	if err := validateCodeProviderUsageOverride(override, OpencodeFiveHourLimitMicroUSD, OpencodeWeekLimitMicroUSD, OpencodeMonthLimitMicroUSD); err != nil {
 		return err
 	}
-	if override.PeakPoolUsedMicroUSD == nil || override.OffPeakPoolUsedMicroUSD == nil {
-		return errors.New("opencode peak and off-peak usage are required")
+	poolUsed := override.PoolUsedMicroUSD
+	// Backward-compatible: accept legacy peak+off-peak override payloads by summing them.
+	if override.PeakPoolUsedMicroUSD != nil || override.OffPeakPoolUsedMicroUSD != nil {
+		var peak, offPeak int64
+		if override.PeakPoolUsedMicroUSD != nil {
+			peak = *override.PeakPoolUsedMicroUSD
+		}
+		if override.OffPeakPoolUsedMicroUSD != nil {
+			offPeak = *override.OffPeakPoolUsedMicroUSD
+		}
+		if peak < 0 || offPeak < 0 {
+			return errors.New("opencode pool usage exceeds the limit")
+		}
+		poolUsed = peak + offPeak
 	}
-	if *override.PeakPoolUsedMicroUSD < 0 || *override.OffPeakPoolUsedMicroUSD < 0 || *override.PeakPoolUsedMicroUSD > OpencodePoolLimitMicroUSD || *override.OffPeakPoolUsedMicroUSD > OpencodePoolLimitMicroUSD {
+	if poolUsed < 0 || poolUsed > OpencodePoolLimitMicroUSD {
 		return errors.New("opencode pool usage exceeds the limit")
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
@@ -373,11 +415,7 @@ func SetOpencodeUsageOverride(channelID int, override CodeProviderUsageOverride,
 		if err != nil {
 			return err
 		}
-		peak, err := getOrCreateOpencodePoolUsageTx(tx, opencodePoolKeyForPeriod(channelID, OpencodePricingPeak), now)
-		if err != nil {
-			return err
-		}
-		offPeak, err := getOrCreateOpencodePoolUsageTx(tx, opencodePoolKeyForPeriod(channelID, OpencodePricingOffPeak), now)
+		pool, err := getOrCreateOpencodePoolUsageTx(tx, opencodePoolKey(channelID), now)
 		if err != nil {
 			return err
 		}
@@ -385,20 +423,13 @@ func SetOpencodeUsageOverride(channelID int, override CodeProviderUsageOverride,
 		usage.FiveHourStart, usage.WeekStart, usage.MonthStart = now, now, now
 		usage.LastCalibrationError = ""
 		usage.NextCalibrationAt = nextOpencodeUsageCalibrationAt(channelID, now)
-		peak.Used = *override.PeakPoolUsedMicroUSD
-		offPeak.Used = *override.OffPeakPoolUsedMicroUSD
-		peak.ResetTime, offPeak.ResetTime = now, now
+		pool.Used = poolUsed
+		pool.ResetTime = now
 
 		if err := tx.Save(usage).Error; err != nil {
 			return err
 		}
-		if err := tx.Save(peak).Error; err != nil {
-			return err
-		}
-		if err := tx.Save(offPeak).Error; err != nil {
-			return err
-		}
-		return nil
+		return tx.Save(pool).Error
 	})
 }
 
@@ -427,14 +458,6 @@ func GetOpencodeUsageSnapshot(channelID int, now int64) (*OpencodeUsageSnapshot,
 	if err != nil {
 		return nil, err
 	}
-	peakPoolUsage, err := getOrCreateOpencodePoolUsageByKey(opencodePoolKeyForPeriod(channelID, OpencodePricingPeak), now)
-	if err != nil {
-		return nil, err
-	}
-	offPeakPoolUsage, err := getOrCreateOpencodePoolUsageByKey(opencodePoolKeyForPeriod(channelID, OpencodePricingOffPeak), now)
-	if err != nil {
-		return nil, err
-	}
 	resetOpencodeChannelWindows(channelUsage, now)
 	if channelUsage.NextCalibrationAt == 0 {
 		channelUsage.NextCalibrationAt = nextOpencodeUsageCalibrationAt(channelID, now)
@@ -442,15 +465,16 @@ func GetOpencodeUsageSnapshot(channelID int, now int64) (*OpencodeUsageSnapshot,
 			return nil, err
 		}
 	}
+	emptyPool := makeOpencodeWindow(0, 0, 0)
 	return &OpencodeUsageSnapshot{
 		ChannelID:        channelID,
 		FiveHour:         makeOpencodeWindow(channelUsage.FiveHourUsed, OpencodeFiveHourLimitMicroUSD, channelUsage.FiveHourStart+5*60*60),
 		Week:             makeOpencodeWindow(channelUsage.WeekUsed, OpencodeWeekLimitMicroUSD, channelUsage.WeekStart+7*24*60*60),
 		Month:            makeOpencodeWindow(channelUsage.MonthUsed, OpencodeMonthLimitMicroUSD, channelUsage.MonthStart+30*24*60*60),
 		Pool:             makeOpencodeWindow(poolUsage.Used, OpencodePoolLimitMicroUSD, poolUsage.ResetTime),
-		PeakPool:         makeOpencodeWindow(peakPoolUsage.Used, OpencodePoolLimitMicroUSD, peakPoolUsage.ResetTime),
-		OffPeakPool:      makeOpencodeWindow(offPeakPoolUsage.Used, OpencodePoolLimitMicroUSD, offPeakPoolUsage.ResetTime),
-		PricingPeriod:    OpencodePricingPeriodAt(time.Unix(now, 0).UTC()),
+		PeakPool:         emptyPool,
+		OffPeakPool:      emptyPool,
+		PricingPeriod:    "",
 		RPMCount:         normalizeOpencodeRPM(channelUsage.RPMCount),
 		RPMLimit:         operation_setting.GetOpencodeConcurrencyLimit(),
 		RPMResetAt:       channelUsage.RPMWindowStart + 60,
@@ -508,8 +532,9 @@ func ResetOpencodePoolUsage() error {
 	return ResetAllOpencodeUsage()
 }
 
-// EnsureOpencodePoolUsageRows creates both pricing lanes during startup so
+// EnsureOpencodePoolUsageRows creates the combined pool row during startup so
 // concurrent settlements can acquire an existing row lock on every database.
+// Legacy peak/off-peak rows are migrated once into the combined pool.
 func EnsureOpencodePoolUsageRows() error {
 	now := time.Now().Unix()
 	var channels []Channel
@@ -517,18 +542,60 @@ func EnsureOpencodePoolUsageRows() error {
 		return err
 	}
 	for _, channel := range channels {
-		for _, poolKey := range OpencodePoolKeysForChannel(channel.Id) {
-			var usage OpencodePoolUsage
-			err := DB.Where("pool_key = ?", poolKey).First(&usage).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				if err := DB.Create(&OpencodePoolUsage{PoolKey: poolKey, ResetTime: now}).Error; err != nil {
-					return err
-				}
-				continue
+		poolKey := opencodePoolKey(channel.Id)
+		var usage OpencodePoolUsage
+		err := DB.Where("pool_key = ?", poolKey).First(&usage).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			migratedUsed, migrateErr := migrateLegacyOpencodePoolUsed(channel.Id)
+			if migrateErr != nil {
+				return migrateErr
 			}
-			if err != nil {
+			if err := DB.Create(&OpencodePoolUsage{
+				PoolKey:   poolKey,
+				Used:      minMaxOpencode(migratedUsed, 0, OpencodePoolLimitMicroUSD),
+				ResetTime: now,
+			}).Error; err != nil {
 				return err
 			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return ResetCodeProviderConcurrencyOnStartup()
+}
+
+func migrateLegacyOpencodePoolUsed(channelID int) (int64, error) {
+	var total int64
+	for _, period := range []string{OpencodePricingPeak, OpencodePricingOffPeak} {
+		var legacy OpencodePoolUsage
+		err := DB.Where("pool_key = ?", opencodeLegacyPoolKeyForPeriod(channelID, period)).First(&legacy).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if legacy.Used > 0 {
+			total += legacy.Used
+		}
+	}
+	return total, nil
+}
+
+// ResetCodeProviderConcurrencyOnStartup clears in-memory concurrency leases that
+// cannot survive a process restart. Leaving stale counters would permanently
+// shrink available capacity until an admin reset.
+func ResetCodeProviderConcurrencyOnStartup() error {
+	if DB.Migrator().HasTable(&OpencodeChannelUsage{}) {
+		if err := DB.Model(&OpencodeChannelUsage{}).Where("concurrency_count <> 0").Update("concurrency_count", 0).Error; err != nil {
+			return err
+		}
+	}
+	if DB.Migrator().HasTable(&CommandChannelUsage{}) {
+		if err := DB.Model(&CommandChannelUsage{}).Where("concurrency_count <> 0").Update("concurrency_count", 0).Error; err != nil {
+			return err
 		}
 	}
 	return nil
@@ -555,7 +622,7 @@ func getOrCreateOpencodeChannelUsageTx(tx *gorm.DB, channelID int, now int64) (*
 }
 
 func getOrCreateOpencodePoolUsage(channelID int, now int64) (*OpencodePoolUsage, error) {
-	return getOrCreateOpencodePoolUsageByKey(OpencodePoolKeyAt(channelID, time.Unix(now, 0).UTC()), now)
+	return getOrCreateOpencodePoolUsageByKey(opencodePoolKey(channelID), now)
 }
 
 func getOrCreateOpencodePoolUsageByKey(poolKey string, now int64) (*OpencodePoolUsage, error) {
@@ -615,6 +682,12 @@ func addCapped(current, amount, limit int64) int64 {
 }
 
 func makeOpencodeWindow(used, limit, resetAt int64) OpencodeUsageWindow {
+	if limit <= 0 {
+		return OpencodeUsageWindow{
+			UsedMicroUSD: 0, LimitMicroUSD: 0, RemainingMicroUSD: 0,
+			UsedUSD: 0, LimitUSD: 0, RemainingUSD: 0, Percent: 0, ResetAt: resetAt,
+		}
+	}
 	used = minMaxOpencode(used, 0, limit)
 	remaining := remainingOpencode(used, limit)
 	percent := float64(used) * 100 / float64(limit)
@@ -652,7 +725,6 @@ func ReserveOpencodeRPM(channelID int, now int64) (bool, int64, error) {
 			return nil
 		}
 		usage.RPMCount++
-		usage.ConcurrencyCount++
 		allowed = true
 		return tx.Save(usage).Error
 	})
@@ -674,9 +746,6 @@ func ReleaseOpencodeRPM(channelID int, now int64) error {
 			return nil
 		}
 		usage.RPMCount--
-		if usage.ConcurrencyCount > 0 {
-			usage.ConcurrencyCount--
-		}
 		return tx.Save(usage).Error
 	})
 }
@@ -785,7 +854,7 @@ func channelSupportsCodeProviderModel(channel *Channel, modelName string) bool {
 	}
 	switch channel.Type {
 	case constant.ChannelTypeOpencode:
-		if modelName == OpencodeModel {
+		if IsOpencodeNativeModel(modelName) {
 			return true
 		}
 	case constant.ChannelTypeCommand:
@@ -808,7 +877,7 @@ func channelSupportsCodeProviderModel(channel *Channel, modelName string) bool {
 // they do not bypass the provider-specific quota checks.
 func IsCodeProviderModel(modelName string) bool {
 	modelName = strings.TrimSpace(modelName)
-	if modelName == OpencodeModel || modelName == CommandFlashModel || modelName == CommandProModel {
+	if IsOpencodeNativeModel(modelName) || modelName == CommandFlashModel || modelName == CommandProModel {
 		return true
 	}
 	if DB == nil || modelName == "" || !DB.Migrator().HasTable("channels") {
@@ -1077,17 +1146,22 @@ func ValidateOpencodeChannel(channel *Channel) error {
 	if err != nil {
 		return fmt.Errorf("invalid opencode model mapping")
 	}
-	if !channelHasConfiguredModel(channel, OpencodeModel) {
-		return fmt.Errorf("opencode channel must include %s", OpencodeModel)
-	}
+	hasNativeModel := false
 	for _, configuredModel := range channel.GetModels() {
 		configuredModel = strings.TrimSpace(configuredModel)
-		if configuredModel == "" || configuredModel == OpencodeModel {
+		if configuredModel == "" {
+			continue
+		}
+		if IsOpencodeNativeModel(configuredModel) {
+			hasNativeModel = true
 			continue
 		}
 		if _, ok := mappingSources[configuredModel]; !ok {
-			return fmt.Errorf("opencode channel only supports %s or model mapping source models", OpencodeModel)
+			return fmt.Errorf("opencode channel only supports deepseek-v4-flash, glm-5.3-flash, or model mapping source models")
 		}
+	}
+	if !hasNativeModel {
+		return fmt.Errorf("opencode channel must include deepseek-v4-flash or glm-5.3-flash")
 	}
 	return nil
 }

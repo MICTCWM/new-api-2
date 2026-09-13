@@ -1,6 +1,7 @@
 package service
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -303,9 +304,8 @@ func TestCodeProviderQueueFallsBackToOrdinaryChannelWhenRPMIsFull(t *testing.T) 
 	}
 	model.InitChannelCache()
 
-	now := time.Now().Unix()
-	for i := 0; i < operation_setting.GetOpencodeRPMLimit(); i++ {
-		allowed, _, err := model.ReserveCommandRPM(code.Id, now)
+	for i := 0; i < operation_setting.GetOpencodeConcurrencyLimit(); i++ {
+		allowed, err := model.ReserveCommandConcurrency(code.Id)
 		require.NoError(t, err)
 		require.True(t, allowed)
 	}
@@ -524,7 +524,7 @@ func TestAffinityReservedRPMUsesTheSharedChannelLimit(t *testing.T) {
 
 	now := time.Now().Unix()
 	for i := 0; i < 3; i++ {
-		allowed, _, err := model.ReserveOpencodeRPM(channel.Id, now)
+		allowed, err := model.ReserveOpencodeConcurrency(channel.Id)
 		require.NoError(t, err)
 		require.True(t, allowed)
 	}
@@ -534,7 +534,7 @@ func TestAffinityReservedRPMUsesTheSharedChannelLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, filtered)
 
-	require.NoError(t, model.ReleaseOpencodeRPM(channel.Id, now))
+	require.NoError(t, model.ReleaseOpencodeConcurrency(channel.Id))
 	filtered, err = filterCodeProviderCandidatesByAffinityReserve(param, []*model.Channel{channel})
 	require.NoError(t, err)
 	require.Len(t, filtered, 1)
@@ -613,11 +613,11 @@ func TestNewCodeProviderSelectionUsesLeastEffectiveLoad(t *testing.T) {
 
 	now := time.Now().Unix()
 	for i := 0; i < 2; i++ {
-		allowed, _, err := model.ReserveCommandRPM(channels[0].Id, now)
+		allowed, err := model.ReserveCommandConcurrency(channels[0].Id)
 		require.NoError(t, err)
 		require.True(t, allowed)
 	}
-	allowed, _, err := model.ReserveCommandRPM(channels[1].Id, now)
+	allowed, err := model.ReserveCommandConcurrency(channels[1].Id)
 	require.NoError(t, err)
 	require.True(t, allowed)
 	const affinityKey = "channel-affinity-balanced-command-b"
@@ -627,4 +627,65 @@ func TestNewCodeProviderSelectionUsesLeastEffectiveLoad(t *testing.T) {
 	selected, err := selectLeastLoadedCodeProviderCandidate(channels, now, false)
 	require.NoError(t, err)
 	require.Equal(t, channels[2].Id, selected.Id)
+}
+
+// 亲和请求实际占用并发位后必须释放自己的预留租约：预留(1→0) + 实际(0→1) 对应同一个
+// 请求，不释放会让 least-loaded 选路把该渠道的负载看高一个名额，造成容量浪费。
+func TestConvertChannelAffinityReservationToActual_ReleasesLeaseWhenSlotAcquired(t *testing.T) {
+	db := useChannelAffinityRoutingDB(t)
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeOpencode,
+		Status: common.ChannelStatusEnabled,
+		Key:    "opencode-affinity-convert",
+		Models: model.OpencodeModel,
+		Group:  "default",
+	}
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group:     "default",
+		Model:     model.OpencodeModel,
+		ChannelId: channel.Id,
+		Enabled:   true,
+	}).Error)
+	model.InitChannelCache()
+
+	cacheKey := channelAffinityCacheNamespace + ":opencode session trace:test-convert"
+	rememberChannelAffinityProtection(cacheKey, channel.Id, 60)
+	t.Cleanup(func() { forgetChannelAffinityProtection(cacheKey) })
+
+	now := time.Now().Unix()
+	require.Equal(t, 1, GetChannelAffinityReservedConcurrency(channel.Id, now))
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	setChannelAffinityContext(c, channelAffinityMeta{CacheKey: cacheKey, TTLSeconds: 60, RuleName: "opencode session trace"})
+	MarkChannelAffinityUsed(c, "default", channel.Id)
+
+	ConvertChannelAffinityReservationToActual(c)
+	require.Equal(t, 0, GetChannelAffinityReservedConcurrency(channel.Id, now), "in-flight request must not keep holding its reservation lease")
+
+	// 请求成功结束时 RecordChannelAffinity 重新武装租约，为下一轮请求继续预留。
+	RecordChannelAffinity(c, channel.Id)
+	require.Equal(t, 1, GetChannelAffinityReservedConcurrency(channel.Id, now), "successful request must re-arm the lease for its next turn")
+}
+
+// 没有亲和上下文的请求调用转换必须是安全 no-op，不影响其他请求的租约。
+func TestConvertChannelAffinityReservationToActual_NoopWithoutAffinityMeta(t *testing.T) {
+	useChannelAffinityRoutingDB(t)
+
+	otherKey := channelAffinityCacheNamespace + ":opencode session trace:test-noop"
+	rememberChannelAffinityProtection(otherKey, 999001, 60)
+	t.Cleanup(func() { forgetChannelAffinityProtection(otherKey) })
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	ConvertChannelAffinityReservationToActual(c)
+	ConvertChannelAffinityReservationToActual(nil)
+
+	require.Equal(t, 1, GetChannelAffinityReservedConcurrency(999001, time.Now().Unix()), "unrelated lease must survive the no-op conversion")
 }

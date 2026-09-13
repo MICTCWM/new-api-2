@@ -51,6 +51,46 @@ export async function getAutoscalingTest(
 }
 
 /**
+ * Start a scaling test on the selected AutoDL targets. The API token is sent
+ * in the POST JSON body; when empty, the backend falls back to the persisted
+ * token. Uses skipBusinessError so the shared success interceptor does not
+ * toast the result here — the caller's onSuccess/onError surface it once.
+ */
+export async function startAutoscalingTest(
+  params: AutoscalingTestParams
+): Promise<AutoscalingTestResult> {
+  const res = await api.post<AutoscalingTestResult>(
+    '/api/autoscaling/test-start',
+    {
+      token: params.token,
+    },
+    {
+      skipBusinessError: true,
+    }
+  )
+  return res.data
+}
+
+/**
+ * Stop the scaling test started via startAutoscalingTest. Same token and
+ * error-handling contract as startAutoscalingTest.
+ */
+export async function stopAutoscalingTest(
+  params: AutoscalingTestParams
+): Promise<AutoscalingTestResult> {
+  const res = await api.post<AutoscalingTestResult>(
+    '/api/autoscaling/test-stop',
+    {
+      token: params.token,
+    },
+    {
+      skipBusinessError: true,
+    }
+  )
+  return res.data
+}
+
+/**
  * List the AutoDL instances available for auto-scaling.
  * Uses the persisted AutoDL token server-side. The endpoint reports "未配置
  * AutoDL Token" (success: false) as a business error without an HTTP error

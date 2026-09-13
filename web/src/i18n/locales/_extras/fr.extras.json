@@ -1,0 +1,5 @@
+{
+  "translation.Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and model mapping source models.": "Point de terminaison fixe : https://opencode.ai/zen/go/v1/chat/completions. Prend en charge deepseek-v4-flash et les modèles sources de mappage.",
+  "translation.Opencode supports the fixed model and model mapping source models": "OpenCode prend en charge le modèle fixe et les modèles sources de mappage",
+  "translation.Opencode uses a fixed endpoint and only supports deepseek-v4-flash. Batch mode creates one channel per API key.": "Opencode utilise un point de terminaison fixe et prend uniquement en charge deepseek-v4-flash. Le mode groupé crée un canal par clé API."
+}

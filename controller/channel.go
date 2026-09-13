@@ -289,18 +289,22 @@ func SetOpencodeChannelUsageOverride(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	peakPoolUsed, err := usageOverrideMicroUSD(req.PeakPoolUsedUSD, "peak_pool_used_usd", model.OpencodePoolLimitMicroUSD)
+	poolUsed, err := usageOverrideMicroUSD(req.PoolUsedUSD, "pool_used_usd", model.OpencodePoolLimitMicroUSD)
 	if err != nil {
-		common.ApiError(c, err)
-		return
+		// Backward-compatible: accept legacy peak + off-peak override payloads.
+		peakPoolUsed, peakErr := usageOverrideMicroUSD(req.PeakPoolUsedUSD, "peak_pool_used_usd", model.OpencodePoolLimitMicroUSD)
+		offPeakPoolUsed, offPeakErr := usageOverrideMicroUSD(req.OffPeakPoolUsedUSD, "off_peak_pool_used_usd", model.OpencodePoolLimitMicroUSD)
+		if peakErr != nil || offPeakErr != nil {
+			common.ApiError(c, err)
+			return
+		}
+		poolUsed = peakPoolUsed + offPeakPoolUsed
+		if poolUsed > model.OpencodePoolLimitMicroUSD {
+			common.ApiError(c, fmt.Errorf("pool_used_usd exceeds the limit of $%.2f", float64(model.OpencodePoolLimitMicroUSD)/1_000_000))
+			return
+		}
 	}
-	override.PeakPoolUsedMicroUSD = &peakPoolUsed
-	offPeakPoolUsed, err := usageOverrideMicroUSD(req.OffPeakPoolUsedUSD, "off_peak_pool_used_usd", model.OpencodePoolLimitMicroUSD)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	override.OffPeakPoolUsedMicroUSD = &offPeakPoolUsed
+	override.PoolUsedMicroUSD = poolUsed
 	if err := model.SetOpencodeUsageOverride(id, override, common.GetTimestamp()); err != nil {
 		common.ApiError(c, err)
 		return
@@ -831,27 +835,27 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			}
 		}
 		nativeModels := map[string]struct{}{modelName: {}}
+		if channel.Type == constant.ChannelTypeOpencode {
+			nativeModels[opencode.GlmModel] = struct{}{}
+		}
 		if channel.Type == constant.ChannelTypeCommand {
 			nativeModels[command.ProModel] = struct{}{}
 		}
 		validModels := make([]string, 0, len(channel.GetModels()))
 		seenModels := make(map[string]struct{})
-		hasFixedModel := false
+		hasNativeModel := false
 		for _, configuredModel := range channel.GetModels() {
 			configuredModel = strings.TrimSpace(configuredModel)
 			if configuredModel == "" {
 				continue
 			}
-			if configuredModel == modelName {
-				hasFixedModel = true
-			}
-			if _, isNativeModel := nativeModels[configuredModel]; !isNativeModel {
-				if _, ok := mappingSources[configuredModel]; !ok {
-					if channel.Type == constant.ChannelTypeCommand {
-						return fmt.Errorf("%s only supports Flash, Pro, or model mapping source models", keyName)
-					}
-					return fmt.Errorf("%s only supports deepseek-v4-flash or model mapping source models", keyName)
+			if _, isNativeModel := nativeModels[configuredModel]; isNativeModel {
+				hasNativeModel = true
+			} else if _, ok := mappingSources[configuredModel]; !ok {
+				if channel.Type == constant.ChannelTypeCommand {
+					return fmt.Errorf("%s only supports Flash, Pro, or model mapping source models", keyName)
 				}
+				return fmt.Errorf("%s only supports deepseek-v4-flash, glm-5.3-flash, or model mapping source models", keyName)
 			}
 			if _, ok := seenModels[configuredModel]; ok {
 				continue
@@ -862,8 +866,24 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		if len(validModels) == 0 {
 			return fmt.Errorf("%s must have at least one model", keyName)
 		}
-		if !hasFixedModel {
-			return fmt.Errorf("%s must include the fixed model %s", keyName, modelName)
+		if !hasNativeModel {
+			if channel.Type == constant.ChannelTypeCommand {
+				return fmt.Errorf("%s must include the fixed model %s", keyName, modelName)
+			}
+			return fmt.Errorf("%s must include deepseek-v4-flash or glm-5.3-flash", keyName)
+		}
+		// Command still requires Flash as the primary fixed model.
+		if channel.Type == constant.ChannelTypeCommand {
+			hasFlash := false
+			for _, configuredModel := range validModels {
+				if configuredModel == modelName {
+					hasFlash = true
+					break
+				}
+			}
+			if !hasFlash {
+				return fmt.Errorf("%s must include the fixed model %s", keyName, modelName)
+			}
 		}
 		channel.Models = strings.Join(validModels, ",")
 		channel.BaseURL = &canonicalURL

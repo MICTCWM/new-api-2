@@ -28,6 +28,7 @@ import { toast } from 'sonner'
 
 import { getChannels } from '@/features/channels/api'
 import type { Channel } from '@/features/channels/types'
+import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -47,7 +48,12 @@ import {
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
-import { getAutoscalingInstances, getAutoscalingTest } from './auto-scaling-api'
+import {
+  getAutoscalingInstances,
+  getAutoscalingTest,
+  startAutoscalingTest,
+  stopAutoscalingTest,
+} from './auto-scaling-api'
 import type { AutoscalingInstance } from './auto-scaling-lib'
 import {
   extractDeploymentCount,
@@ -166,6 +172,34 @@ export function AutoScalingFields(props: AutoScalingFieldsProps) {
     },
   })
 
+  const startTestMutation = useMutation({
+    mutationFn: () => startAutoscalingTest({ token: autoScalingToken }),
+    onSuccess: (result) => {
+      if (result?.success) {
+        toast.success(t('Auto scaling start test succeeded'))
+        return
+      }
+      toast.error(result?.message || t('Auto scaling start test failed'))
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t('Auto scaling start test failed'))
+    },
+  })
+
+  const stopTestMutation = useMutation({
+    mutationFn: () => stopAutoscalingTest({ token: autoScalingToken }),
+    onSuccess: (result) => {
+      if (result?.success) {
+        toast.success(t('Auto scaling stop test succeeded'))
+        return
+      }
+      toast.error(result?.message || t('Auto scaling stop test failed'))
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t('Auto scaling stop test failed'))
+    },
+  })
+
   return (
     <SettingsControlGroup>
       <FormField
@@ -260,8 +294,7 @@ export function AutoScalingFields(props: AutoScalingFieldsProps) {
                   {t('AutoDL API token used to authenticate requests')}
                 </FormDescription>
                 <FormControl>
-                  <Input
-                    type='password'
+                  <PasswordInput
                     autoComplete='off'
                     value={field.value}
                     onChange={field.onChange}
@@ -372,6 +405,28 @@ export function AutoScalingFields(props: AutoScalingFieldsProps) {
               {testConnectionMutation.isPending
                 ? t('Testing connection...')
                 : t('Test connection')}
+            </Button>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => startTestMutation.mutate()}
+              disabled={startTestMutation.isPending}
+            >
+              {startTestMutation.isPending
+                ? t('Starting instances test...')
+                : t('Test start')}
+            </Button>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => stopTestMutation.mutate()}
+              disabled={stopTestMutation.isPending}
+            >
+              {stopTestMutation.isPending
+                ? t('Stopping instances test...')
+                : t('Test stop')}
             </Button>
           </div>
         </SettingsControlChildren>

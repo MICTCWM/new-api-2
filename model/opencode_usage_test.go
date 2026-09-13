@@ -29,7 +29,7 @@ func useOpencodeUsageDB(t *testing.T) {
 	})
 }
 
-func TestCalculateOpencodeCostMicroUSDUsesPeakPricingAndCache(t *testing.T) {
+func TestCalculateOpencodeCostMicroUSDUsesFlatPricingAndCache(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     2_000_000,
 		CompletionTokens: 1_000_000,
@@ -38,13 +38,34 @@ func TestCalculateOpencodeCostMicroUSDUsesPeakPricingAndCache(t *testing.T) {
 		},
 	}
 
+	// Flat DeepSeek rates: 1.5M * 0.22 + 1M * 0.66 + 0.5M * 0.007 = 330_000 + 660_000 + 3_500 = 993_500
 	offPeak, err := CalculateOpencodeCostMicroUSD(usage, time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	require.Equal(t, int64(993_500), offPeak)
 
 	peak, err := CalculateOpencodeCostMicroUSD(usage, time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	require.Equal(t, int64(1_987_000), peak)
+	require.Equal(t, int64(993_500), peak)
+}
+
+func TestCalculateOpencodeCostMicroUSDForModelUsesGlmFlatPricing(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     2_000_000,
+		CompletionTokens: 1_000_000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 500_000,
+		},
+	}
+
+	// GLM-5.3-Flash: $0.15 input / $0.50 output / $0.03 cache (flat, no peak).
+	// 1.5M uncached * 0.15 + 1M * 0.50 + 0.5M * 0.03 = 225_000 + 500_000 + 15_000 = 740_000
+	offPeak, err := CalculateOpencodeCostMicroUSDForModel(usage, OpencodeGlmModel, time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, int64(740_000), offPeak)
+
+	peak, err := CalculateOpencodeCostMicroUSDForModel(usage, OpencodeGlmModel, time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, int64(740_000), peak)
 }
 
 func TestGetCodeProviderCandidatesIncludesModelMappingSource(t *testing.T) {
@@ -240,39 +261,36 @@ func TestSettleOpencodeCostUsesTheProvidedCharge(t *testing.T) {
 	require.Equal(t, cost, snapshot.Week.UsedMicroUSD)
 	require.Equal(t, cost, snapshot.Month.UsedMicroUSD)
 	require.Equal(t, cost, snapshot.Pool.UsedMicroUSD)
-	require.Equal(t, cost, snapshot.PeakPool.UsedMicroUSD)
-	require.Equal(t, OpencodePricingPeak, snapshot.PricingPeriod)
+	require.Equal(t, int64(0), snapshot.PeakPool.UsedMicroUSD)
+	require.Equal(t, int64(0), snapshot.OffPeakPool.UsedMicroUSD)
+	require.Empty(t, snapshot.PricingPeriod)
 }
 
-func TestOpencodePeakAndOffPeakPoolsAreIndependent(t *testing.T) {
+func TestOpencodeUsesCombinedPoolAcrossFormerPeakWindows(t *testing.T) {
 	useOpencodeUsageDB(t)
 	peakNow := time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC)
 	offPeakNow := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
 
-	require.NoError(t, SettleOpencodeCost(406, OpencodePoolLimitMicroUSD, peakNow))
-	peakSnapshot, err := GetOpencodeUsageSnapshot(406, peakNow.Unix())
+	require.NoError(t, SettleOpencodeCost(406, 10_000_000, peakNow))
+	require.NoError(t, SettleOpencodeCost(406, 5_000_000, offPeakNow))
+	snapshot, err := GetOpencodeUsageSnapshot(406, peakNow.Unix())
 	require.NoError(t, err)
-	require.Equal(t, OpencodePoolLimitMicroUSD, peakSnapshot.PeakPool.UsedMicroUSD)
-	require.Equal(t, int64(0), peakSnapshot.OffPeakPool.UsedMicroUSD)
+	require.Equal(t, int64(15_000_000), snapshot.Pool.UsedMicroUSD)
 
 	otherChannelSnapshot, err := GetOpencodeUsageSnapshot(407, peakNow.Unix())
 	require.NoError(t, err)
-	require.Equal(t, int64(0), otherChannelSnapshot.PeakPool.UsedMicroUSD)
-	require.Equal(t, int64(0), otherChannelSnapshot.OffPeakPool.UsedMicroUSD)
+	require.Equal(t, int64(0), otherChannelSnapshot.Pool.UsedMicroUSD)
 	peakAvailable, err := OpencodeChannelHasQuotaCapacity(407, peakNow.Unix())
 	require.NoError(t, err)
 	require.True(t, peakAvailable)
 
-	offPeakAvailable, err := OpencodeChannelHasQuotaCapacity(407, offPeakNow.Unix())
-	require.NoError(t, err)
-	require.True(t, offPeakAvailable)
 	require.NoError(t, SettleOpencodeCost(407, OpencodePoolLimitMicroUSD, offPeakNow))
-
 	offPeakSnapshot, err := GetOpencodeUsageSnapshot(407, offPeakNow.Unix())
 	require.NoError(t, err)
-	require.Equal(t, int64(0), offPeakSnapshot.PeakPool.UsedMicroUSD)
-	require.Equal(t, OpencodePoolLimitMicroUSD, offPeakSnapshot.OffPeakPool.UsedMicroUSD)
-	require.Equal(t, OpencodePricingOffPeak, offPeakSnapshot.PricingPeriod)
+	require.Equal(t, OpencodePoolLimitMicroUSD, offPeakSnapshot.Pool.UsedMicroUSD)
+	available, err := OpencodeChannelHasQuotaCapacity(407, offPeakNow.Unix())
+	require.NoError(t, err)
+	require.False(t, available)
 }
 
 func TestResetAllOpencodeUsageResetsEveryChannelAndPool(t *testing.T) {
@@ -292,9 +310,9 @@ func TestResetAllOpencodeUsageResetsEveryChannelAndPool(t *testing.T) {
 		require.Equal(t, int64(0), usage.FiveHour.UsedMicroUSD)
 		require.Equal(t, int64(0), usage.Week.UsedMicroUSD)
 		require.Equal(t, int64(0), usage.Month.UsedMicroUSD)
-		require.Equal(t, int64(0), usage.PeakPool.UsedMicroUSD)
-		require.Equal(t, int64(0), usage.OffPeakPool.UsedMicroUSD)
+		require.Equal(t, int64(0), usage.Pool.UsedMicroUSD)
 		require.Equal(t, 0, usage.RPMCount)
+		require.Equal(t, 0, usage.ConcurrencyCount)
 	}
 }
 
@@ -303,21 +321,18 @@ func TestSettleOpencodeCostRejectsNegativeCharge(t *testing.T) {
 	require.Error(t, SettleOpencodeCost(405, -1, time.Now().UTC()))
 }
 
-func TestSetOpencodeUsageOverrideUpdatesBothPricingPoolsAndPreservesRPM(t *testing.T) {
+func TestSetOpencodeUsageOverrideUpdatesCombinedPoolAndPreservesRPM(t *testing.T) {
 	useOpencodeUsageDB(t)
 	now := time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC)
 	allowed, _, err := ReserveOpencodeRPM(450, now.Unix())
 	require.NoError(t, err)
 	require.True(t, allowed)
 
-	peak := int64(7_000_000)
-	offPeak := int64(11_000_000)
 	require.NoError(t, SetOpencodeUsageOverride(450, CodeProviderUsageOverride{
-		FiveHourUsedMicroUSD:    2_000_000,
-		WeekUsedMicroUSD:        8_000_000,
-		MonthUsedMicroUSD:       15_000_000,
-		PeakPoolUsedMicroUSD:    &peak,
-		OffPeakPoolUsedMicroUSD: &offPeak,
+		FiveHourUsedMicroUSD: 2_000_000,
+		WeekUsedMicroUSD:     8_000_000,
+		MonthUsedMicroUSD:    15_000_000,
+		PoolUsedMicroUSD:     18_000_000,
 	}, now.Unix()))
 
 	snapshot, err := GetOpencodeUsageSnapshot(450, now.Unix())
@@ -325,9 +340,26 @@ func TestSetOpencodeUsageOverrideUpdatesBothPricingPoolsAndPreservesRPM(t *testi
 	require.Equal(t, int64(2_000_000), snapshot.FiveHour.UsedMicroUSD)
 	require.Equal(t, int64(8_000_000), snapshot.Week.UsedMicroUSD)
 	require.Equal(t, int64(15_000_000), snapshot.Month.UsedMicroUSD)
-	require.Equal(t, peak, snapshot.PeakPool.UsedMicroUSD)
-	require.Equal(t, offPeak, snapshot.OffPeakPool.UsedMicroUSD)
+	require.Equal(t, int64(18_000_000), snapshot.Pool.UsedMicroUSD)
 	require.Equal(t, 1, snapshot.RPMCount)
+}
+
+func TestSetOpencodeUsageOverrideAcceptsLegacyPeakOffPeakPayload(t *testing.T) {
+	useOpencodeUsageDB(t)
+	now := time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC)
+	peak := int64(7_000_000)
+	offPeak := int64(11_000_000)
+	require.NoError(t, SetOpencodeUsageOverride(451, CodeProviderUsageOverride{
+		FiveHourUsedMicroUSD:    1_000_000,
+		WeekUsedMicroUSD:        2_000_000,
+		MonthUsedMicroUSD:       3_000_000,
+		PeakPoolUsedMicroUSD:    &peak,
+		OffPeakPoolUsedMicroUSD: &offPeak,
+	}, now.Unix()))
+
+	snapshot, err := GetOpencodeUsageSnapshot(451, now.Unix())
+	require.NoError(t, err)
+	require.Equal(t, int64(18_000_000), snapshot.Pool.UsedMicroUSD)
 }
 
 func TestOpencodeRPMReservationCanBeReleasedAfterFailure(t *testing.T) {
@@ -355,12 +387,17 @@ func TestOpencodeRPMReservationCanBeReleasedAfterFailure(t *testing.T) {
 	require.Equal(t, OpencodeRPMLimit, usage.RPMCount)
 }
 
-func TestOpencodeCapacityRejectsFullRPMWindow(t *testing.T) {
+func TestOpencodeCapacityRejectsFullConcurrency(t *testing.T) {
 	useOpencodeUsageDB(t)
-	now := int64(2_000)
+	previousLimit := operation_setting.GetOpencodeConcurrencyLimit()
+	t.Cleanup(func() {
+		require.NoError(t, operation_setting.SetOpencodeConcurrencyLimit(strconv.Itoa(previousLimit)))
+	})
+	require.NoError(t, operation_setting.SetOpencodeConcurrencyLimit(strconv.Itoa(OpencodeRPMLimit)))
 
+	now := int64(2_000)
 	for i := 0; i < OpencodeRPMLimit; i++ {
-		allowed, _, err := ReserveOpencodeRPM(202, now)
+		allowed, err := ReserveOpencodeConcurrency(202)
 		require.NoError(t, err)
 		require.True(t, allowed)
 	}
@@ -369,10 +406,30 @@ func TestOpencodeCapacityRejectsFullRPMWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, capacity)
 
-	require.NoError(t, ReleaseOpencodeRPM(202, now+1))
+	require.NoError(t, ReleaseOpencodeConcurrency(202))
 	capacity, err = OpencodeChannelHasCapacity(202, now+1)
 	require.NoError(t, err)
 	require.True(t, capacity)
+}
+
+func TestOpencodeRPMDoesNotAffectConcurrencyCount(t *testing.T) {
+	useOpencodeUsageDB(t)
+	now := int64(2_100)
+
+	allowed, _, err := ReserveOpencodeRPM(203, now)
+	require.NoError(t, err)
+	require.True(t, allowed)
+
+	snapshot, err := GetOpencodeUsageSnapshot(203, now)
+	require.NoError(t, err)
+	require.Equal(t, 1, snapshot.RPMCount)
+	require.Equal(t, 0, snapshot.ConcurrencyCount)
+
+	require.NoError(t, ReleaseOpencodeRPM(203, now+120))
+	snapshot, err = GetOpencodeUsageSnapshot(203, now+120)
+	require.NoError(t, err)
+	require.Equal(t, 0, snapshot.RPMCount)
+	require.Equal(t, 0, snapshot.ConcurrencyCount)
 }
 
 func TestOpencodeRPMReservationUsesRuntimeLimit(t *testing.T) {
@@ -395,7 +452,7 @@ func TestOpencodeRPMReservationUsesRuntimeLimit(t *testing.T) {
 
 	snapshot, err := GetOpencodeUsageSnapshot(250, now)
 	require.NoError(t, err)
-	require.Equal(t, 5, snapshot.RPMLimit)
+	require.Equal(t, 5, snapshot.RPMCount)
 }
 
 func TestOpencodeUsageSnapshotClampsCorruptCounters(t *testing.T) {

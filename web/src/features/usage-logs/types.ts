@@ -97,6 +97,13 @@ export interface ChannelAffinityInfo {
   using_group?: string
 }
 
+export interface OpencodeSessionAffinityInfo {
+  session_id?: string
+  channel_id?: number
+  cache_hit?: boolean
+  affinitized?: boolean
+}
+
 export interface ChannelRetryFailure {
   attempt_index: number
   channel_id: number
@@ -152,6 +159,7 @@ export interface LogOtherData {
     command_pricing_period?: 'peak' | 'off_peak' | string
     channel_retry_failures?: ChannelRetryFailure[]
     channel_affinity?: ChannelAffinityInfo
+    opencode_session_affinity?: OpencodeSessionAffinityInfo
     // Top-up audit fields (type=1, admin only)
     payment_method?: string
     callback_payment_method?: string

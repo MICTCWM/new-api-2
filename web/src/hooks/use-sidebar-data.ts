@@ -27,6 +27,7 @@ import {
   ListTodo,
   MessageSquare,
   Radio,
+  Rocket,
   ServerCog,
   Settings,
   Ticket,
@@ -138,6 +139,11 @@ export function useSidebarData(): SidebarData {
             title: t('Redemption Codes'),
             url: '/redemption-codes',
             icon: Ticket,
+          },
+          {
+            title: t('Proxy'),
+            url: '/proxy',
+            icon: Rocket,
           },
           {
             title: t('Subscriptions'),

@@ -465,6 +465,25 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
+// RecordAutoScalingLog 记录一次自动伸缩（AutoDL 开机/关机）动作的使用日志。
+// 该记录由系统自动伸缩状态机写入（UserId=0，系统动作），供管理员在使用日志页面查看时间线。
+// 注意：不受 common.LogConsumeEnabled 开关限制。该开关控制用户侧消费日志是否落库，
+// 自动伸缩动作是管理员必须能看到的系统动作，不能因关闭消费日志而缺失，
+// 因此此处直接经由 createLog（含 ensureLogRequestId）始终写入。
+// ModelName 固定为 "auto-scaling" 便于区分；Quota/tokens/UseTime 全为 0。
+func RecordAutoScalingLog(content string) {
+	log := &Log{
+		UserId:    0,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeConsume,
+		Content:   content,
+		ModelName: "auto-scaling",
+	}
+	if err := createLog(log); err != nil {
+		common.SysError("failed to record auto scaling log: " + err.Error())
+	}
+}
+
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
@@ -615,7 +634,7 @@ type Stat struct {
 	Tpm   int `json:"tpm"`
 }
 
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
+func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, excludeModelName string) (stat Stat, err error) {
 	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
@@ -650,6 +669,12 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if group != "" {
 		tx = tx.Where(logGroupCol+" = ?", group)
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
+	}
+	if excludeModelName != "" {
+		// 排除指定 model_name 的使用日志，避免统计污染（例如自动伸缩自身写入的
+		// "auto-scaling" 日志不应计入对外展示的 RPM/配额统计）。model_name 非保留字可直接不加引号。
+		tx = tx.Where("model_name != ?", excludeModelName)
+		rpmTpmQuery = rpmTpmQuery.Where("model_name != ?", excludeModelName)
 	}
 
 	tx = tx.Where("type = ?", LogTypeConsume)

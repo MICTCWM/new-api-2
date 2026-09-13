@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -196,10 +197,12 @@ func runAutoScalingOnce() {
 			if act.StartServer {
 				newState.ServerStarted = true
 				logger.LogInfo(nil, "auto scaling: started AutoDL instances")
+				recordUsageLog(fmt.Sprintf("自动伸缩：已启动 %s 个 AutoDL 实例", instanceCountText(cfg.InstanceIDs)))
 			}
 			if act.StopServer {
 				newState.ServerStarted = false
 				logger.LogInfo(nil, "auto scaling: stopped AutoDL instances")
+				recordUsageLog(fmt.Sprintf("自动伸缩：已关闭 %s 个 AutoDL 实例", instanceCountText(cfg.InstanceIDs)))
 			}
 		} else if act.StartServer {
 			// 远端启动未成功（含无实例）：本轮不启用渠道，随启动一起在下轮重试。
@@ -244,6 +247,21 @@ func runAutoScalingOnce() {
 // runRemoteActionFn 是远端动作执行器的可注入入口，生产环境指向 runRemoteAction。
 // 测试可替换为 stub 以验证状态机对远端部分失败的处理（避免访问真实 AutoDL）。
 var runRemoteActionFn = runRemoteAction
+
+// recordUsageLog 在自动伸缩远端动作成功后写一条使用日志（LogTypeConsume）。
+// 生产环境指向 model.RecordAutoScalingLog（始终写入，不受 LogConsumeEnabled 限制，
+// 保证管理员无论是否开启消费日志都能在使用日志页看到自动伸缩动作时间线）。
+// 测试可替换为 stub 以断言写入参数，无需依赖日志库环境。
+var recordUsageLog = model.RecordAutoScalingLog
+
+// instanceCountText 生成自动伸缩日志中的实例数量描述：
+// 配置了具体实例时用数量，否则用「全部」。
+func instanceCountText(instanceIDs []string) string {
+	if len(instanceIDs) > 0 {
+		return strconv.Itoa(len(instanceIDs))
+	}
+	return "全部"
+}
 
 // autoDLClientFactory 是 AutoDL 客户端的构造入口，生产环境指向 NewAutoDLClient。
 // 测试可替换以把客户端 baseURL 指向假服务器，从而直接驱动 runRemoteAction 自身分流。
@@ -344,7 +362,7 @@ func reconcileChannelState(state AutoscalingState, cfg operation_setting.AutoSca
 // 第二个返回值表示查询是否成功；失败时返回的 RPM 无意义，调用方应跳过本轮。
 func getGlobalRPM() (int, bool) {
 	now := time.Now().Unix()
-	stat, err := model.SumUsedQuota(model.LogTypeConsume, now-60, now, "", "", "", 0, "")
+	stat, err := model.SumUsedQuota(model.LogTypeConsume, now-60, now, "", "", "", 0, "", "auto-scaling")
 	if err != nil {
 		logger.LogError(nil, fmt.Sprintf("auto scaling: query global rpm failed: %v", err))
 		return 0, false

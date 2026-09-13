@@ -150,11 +150,12 @@ var channelAffinitySetting = ChannelAffinitySetting{
 		},
 		{
 			Name:       "opencode session trace",
-			ModelRegex: []string{"^deepseek-v4-flash$"},
+			ModelRegex: []string{"^deepseek-v4-flash$", "^glm-5\\.3-flash$"},
 			PathRegex:  []string{"/v1/chat/completions"},
 			KeySources: []ChannelAffinityKeySource{
 				{Type: "gjson", Path: "prompt_cache_key"},
 				{Type: "gjson", Path: "session_id"},
+				{Type: "gjson", Path: "metadata.session_id"},
 				{Type: "request_header", Key: "X-OpenCode-Session"},
 				{Type: "request_header", Key: "X-OpenCode-Session-Id"},
 				{Type: "request_header", Key: "X-Session-Id"},

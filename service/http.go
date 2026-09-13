@@ -38,6 +38,11 @@ func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
 		}
 		return false
 	}
+	// OpenCode session headers are upstream-only and must not reach clients.
+	lower := strings.ToLower(strings.TrimSpace(k))
+	if lower == "x-opencode-session" || lower == "x-opencode-session-id" {
+		return false
+	}
 	return true
 }
 

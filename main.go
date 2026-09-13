@@ -327,6 +327,9 @@ func InitResources() error {
 		}
 	}
 	model.InitOptionMap()
+	if common.IsMasterNode {
+		service.BootstrapProxyXrayRelays()
+	}
 
 	// 清理旧的磁盘缓存文件
 	common.CleanupOldCacheFiles()

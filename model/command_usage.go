@@ -697,7 +697,6 @@ func ReserveCommandRPM(channelID int, now int64) (bool, int64, error) {
 			return nil
 		}
 		usage.RPMCount++
-		usage.ConcurrencyCount++
 		allowed = true
 		return tx.Save(usage).Error
 	})
@@ -719,9 +718,6 @@ func ReleaseCommandRPM(channelID int, now int64) error {
 			return nil
 		}
 		usage.RPMCount--
-		if usage.ConcurrencyCount > 0 {
-			usage.ConcurrencyCount--
-		}
 		return tx.Save(usage).Error
 	})
 }

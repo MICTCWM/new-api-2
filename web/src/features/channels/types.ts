@@ -175,9 +175,9 @@ export interface OpencodeUsageSnapshot {
   week: OpencodeUsageWindow
   month: OpencodeUsageWindow
   pool: OpencodeUsageWindow
-  peak_pool: OpencodeUsageWindow
-  off_peak_pool: OpencodeUsageWindow
-  pricing_period: 'peak' | 'off_peak'
+  peak_pool?: OpencodeUsageWindow
+  off_peak_pool?: OpencodeUsageWindow
+  pricing_period: 'peak' | 'off_peak' | '' | ''
   rpm_count: number
   rpm_limit: number
   rpm_reset_at: number
@@ -212,7 +212,7 @@ export interface CommandUsageSnapshot {
   split_pools?: boolean
   peak_pool?: OpencodeUsageWindow
   off_peak_pool?: OpencodeUsageWindow
-  pricing_period: 'peak' | 'off_peak'
+  pricing_period: 'peak' | 'off_peak' | ''
   rpm_count: number
   rpm_limit: number
   rpm_reset_at: number

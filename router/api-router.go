@@ -193,8 +193,21 @@ func SetApiRouter(router *gin.Engine) {
 		autoscalingRoute.Use(middleware.RootAuth())
 		{
 			autoscalingRoute.POST("/test", controller.TestAutoScalingConnection)
+			autoscalingRoute.POST("/test-start", controller.TestStartAutoScaling)
+			autoscalingRoute.POST("/test-stop", controller.TestStopAutoScaling)
 			autoscalingRoute.GET("/status", controller.GetAutoScalingStatus)
 			autoscalingRoute.GET("/instances", controller.GetAutoScalingInstances)
+		}
+
+		proxyRoute := apiRouter.Group("/proxy")
+		proxyRoute.Use(middleware.RootAuth())
+		{
+			proxyRoute.GET("/status", controller.GetProxyStatus)
+			proxyRoute.POST("/subscription", controller.UpdateProxySubscription)
+			proxyRoute.POST("/refresh", controller.RefreshProxySubscription)
+			proxyRoute.DELETE("/subscription", controller.ClearProxySubscription)
+			proxyRoute.POST("/rules", controller.CreateProxyRule)
+			proxyRoute.DELETE("/rules/:id", controller.DeleteProxyRule)
 		}
 
 		optionRoute := apiRouter.Group("/option")

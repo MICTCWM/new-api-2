@@ -29,6 +29,9 @@ type ssrfProtectedRoundTripper struct {
 	dialContext   func(ctx context.Context, network, address string) (net.Conn, error)
 	getProtection func() (*common.SSRFProtection, bool, error)
 	proxy         func(*http.Request) (*url.URL, error)
+	// validateURL 覆盖 RoundTrip 里的 URL 层 SSRF 校验；nil 时使用默认的
+	// ValidateSSRFProtectedFetchURL（带 fetch_setting 的端口白名单）。
+	validateURL func(*http.Request) error
 
 	mutex      sync.Mutex
 	transports map[string]*http.Transport
@@ -64,6 +67,13 @@ func newProtectedFetchHTTPClientWithDialer(resolver ssrfResolver, dialContext fu
 }
 
 func newProtectedFetchHTTPClientWithProxy(resolver ssrfResolver, dialContext func(ctx context.Context, network, address string) (net.Conn, error), getProtection func() (*common.SSRFProtection, bool, error), proxy func(*http.Request) (*url.URL, error)) *http.Client {
+	return newProtectedFetchHTTPClientWithConfig(resolver, dialContext, getProtection, proxy, nil, checkProtectedFetchRedirect)
+}
+
+// newProtectedFetchHTTPClientWithConfig 构造带 SSRF 防护的 http.Client。
+// validateReq 覆盖 RoundTrip 的 URL 层校验（nil 用默认端口白名单版本），
+// redirectCheck 覆盖重定向校验（nil 用默认 checkProtectedFetchRedirect）。
+func newProtectedFetchHTTPClientWithConfig(resolver ssrfResolver, dialContext func(ctx context.Context, network, address string) (net.Conn, error), getProtection func() (*common.SSRFProtection, bool, error), proxy func(*http.Request) (*url.URL, error), validateReq func(*http.Request) error, redirectCheck func(*http.Request, []*http.Request) error) *http.Client {
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
@@ -80,6 +90,9 @@ func newProtectedFetchHTTPClientWithProxy(resolver ssrfResolver, dialContext fun
 	if proxy == nil {
 		proxy = http.ProxyFromEnvironment
 	}
+	if redirectCheck == nil {
+		redirectCheck = checkProtectedFetchRedirect
+	}
 
 	client := &http.Client{
 		Transport: &ssrfProtectedRoundTripper{
@@ -87,9 +100,10 @@ func newProtectedFetchHTTPClientWithProxy(resolver ssrfResolver, dialContext fun
 			dialContext:   dialContext,
 			getProtection: getProtection,
 			proxy:         proxy,
+			validateURL:   validateReq,
 			transports:    make(map[string]*http.Transport),
 		},
-		CheckRedirect: checkProtectedFetchRedirect,
+		CheckRedirect: redirectCheck,
 	}
 	if common.RelayTimeout != 0 {
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
@@ -97,11 +111,80 @@ func newProtectedFetchHTTPClientWithProxy(resolver ssrfResolver, dialContext fun
 	return client
 }
 
+// currentSubscriptionFetchProtection 与 currentFetchProtection 一致，唯一区别是
+// AllowedPorts 传 nil（不限端口），供代理订阅拉取使用，其余 SSRF 防护保持不变。
+func currentSubscriptionFetchProtection() (*common.SSRFProtection, bool, error) {
+	fetchSetting := system_setting.GetFetchSetting()
+	if !fetchSetting.EnableSSRFProtection {
+		return nil, false, nil
+	}
+
+	protection, err := common.NewSSRFProtectionFromFetchSetting(
+		fetchSetting.AllowPrivateIp,
+		fetchSetting.DomainFilterMode,
+		fetchSetting.IpFilterMode,
+		fetchSetting.DomainList,
+		fetchSetting.IpList,
+		nil, // AllowedPorts: nil = 不限端口
+		fetchSetting.ApplyIPFilterForDomain,
+	)
+	if err != nil {
+		return nil, true, err
+	}
+	return protection, true, nil
+}
+
+// validateSubscriptionFetchURL 用 fetch_setting 校验 URL，但端口白名单不限（传 nil）。
+func validateSubscriptionFetchURL(urlStr string) error {
+	fetchSetting := system_setting.GetFetchSetting()
+	return common.ValidateURLWithFetchSetting(
+		urlStr,
+		fetchSetting.EnableSSRFProtection,
+		fetchSetting.AllowPrivateIp,
+		fetchSetting.DomainFilterMode,
+		fetchSetting.IpFilterMode,
+		fetchSetting.DomainList,
+		fetchSetting.IpList,
+		nil, // 不限端口
+		fetchSetting.ApplyIPFilterForDomain,
+	)
+}
+
+func validateSSRFProtectedFetchRequest(req *http.Request) error {
+	return ValidateSSRFProtectedFetchURL(req.URL.String())
+}
+
+func validateSubscriptionFetchRequest(req *http.Request) error {
+	return validateSubscriptionFetchURL(req.URL.String())
+}
+
+// newProtectedFetchHTTPClientForSubscriptionFetch 构造代理订阅拉取专用客户端，
+// 放开端口白名单限制但保留其余全部 SSRF 防护。
+func newProtectedFetchHTTPClientForSubscriptionFetch() *http.Client {
+	return newProtectedFetchHTTPClientWithConfig(
+		nil, nil, currentSubscriptionFetchProtection, nil,
+		validateSubscriptionFetchRequest, checkSubscriptionFetchRedirect,
+	)
+}
+
+// GetProxySubscriptionHTTPClient 返回代理订阅拉取专用 http.Client。
+// 若 SSRF 防护关闭，与 GetSSRFProtectedHTTPClient 一致回退到通用客户端。
+func GetProxySubscriptionHTTPClient() *http.Client {
+	if fetchSetting := system_setting.GetFetchSetting(); fetchSetting != nil && !fetchSetting.EnableSSRFProtection {
+		return GetHttpClient()
+	}
+	return newProtectedFetchHTTPClientForSubscriptionFetch()
+}
+
 func (t *ssrfProtectedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req == nil || req.URL == nil {
 		return nil, fmt.Errorf("invalid request")
 	}
-	if err := ValidateSSRFProtectedFetchURL(req.URL.String()); err != nil {
+	validate := t.validateURL
+	if validate == nil {
+		validate = validateSSRFProtectedFetchRequest
+	}
+	if err := validate(req); err != nil {
 		return nil, err
 	}
 

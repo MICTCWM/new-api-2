@@ -3010,7 +3010,7 @@ export function ChannelMutateDrawer({
                                   {t(
                                     currentType === CHANNEL_TYPE_COMMAND
                                       ? 'Fixed endpoint: https://api.commandcode.ai/provider/v1. Supports deepseek/deepseek-v4-flash and deepseek/deepseek-v4-pro.'
-                                      : 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and model mapping source models.'
+                                      : 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and glm-5.3-flash.'
                                   )}
                                 </AlertDescription>
                               </Alert>

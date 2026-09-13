@@ -76,11 +76,21 @@ function fixedCodeChannelModels(
   const selectedModels = parseModelsString(models).filter((model) =>
     allowedModels.has(model)
   )
-  const normalizedModels = [
-    fixedModel,
-    ...selectedModels.filter((model) => model !== fixedModel),
-  ]
-  return formatModelsArray(normalizedModels)
+  // Command always keeps Flash as the required primary model.
+  if (type === CHANNEL_TYPE_COMMAND) {
+    return formatModelsArray([
+      fixedModel,
+      ...selectedModels.filter((model) => model !== fixedModel),
+    ])
+  }
+  // OpenCode allows either deepseek-v4-flash or glm-5.3-flash (or both).
+  const hasNative = selectedModels.some((model) =>
+    (nativeModels as readonly string[]).includes(model)
+  )
+  if (hasNative) {
+    return formatModelsArray(selectedModels)
+  }
+  return formatModelsArray([fixedModel, ...selectedModels])
 }
 
 function isOptionalProxyURL(value: string | undefined): boolean {
@@ -394,9 +404,23 @@ export const channelFormSchema = z
       const fixedModelError =
         data.type === CHANNEL_TYPE_COMMAND
           ? 'Command supports Flash, Pro, and model mapping source models'
-          : 'Opencode supports the fixed model and model mapping source models'
+          : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, and model mapping source models'
       if (invalidModels.length > 0) {
         addRequiredIssue(ctx, 'models', fixedModelError)
+      }
+      const hasNativeModel = configuredModels.some((model) =>
+        (getFixedCodeChannelModels(data.type) as readonly string[]).includes(
+          model
+        )
+      )
+      if (!hasNativeModel) {
+        addRequiredIssue(
+          ctx,
+          'models',
+          data.type === CHANNEL_TYPE_COMMAND
+            ? 'Command must include deepseek/deepseek-v4-flash'
+            : 'Opencode must include deepseek-v4-flash or glm-5.3-flash'
+        )
       }
     }
 

@@ -1,0 +1,5 @@
+{
+  "translation.Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and model mapping source models.": "Endpoint cố định: https://opencode.ai/zen/go/v1/chat/completions. Hỗ trợ deepseek-v4-flash và các mô hình nguồn ánh xạ.",
+  "translation.Opencode supports the fixed model and model mapping source models": "OpenCode hỗ trợ mô hình cố định và các mô hình nguồn ánh xạ",
+  "translation.Opencode uses a fixed endpoint and only supports deepseek-v4-flash. Batch mode creates one channel per API key.": "Opencode dùng endpoint cố định và chỉ hỗ trợ deepseek-v4-flash. Chế độ hàng loạt tạo một kênh cho mỗi khóa API."
+}

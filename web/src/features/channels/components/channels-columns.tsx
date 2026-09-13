@@ -417,10 +417,7 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
       poolWindows = [[t('Total pool'), usage.pool, 'combined']] as const
     }
   } else {
-    poolWindows = [
-      [t('Idle'), usage.off_peak_pool ?? usage.pool, 'off_peak'],
-      [t('Busy'), usage.peak_pool ?? usage.pool, 'peak'],
-    ] as const
+    poolWindows = [[t('Total pool'), usage.pool, 'combined']] as const
   }
   return (
     <div className='flex min-w-52 items-center gap-2'>
@@ -470,7 +467,7 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
           } else if (percent >= 50) {
             color = 'bg-yellow-500'
           }
-          const isCurrent = isCommand || usage.pricing_period === period
+          const isCurrent = true
           return (
             <TooltipProvider key={period}>
               <Tooltip>

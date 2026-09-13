@@ -96,6 +96,30 @@ describe('transformFormDataToUpdatePayload', () => {
     expect(payload.models).toBe('deepseek-v4-flash,client-model')
   })
 
+  it('allows OpenCode glm-5.3-flash without forcing deepseek-v4-flash', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      type: CHANNEL_TYPE_OPENCODE,
+      models: 'glm-5.3-flash',
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+
+    expect(payload.models).toBe('glm-5.3-flash')
+  })
+
+  it('allows both OpenCode native models', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      type: CHANNEL_TYPE_OPENCODE,
+      models: 'deepseek-v4-flash,glm-5.3-flash',
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+
+    expect(payload.models).toBe('deepseek-v4-flash,glm-5.3-flash')
+  })
+
   it('serializes a custom concurrency limit for ordinary channels', () => {
     const formData = {
       ...CHANNEL_FORM_DEFAULT_VALUES,
