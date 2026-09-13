@@ -77,12 +77,24 @@ function fixedCodeChannelModels(
   const selectedModels = parseModelsString(models).filter((model) =>
     allowedModels.has(model)
   )
-  // Command always keeps Flash as the required primary model.
   if (type === CHANNEL_TYPE_COMMAND) {
-    return formatModelsArray([
-      fixedModel,
-      ...selectedModels.filter((model) => model !== fixedModel),
-    ])
+    // v4.1-flash 与 v4-pro 绑定启用；v4-flash 可自由保留或移除，
+    // 只要渠道至少包含 Flash 或 V4.1 Flash 之一。
+    const result = [...selectedModels]
+    for (const model of result) {
+      for (const required of COMMAND_MODEL_BINDING[model] ?? []) {
+        if (!result.includes(required)) {
+          result.push(required)
+        }
+      }
+    }
+    const hasPrimary =
+      result.includes(fixedModel) ||
+      result.includes('deepseek/deepseek-v4.1-flash')
+    if (!hasPrimary) {
+      result.unshift(fixedModel)
+    }
+    return formatModelsArray(result)
   }
   // OpenCode allows either deepseek-v4-flash or glm-5.3-flash (or both).
   const hasNative = selectedModels.some((model) =>
