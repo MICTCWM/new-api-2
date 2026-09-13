@@ -33,10 +33,17 @@ import { IconBadge } from '@/components/ui/icon-badge'
 import { formatCurrencyFromUSD } from '@/lib/currency'
 import { formatTimestampToDate } from '@/lib/format'
 
-import { getCodexUsage, updateChannelBalance } from '../../api'
+import {
+  getCommandcodeQuota,
+  getCodexUsage,
+  updateChannelBalance,
+  type CommandcodeQuotaResponse,
+} from '../../api'
 import { channelsQueryKeys } from '../../lib'
+import { CHANNEL_TYPE_COMMAND } from '../../constants'
 import type { OpencodeUsageSnapshot } from '../../types'
 import { useChannels } from '../channels-provider'
+import { CommandcodeQuotaDialog } from './commandcode-quota-dialog'
 import {
   CodexUsageDialog,
   type CodexUsageDialogData,
@@ -64,8 +71,11 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
     useState<OpencodeUsageSnapshot | null>(null)
   const [codexUsageResponse, setCodexUsageResponse] =
     useState<CodexUsageDialogData | null>(null)
+  const [commandcodeQuotaResponse, setCommandcodeQuotaResponse] =
+    useState<CommandcodeQuotaResponse | null>(null)
 
   const isCodex = currentRow?.type === 57
+  const isCommand = currentRow?.type === CHANNEL_TYPE_COMMAND
 
   const handleQueryCodexUsage = async () => {
     const row = currentRow
@@ -86,12 +96,38 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
     }
   }
 
+  const handleQueryCommandcodeQuota = async () => {
+    const row = currentRow
+    if (!row) return
+    setIsQuerying(true)
+    try {
+      const res = await getCommandcodeQuota(row.id)
+      if (!res.success) {
+        throw new Error(res.message || t('Failed to fetch usage'))
+      }
+      setCommandcodeQuotaResponse(res)
+    } catch (error: unknown) {
+      toast.error(
+        error instanceof Error ? error.message : t('Failed to fetch usage')
+      )
+    } finally {
+      setIsQuerying(false)
+    }
+  }
+
   useEffect(() => {
     if (!isCodex) return
     if (!props.open) return
     handleQueryCodexUsage()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.open, isCodex])
+
+  useEffect(() => {
+    if (!isCommand) return
+    if (!props.open) return
+    handleQueryCommandcodeQuota()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.open, isCommand])
 
   if (!currentRow) return null
 
@@ -153,6 +189,7 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
     setRawResponse(null)
     setOpencodeUsage(null)
     setCodexUsageResponse(null)
+    setCommandcodeQuotaResponse(null)
     props.onOpenChange(false)
   }
 
@@ -179,6 +216,22 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
         channelId={currentRow.id}
         response={codexUsageResponse}
         onRefresh={handleQueryCodexUsage}
+        isRefreshing={isQuerying}
+      />
+    )
+  }
+
+  if (isCommand) {
+    return (
+      <CommandcodeQuotaDialog
+        open={props.open}
+        onOpenChange={(v) => {
+          if (!v) handleClose()
+        }}
+        channelName={currentRow.name}
+        channelId={currentRow.id}
+        response={commandcodeQuotaResponse}
+        onRefresh={handleQueryCommandcodeQuota}
         isRefreshing={isQuerying}
       />
     )
