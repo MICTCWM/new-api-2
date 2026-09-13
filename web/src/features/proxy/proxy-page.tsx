@@ -21,7 +21,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -43,12 +43,16 @@ import {
   getProxyStatus,
   refreshProxySubscription,
   saveProxySubscription,
+  updateProxyRule,
 } from './api'
 import { ProxyNodeList } from './components/proxy-node-list'
 import { ProxySubscriptionCard } from './components/proxy-subscription-card'
 import { RuleMutateDrawer } from './components/rule-mutate-drawer'
 import { formatNodeAddress } from './lib'
-import type { CreateProxyRuleParams, ProxyRule } from './types'
+import type {
+  CreateProxyRuleParams,
+  ProxyRule,
+} from './types'
 
 /**
  * Admin page for managing the proxy gateway: subscription URL, parsed nodes
@@ -61,6 +65,7 @@ export function ProxyPage() {
 
   const [draftUrl, setDraftUrl] = useState('')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [editTarget, setEditTarget] = useState<ProxyRule | null>(null)
   const [clearOpen, setClearOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ProxyRule | null>(null)
 
@@ -147,8 +152,25 @@ export function ProxyPage() {
     },
   })
 
+  const updateRuleMutation = useMutation({
+    mutationFn: (params: { id: string } & CreateProxyRuleParams) =>
+      updateProxyRule(params.id, params),
+    onSuccess: (result) => {
+      if (result?.success) {
+        setDrawerOpen(false)
+        toast.success(t('Proxy rule updated'))
+        invalidateStatus()
+        return
+      }
+      toast.error(result?.message || t('Failed to update proxy rule'))
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t('Failed to update proxy rule'))
+    },
+  })
+
   const deleteRuleMutation = useMutation({
-    mutationFn: (id: number) => deleteProxyRule(id),
+    mutationFn: (id: string) => deleteProxyRule(id),
     onSuccess: (result) => {
       setDeleteTarget(null)
       if (result?.success) {
@@ -211,6 +233,10 @@ export function ProxyPage() {
             <RuleTable
               rules={rules}
               loading={statusQuery.isLoading}
+              onEdit={(rule) => {
+                setEditTarget(rule)
+                setDrawerOpen(true)
+              }}
               onDelete={setDeleteTarget}
             />
           </div>
@@ -221,10 +247,20 @@ export function ProxyPage() {
 
     <RuleMutateDrawer
       open={drawerOpen}
-      onOpenChange={setDrawerOpen}
+      onOpenChange={(open) => {
+        setDrawerOpen(open)
+        if (!open) setEditTarget(null)
+      }}
       nodes={nodes}
-      isPending={createRuleMutation.isPending}
-      onCreate={(params) => createRuleMutation.mutate(params)}
+      editing={editTarget}
+      isPending={createRuleMutation.isPending || updateRuleMutation.isPending}
+      onSubmit={(params) => {
+        if (editTarget) {
+          updateRuleMutation.mutate({ id: editTarget.id, ...params })
+          return
+        }
+        createRuleMutation.mutate(params)
+      }}
     />
 
     <ConfirmDialog
@@ -265,6 +301,7 @@ export function ProxyPage() {
 type RuleTableProps = {
   rules: ProxyRule[]
   loading: boolean
+  onEdit: (rule: ProxyRule) => void
   onDelete: (rule: ProxyRule) => void
 }
 
@@ -326,6 +363,15 @@ function RuleTable(props: RuleTableProps) {
                 cellClassName: 'text-right',
                 cell: (rule) => (
                   <div className='flex justify-end'>
+                    <Button
+                      variant='ghost'
+                      size='icon'
+                      className='h-7 w-7'
+                      title={t('Edit')}
+                      onClick={() => props.onEdit(rule)}
+                    >
+                      <Pencil className='h-3 w-3' />
+                    </Button>
                     <Button
                       variant='ghost'
                       size='icon'

@@ -398,7 +398,7 @@ func CreateProxyRule(ctx context.Context, name string, channelIDs []int, node pr
 	// 后写覆盖：把本规则占用的渠道从其它现存规则中移除。
 	rules = stripTakenChannels(channelIDs, rules, currentProxy)
 
-	proxyURL, node, resolveErr := ResolveRuleProxyURL(ruleID, node)
+	proxyURL, relayPort, node, resolveErr := ResolveRuleProxyURL(ruleID, node, 0)
 	if resolveErr != nil {
 		return operation_setting.Rule{}, resolveErr
 	}
@@ -414,6 +414,7 @@ func CreateProxyRule(ctx context.Context, name string, channelIDs []int, node pr
 		ChannelIDs: channelIDs,
 		Node:       node,
 		ProxyURL:   proxyURL,
+		RelayPort:  relayPort,
 		CreatedAt:  common.GetTimestamp(),
 	}
 	rules = append(rules, rule)
@@ -429,6 +430,140 @@ func CreateProxyRule(ctx context.Context, name string, channelIDs []int, node pr
 		return rule, applyErr
 	}
 	return rule, nil
+}
+
+// UpdateProxyRule 编辑规则：可改名称、绑定渠道与节点。
+// - 节点未变化（ShareURL 与类型一致）时保持现有代理地址与中继进程不动；
+// - 节点变化时按旧端口优先重启 Xray 中继，再更新渠道代理；
+// - 新渠道集按"后写覆盖"从其它规则接管渠道；被移出的渠道在其当前代理
+//   恰等于本规则旧代理时清空（避免误清手动配置）。
+// 返回更新后的规则；部分渠道写入失败时返回聚合错误（规则已保存并返回）。
+func UpdateProxyRule(ctx context.Context, id string, name string, channelIDs []int, node proxypkg.Node) (operation_setting.Rule, error) {
+	id = strings.TrimSpace(id)
+	name = strings.TrimSpace(name)
+	if id == "" {
+		return operation_setting.Rule{}, errors.New("rule id is required")
+	}
+	if name == "" {
+		return operation_setting.Rule{}, errors.New("rule name is required")
+	}
+	channelIDs, err := normalizeChannelIDs(channelIDs)
+	if err != nil {
+		return operation_setting.Rule{}, err
+	}
+
+	proxyRuleMutex.Lock()
+	defer proxyRuleMutex.Unlock()
+
+	rules := LoadProxyRules()
+	index := -1
+	var old operation_setting.Rule
+	for i := range rules {
+		if rules[i].ID == id {
+			index = i
+			old = rules[i]
+			break
+		}
+	}
+	if index < 0 {
+		return operation_setting.Rule{}, fmt.Errorf("rule %s not found", id)
+	}
+
+	// 合并渠道存在性校验与当前代理收集。
+	currentProxy := make(map[int]string, len(channelIDs))
+	for _, cid := range channelIDs {
+		ch, err := model.GetChannelById(cid, true)
+		if err != nil {
+			return operation_setting.Rule{}, fmt.Errorf("channel %d not found: %w", cid, err)
+		}
+		currentProxy[cid] = ch.GetSetting().Proxy
+	}
+
+	// 节点是否变化：类型/服务器/端口/分享链接任一变化即视为新节点。
+	// 直连节点的身份是 server:port，中继节点的身份是 ShareURL。
+	nodeChanged := !strings.EqualFold(strings.TrimSpace(node.Type), strings.TrimSpace(old.Node.Type)) ||
+		strings.TrimSpace(node.Server) != strings.TrimSpace(old.Node.Server) ||
+		node.Port != old.Node.Port ||
+		strings.TrimSpace(node.ShareURL) != strings.TrimSpace(old.Node.ShareURL)
+
+	proxyURL := old.ProxyURL
+	relayPort := old.RelayPort
+	if nodeChanged {
+		// 先停旧中继释放端口，再按旧端口优先拉起新节点。
+		StopRuleXrayRelay(id)
+		preferred := old.RelayPort
+		if preferred == 0 {
+			preferred = relayPortFromProxyURL(old.ProxyURL)
+		}
+		resolvedURL, resolvedPort, resolvedNode, resolveErr := ResolveRuleProxyURL(id, node, preferred)
+		if resolveErr != nil {
+			return operation_setting.Rule{}, resolveErr
+		}
+		proxyURL, err = NormalizeProxyURL(resolvedURL)
+		if err != nil {
+			StopRuleXrayRelay(id)
+			return operation_setting.Rule{}, fmt.Errorf("节点代理地址无效: %v", err)
+		}
+		relayPort = resolvedPort
+		node = resolvedNode
+	} else {
+		node = old.Node
+	}
+
+	// 渠道变更集合：新集合接管其它规则中冲突的渠道；被移出的渠道按旧代理清空。
+	removed := make([]int, 0, len(old.ChannelIDs))
+	newSet := make(map[int]struct{}, len(channelIDs))
+	for _, cid := range channelIDs {
+		newSet[cid] = struct{}{}
+	}
+	for _, cid := range old.ChannelIDs {
+		if _, kept := newSet[cid]; !kept {
+			removed = append(removed, cid)
+		}
+	}
+
+	others := make([]operation_setting.Rule, 0, len(rules))
+	others = append(others, rules[:index]...)
+	others = append(others, rules[index+1:]...)
+	others = stripTakenChannels(channelIDs, others, currentProxy)
+
+	updated := operation_setting.Rule{
+		ID:         id,
+		Name:       name,
+		ChannelIDs: channelIDs,
+		Node:       node,
+		ProxyURL:   proxyURL,
+		RelayPort:  relayPort,
+		CreatedAt:  old.CreatedAt,
+	}
+	insertAt := index
+	if insertAt > len(others) {
+		insertAt = len(others)
+	}
+	others = append(others, operation_setting.Rule{})
+	copy(others[insertAt+1:], others[insertAt:])
+	others[insertAt] = updated
+
+	// 先落库规则，再写渠道/清渠道，最后失效缓存。
+	if persistErr := saveProxyRules(others); persistErr != nil {
+		return operation_setting.Rule{}, persistErr
+	}
+	changedOld, applyErr := ApplyProxyToChannels(ctx, channelIDs, proxyURL)
+	if len(removed) > 0 {
+		cleared, clearErr := ClearProxyFromChannelsIfMatches(ctx, removed, old.ProxyURL)
+		if cleared > 0 {
+			changedOld = dedupeAppend(changedOld, old.ProxyURL)
+		}
+		if clearErr != nil {
+			if applyErr != nil {
+				applyErr = fmt.Errorf("%v; %v", applyErr, clearErr)
+			} else {
+				applyErr = clearErr
+			}
+		}
+	}
+	invalidateChangedProxies(changedOld)
+	return updated, applyErr
 }
 
 // DeleteProxyRule 删除规则，并清空该规则管辖渠道中"当前代理恰等于本规则 ProxyURL"的渠道的代理

@@ -207,6 +207,7 @@ func SetApiRouter(router *gin.Engine) {
 			proxyRoute.POST("/refresh", controller.RefreshProxySubscription)
 			proxyRoute.DELETE("/subscription", controller.ClearProxySubscription)
 			proxyRoute.POST("/rules", controller.CreateProxyRule)
+			proxyRoute.PUT("/rules/:id", controller.UpdateProxyRule)
 			proxyRoute.DELETE("/rules/:id", controller.DeleteProxyRule)
 		}
 

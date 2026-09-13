@@ -380,6 +380,10 @@ func GetHttpClientWithProxySettings(rawProxyURL string, settings dto.ChannelSett
 		return getOrCreateDirectClient(policy)
 	}
 
+	// 本地 Xray 中继自愈：进程意外退出或重启后恢复失败时，按规则持久化的
+	// 配置在首次使用时重新拉起；外部代理地址与健康中继均为快速 no-op。
+	EnsureXrayRelayReady(trimmedProxyURL)
+
 	if client, ok := proxyClients.get(trimmedProxyURL, policy); ok {
 		return client, nil
 	}

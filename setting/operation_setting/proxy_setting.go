@@ -30,5 +30,9 @@ type Rule struct {
 	ChannelIDs []int      `json:"channel_ids"`
 	Node       proxy.Node `json:"node"`
 	ProxyURL   string     `json:"proxy_url"`
-	CreatedAt  int64      `json:"created_at"`
+	// RelayPort 是 Xray 中继本地 socks 监听端口。持久化后重启按固定端口恢复，
+	// 避免运行时端口计数器重置导致渠道里保存的 ProxyURL 与实际监听端口错位。
+	// 历史数据可为 0，此时从 ProxyURL 解析。
+	RelayPort int  `json:"relay_port,omitempty"`
+	CreatedAt int64 `json:"created_at"`
 }

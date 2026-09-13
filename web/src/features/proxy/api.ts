@@ -25,6 +25,7 @@ import type {
   ProxySimpleResult,
   ProxyStatusResult,
   SaveSubscriptionParams,
+  UpdateProxyRuleParams,
 } from './types'
 
 const businessErrorConfig = { skipBusinessError: true }
@@ -77,9 +78,21 @@ export async function createProxyRule(
 }
 
 /**
+ * Update an existing routing rule: rename it, change its bound channels or
+ * switch the selected proxy node.
+ */
+export async function updateProxyRule(
+  id: string,
+  params: UpdateProxyRuleParams
+): Promise<ProxyCreateRuleResult> {
+  const res = await api.put(`/api/proxy/rules/${id}`, params, businessErrorConfig)
+  return res.data
+}
+
+/**
  * Delete a routing rule by id.
  */
-export async function deleteProxyRule(id: number): Promise<ProxySimpleResult> {
+export async function deleteProxyRule(id: string): Promise<ProxySimpleResult> {
   const res = await api.delete(`/api/proxy/rules/${id}`, businessErrorConfig)
   return res.data
 }

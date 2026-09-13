@@ -93,6 +93,22 @@ func CreateProxyRule(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{"rule": rule})
 }
 
+// UpdateProxyRule 编辑规则：修改名称、绑定渠道与所选节点。
+func UpdateProxyRule(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	var req proxyRuleRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiErrorMsg(c, "invalid request body")
+		return
+	}
+	rule, err := service.UpdateProxyRule(c.Request.Context(), id, req.Name, req.ChannelIDs, req.Node)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"rule": rule})
+}
+
 // DeleteProxyRule 删除规则并清空匹配渠道的代理。
 func DeleteProxyRule(c *gin.Context) {
 	id := strings.TrimSpace(c.Param("id"))

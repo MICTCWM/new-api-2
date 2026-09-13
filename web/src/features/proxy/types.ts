@@ -34,13 +34,15 @@ export type ProxyNode = {
 
 /**
  * A routing rule that binds a set of channels to a single proxy node.
+ * `id` is a backend-generated string timestamp id.
  */
 export type ProxyRule = {
-  id: number
+  id: string
   name: string
   channel_ids: number[]
   node: ProxyNode
   proxy_url?: string
+  relay_port?: number
   created_at: number
 }
 
@@ -103,3 +105,8 @@ export type CreateProxyRuleParams = {
   channel_ids: number[]
   node: ProxyNode
 }
+
+/**
+ * Payload for `PUT /api/proxy/rules/:id`.
+ */
+export type UpdateProxyRuleParams = CreateProxyRuleParams
