@@ -851,6 +851,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		}
 		if channel.Type == constant.ChannelTypeCommand {
 			nativeModels[command.ProModel] = struct{}{}
+			nativeModels[command.V41Model] = struct{}{}
 		}
 		validModels := make([]string, 0, len(channel.GetModels()))
 		seenModels := make(map[string]struct{})
@@ -864,7 +865,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 				hasNativeModel = true
 			} else if _, ok := mappingSources[configuredModel]; !ok {
 				if channel.Type == constant.ChannelTypeCommand {
-					return fmt.Errorf("%s only supports Flash, Pro, or model mapping source models", keyName)
+					return fmt.Errorf("%s only supports Flash, Pro, V4.1 Flash, or model mapping source models", keyName)
 				}
 				return fmt.Errorf("%s only supports deepseek-v4-flash, glm-5.3-flash, or model mapping source models", keyName)
 			}
@@ -883,17 +884,27 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			}
 			return fmt.Errorf("%s must include deepseek-v4-flash or glm-5.3-flash", keyName)
 		}
-		// Command still requires Flash as the primary fixed model.
+		// Command 需要至少一个固定基础模型（Flash 或 V4.1 Flash）；
+		// V4.1 Flash 与 Pro 绑定启用，二者共同覆盖原 Flash 主模型要求。
 		if channel.Type == constant.ChannelTypeCommand {
 			hasFlash := false
+			hasV41 := false
+			hasPro := false
 			for _, configuredModel := range validModels {
-				if configuredModel == modelName {
+				switch configuredModel {
+				case modelName:
 					hasFlash = true
-					break
+				case command.V41Model:
+					hasV41 = true
+				case command.ProModel:
+					hasPro = true
 				}
 			}
-			if !hasFlash {
-				return fmt.Errorf("%s must include the fixed model %s", keyName, modelName)
+			if !hasFlash && !hasV41 {
+				return fmt.Errorf("%s must include the fixed model %s or %s", keyName, modelName, command.V41Model)
+			}
+			if hasV41 && !hasPro {
+				return fmt.Errorf("%s requires %s when %s is enabled", keyName, command.ProModel, command.V41Model)
 			}
 		}
 		channel.Models = strings.Join(validModels, ",")

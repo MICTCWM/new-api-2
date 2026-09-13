@@ -1651,7 +1651,7 @@ export function ChannelMutateDrawer({
       toast.info(
         t(
           currentType === CHANNEL_TYPE_COMMAND
-            ? 'This channel supports Flash, Pro, and model mapping source models'
+            ? 'This channel supports Flash, Pro, V4.1 Flash, and model mapping source models'
             : 'Opencode supports the fixed model and model mapping source models'
         )
       )
@@ -1672,7 +1672,7 @@ export function ChannelMutateDrawer({
       toast.info(
         t(
           currentType === CHANNEL_TYPE_COMMAND
-            ? 'This channel supports Flash, Pro, and model mapping source models'
+            ? 'This channel supports Flash, Pro, V4.1 Flash, and model mapping source models'
             : 'Opencode supports the fixed model and model mapping source models'
         )
       )
@@ -1694,7 +1694,7 @@ export function ChannelMutateDrawer({
       toast.info(
         t(
           currentType === CHANNEL_TYPE_COMMAND
-            ? 'This channel supports Flash, Pro, and model mapping source models'
+            ? 'This channel supports Flash, Pro, V4.1 Flash, and model mapping source models'
             : 'Opencode supports the fixed model and model mapping source models'
         )
       )

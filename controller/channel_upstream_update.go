@@ -365,7 +365,7 @@ func getFetchModelsResponseBody(method string, requestURL string, channel *model
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	if channel != nil && (channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand) {
 		if channel.Type == constant.ChannelTypeCommand {
-			return []string{command.Model, command.ProModel}, nil
+			return []string{command.Model, command.ProModel, command.V41Model}, nil
 		}
 		return []string{opencode.Model, opencode.GlmModel}, nil
 	}

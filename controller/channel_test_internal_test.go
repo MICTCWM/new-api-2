@@ -246,6 +246,38 @@ func TestValidateCommandChannelRejectsProOnlyConfiguration(t *testing.T) {
 	require.ErrorContains(t, validateChannel(channel, true), "must include the fixed model")
 }
 
+func TestValidateCommandChannelAllowsV41WithPro(t *testing.T) {
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeCommand,
+		Key:    "command-key",
+		Models: command.V41Model + "," + command.ProModel,
+	}
+
+	require.NoError(t, validateChannel(channel, true))
+	assert.Equal(t, command.V41Model+","+command.ProModel, channel.Models)
+}
+
+func TestValidateCommandChannelAllowsV41WithProAndFlash(t *testing.T) {
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeCommand,
+		Key:    "command-key",
+		Models: command.Model + "," + command.ProModel + "," + command.V41Model,
+	}
+
+	require.NoError(t, validateChannel(channel, true))
+	assert.Equal(t, command.Model+","+command.ProModel+","+command.V41Model, channel.Models)
+}
+
+func TestValidateCommandChannelRequiresProWithV41(t *testing.T) {
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeCommand,
+		Key:    "command-key",
+		Models: command.V41Model,
+	}
+
+	require.ErrorContains(t, validateChannel(channel, true), command.ProModel)
+}
+
 func TestValidateCommandChannelRequiresFixedModelWithMappingSources(t *testing.T) {
 	mapping := `{"client-model":"deepseek/deepseek-v4-flash"}`
 	channel := &model.Channel{
