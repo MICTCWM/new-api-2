@@ -35,7 +35,8 @@ func newOpencodeSessionTestContext(t *testing.T, body string, headerName string,
 func assertOpencodeSessionNonEmpty(t *testing.T, session string) string {
 	t.Helper()
 	require.NotEmpty(t, session)
-	require.True(t, strings.HasPrefix(session, "byteiq-"), "session should start with byteiq-: %q", session)
+	// 会话 ID 为 32 位十六进制随机串，不带业务前缀，避免向上游暴露网关身份。
+	require.Regexp(t, `^[0-9a-f]{32}$`, session)
 	return session
 }
 

@@ -91,7 +91,7 @@ func TestSetupRequestHeaderInjectsSessionAndCodingAgentUserAgent(t *testing.T) {
 	require.NoError(t, (&Adaptor{}).SetupRequestHeader(c, &header, info))
 	require.Equal(t, "Bearer test-key", header.Get("Authorization"))
 	require.NotEmpty(t, header.Get(SessionHeader))
-	require.True(t, strings.HasPrefix(header.Get(SessionHeader), "byteiq-"))
+	require.Regexp(t, `^[0-9a-f]{32}$`, header.Get(SessionHeader))
 	require.Contains(t, header.Get("User-Agent"), UserAgent)
 	require.Equal(t, "text/event-stream", header.Get("Accept"))
 }
@@ -112,7 +112,7 @@ func TestSetupRequestHeaderDoesNotForwardClientSessionHeader(t *testing.T) {
 	require.NoError(t, (&Adaptor{}).SetupRequestHeader(c, &header, info))
 	session := header.Get(SessionHeader)
 	require.NotEmpty(t, session)
-	require.True(t, strings.HasPrefix(session, "byteiq-"))
+	require.Regexp(t, `^[0-9a-f]{32}$`, session)
 	require.NotEqual(t, "client-session-123", session)
 	require.Equal(t, "claude-code/1.0", header.Get("User-Agent"))
 	// SetupRequestHeader must not inject alternate session spellings into the
@@ -136,7 +136,7 @@ func TestResolveSessionIDStablePerConversation(t *testing.T) {
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 7}}
 	session := ResolveSessionID(c, info)
 	require.NotEmpty(t, session)
-	require.True(t, strings.HasPrefix(session, "byteiq-"))
+	require.Regexp(t, `^[0-9a-f]{32}$`, session)
 	require.NotEqual(t, "cache-abc", session)
 	require.Equal(t, session, ResolveSessionID(c, info))
 }

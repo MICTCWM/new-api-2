@@ -225,21 +225,21 @@ func AppendOpencodeSessionAdminInfo(c *gin.Context, adminInfo map[string]interfa
 	adminInfo["opencode_session_affinity"] = anyInfo
 }
 
-// newOpencodeSessionID 生成随机的网关自管会话 ID，前缀固定为 byteiq-。
+// newOpencodeSessionID 生成随机的网关自管会话 ID，为 32 位十六进制随机串，不带业务前缀。
 func newOpencodeSessionID() string {
 	buf := make([]byte, 16)
 	_, err := rand.Read(buf)
 	if err == nil {
-		return "byteiq-" + hex.EncodeToString(buf)
+		return hex.EncodeToString(buf)
 	}
 	common.SysError(fmt.Sprintf("opencode session random generation failed: err=%v", err))
 	counter := atomic.AddUint64(&opencodeSessionRandCounter, 1)
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%d", time.Now().UnixNano(), counter)))
-	return "byteiq-" + hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:])[:32]
 }
 
 // deterministicOpencodeSession 无渠道上下文时的确定性会话 ID，永不空。
 func deterministicOpencodeSession(identity string) string {
-	sum := sha256.Sum256([]byte("byteiq-opencode:" + identity))
-	return "byteiq-" + hex.EncodeToString(sum[:])[:32]
+	sum := sha256.Sum256([]byte("opencode-session:" + identity))
+	return hex.EncodeToString(sum[:])[:32]
 }
