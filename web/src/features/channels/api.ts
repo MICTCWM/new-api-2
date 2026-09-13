@@ -367,6 +367,81 @@ export async function getOpencodeUsage(
   return res.data
 }
 
+// ============================================================================
+// Command Channel (commandcode.ai) Quota
+// ============================================================================
+
+export type CommandcodeWindow = {
+  used: number
+  cap: number
+  exceeded: boolean
+  reset_at: number // epoch ms, 0 = unknown
+}
+
+export type CommandcodeCredits = {
+  monthly_credits?: number | null
+  purchased_credits?: number | null
+  free_credits?: number | null
+  limited?: boolean
+  exceeded?: string
+  below_threshold?: boolean
+  credit_threshold?: number | null
+  five_hour?: CommandcodeWindow | null
+  weekly?: CommandcodeWindow | null
+}
+
+export type CommandcodePlan = {
+  plan_id: string
+  name: string
+  status: string
+  monthly_credits?: number | null
+  current_period_start: number
+  current_period_end: number
+  cancel_at_period_end: boolean
+  pending_phase?: unknown
+}
+
+export type CommandcodeUsageSummary = {
+  total_count: number
+  total_cost: number
+  average_cost?: number | null
+  success_rate: number
+  completed_count: number
+  failed_count: number
+  total_tokens_in: number
+  total_tokens_out: number
+  total_credits: number
+  period_basis: string
+}
+
+export type CommandcodeQuotaReport = {
+  account?: {
+    id: string
+    name: string
+    user_name: string
+  } | null
+  credits?: CommandcodeCredits | null
+  plan?: CommandcodePlan | null
+  usage?: CommandcodeUsageSummary | null
+  failures?: string[]
+}
+
+export type CommandcodeQuotaResponse = {
+  success: boolean
+  message?: string
+  data?: CommandcodeQuotaReport
+}
+
+export async function getCommandcodeQuota(
+  channelId: number
+): Promise<CommandcodeQuotaResponse> {
+  const res = await api.get(
+    `/api/channel/${channelId}/commandcode/quota`,
+    channelActionConfig({ disableDuplicate: true })
+  )
+  return res.data
+}
+
 export async function getCommandUsage(
   channelId: number
 ): Promise<CommandUsageResponse> {

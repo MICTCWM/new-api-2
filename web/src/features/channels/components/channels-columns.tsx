@@ -57,10 +57,12 @@ import { cn, truncateText } from '@/lib/utils'
 
 import {
   getCodexUsage,
+  getCommandcodeQuota,
   getCommandUsage,
   getChannelConcurrencyUsage,
   getOpencodeUsage,
   updateChannelBalance,
+  type CommandcodeQuotaResponse,
 } from '../api'
 import {
   CHANNEL_STATUS_CONFIG,
@@ -98,6 +100,7 @@ import {
   CodexUsageDialog,
   type CodexUsageDialogData,
 } from './dialogs/codex-usage-dialog'
+import { CommandcodeQuotaDialog } from './dialogs/commandcode-quota-dialog'
 import { NumericSpinnerInput } from './numeric-spinner-input'
 
 function parseIonetMeta(otherInfo: string | null | undefined): null | {
@@ -635,6 +638,9 @@ export function BalanceCell({ channel }: { channel: Channel }) {
   const [codexUsageOpen, setCodexUsageOpen] = useState(false)
   const [codexUsageResponse, setCodexUsageResponse] =
     useState<CodexUsageDialogData | null>(null)
+  const [commandcodeQuotaOpen, setCommandcodeQuotaOpen] = useState(false)
+  const [commandcodeQuotaResponse, setCommandcodeQuotaResponse] =
+    useState<CommandcodeQuotaResponse | null>(null)
   const currencyLabel = getCurrencyLabel()
   const tokenSuffix = currencyLabel === 'Tokens' ? ' Tokens' : ''
   const withSuffix = (value: string) =>
@@ -722,6 +728,23 @@ export function BalanceCell({ channel }: { channel: Channel }) {
     }
 
     setIsUpdating(true)
+    if (channel.type === CHANNEL_TYPE_COMMAND) {
+      try {
+        const res = await getCommandcodeQuota(channel.id)
+        if (!res.success) {
+          throw new Error(res.message || t('Failed to fetch usage'))
+        }
+        setCommandcodeQuotaResponse(res)
+        setCommandcodeQuotaOpen(true)
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : t('Failed to fetch usage')
+        )
+      } finally {
+        setIsUpdating(false)
+      }
+      return
+    }
     if (channel.type === 57) {
       try {
         const res = await getCodexUsage(channel.id)
@@ -772,7 +795,10 @@ export function BalanceCell({ channel }: { channel: Channel }) {
   let remainingBadgeLabel = sensitiveVisible ? remainingDisplay : SENSITIVE_MASK
   if (sensitiveVisible && isUpdating) {
     remainingBadgeLabel = t('Updating...')
-  } else if (sensitiveVisible && channel.type === 57) {
+  } else if (
+    sensitiveVisible &&
+    (channel.type === 57 || channel.type === CHANNEL_TYPE_COMMAND)
+  ) {
     remainingBadgeLabel = t('Account Info')
   }
   let remainingTooltipLabel = remainingLabel
@@ -780,9 +806,11 @@ export function BalanceCell({ channel }: { channel: Channel }) {
     remainingTooltipLabel = maskedRemainingLabel
   } else if (channel.type === 57) {
     remainingTooltipLabel = t('Click to view Codex usage')
+  } else if (channel.type === CHANNEL_TYPE_COMMAND) {
+    remainingTooltipLabel = t('Click to view Command quota')
   }
   let remainingBadgeVariant: StatusBadgeProps['variant'] = variant
-  if (channel.type === 57) {
+  if (channel.type === 57 || channel.type === CHANNEL_TYPE_COMMAND) {
     remainingBadgeVariant = 'info'
   } else if (isUpdating) {
     remainingBadgeVariant = 'neutral'
@@ -824,7 +852,9 @@ export function BalanceCell({ channel }: { channel: Channel }) {
           />
           <TooltipContent>
             <p>{remainingTooltipLabel}</p>
-            {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
+            {channel.type !== 57 && channel.type !== CHANNEL_TYPE_COMMAND && (
+              <p>{t('Click to update balance')}</p>
+            )}
           </TooltipContent>
         </Tooltip>
       </div>
@@ -848,6 +878,37 @@ export function BalanceCell({ channel }: { channel: Channel }) {
               throw new Error(res.message || t('Failed to fetch usage'))
             }
             setCodexUsageResponse(res)
+          } catch (error) {
+            toast.error(
+              error instanceof Error
+                ? error.message
+                : t('Failed to fetch usage')
+            )
+          } finally {
+            setIsUpdating(false)
+          }
+        }}
+        isRefreshing={isUpdating}
+      />
+      <CommandcodeQuotaDialog
+        open={commandcodeQuotaOpen}
+        onOpenChange={setCommandcodeQuotaOpen}
+        channelName={channel.name}
+        channelId={channel.id}
+        channelDisplayName={sensitiveVisible ? undefined : SENSITIVE_MASK}
+        channelDisplayId={sensitiveVisible ? undefined : SENSITIVE_MASK}
+        response={commandcodeQuotaResponse}
+        onRefresh={async () => {
+          if (isUpdating) {
+            return
+          }
+          setIsUpdating(true)
+          try {
+            const res = await getCommandcodeQuota(channel.id)
+            if (!res.success) {
+              throw new Error(res.message || t('Failed to fetch usage'))
+            }
+            setCommandcodeQuotaResponse(res)
           } catch (error) {
             toast.error(
               error instanceof Error
