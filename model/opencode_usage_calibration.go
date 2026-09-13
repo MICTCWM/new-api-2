@@ -19,6 +19,11 @@ var opencodeUsageEndpoint = "https://opencode.ai/zen/go/v1/usage"
 
 var opencodeUsageHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
+// OpencodeCalibrationClientFactory 按渠道构建校准用的 HTTP 客户端。由调用方
+// （service/controller 层）注入，以便校准请求遵循渠道的代理设置；为 nil 时
+// 退化为直连（仅测试使用）。
+type OpencodeCalibrationClientFactory func(channel *Channel) (*http.Client, error)
+
 type opencodeRemoteWindow struct {
 	Status   *string  `json:"status"`
 	Percent  *float64 `json:"percent"`
@@ -59,13 +64,16 @@ func nextOpencodeUsageCalibrationAt(channelID int, now int64) int64 {
 	return next
 }
 
-func fetchOpencodeRemoteUsage(ctx context.Context, key string) (*opencodeRemoteUsage, error) {
+func fetchOpencodeRemoteUsage(ctx context.Context, key string, client *http.Client) (*opencodeRemoteUsage, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil, errors.New("opencode channel key is empty")
+	}
+	if client == nil {
+		client = opencodeUsageHTTPClient
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, opencodeUsageEndpoint, nil)
@@ -75,7 +83,7 @@ func fetchOpencodeRemoteUsage(ctx context.Context, key string) (*opencodeRemoteU
 	request.Header.Set("Authorization", "Bearer "+key)
 	request.Header.Set("Accept", "application/json")
 
-	response, err := opencodeUsageHTTPClient.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("request opencode usage: %w", err)
 	}
@@ -217,7 +225,7 @@ func persistOpencodeRemoteUsage(channelID int, remote *opencodeRemoteUsage, now 
 	return ReconcileCodeProviderQuotaChannel(channelID, now)
 }
 
-func calibrateClaimedOpencodeChannel(ctx context.Context, channelID int, now int64) error {
+func calibrateClaimedOpencodeChannel(ctx context.Context, channelID int, now int64, clientFactory OpencodeCalibrationClientFactory) error {
 	channel, err := GetChannelById(channelID, true)
 	if err != nil {
 		return err
@@ -225,7 +233,17 @@ func calibrateClaimedOpencodeChannel(ctx context.Context, channelID int, now int
 	if channel.Type != constant.ChannelTypeOpencode {
 		return errors.New("channel is not opencode")
 	}
-	remote, err := fetchOpencodeRemoteUsage(ctx, channel.Key)
+	var client *http.Client
+	if clientFactory != nil {
+		client, err = clientFactory(channel)
+		if err != nil {
+			if recordErr := recordOpencodeCalibrationFailure(channelID, now, err); recordErr != nil {
+				return errors.Join(err, recordErr)
+			}
+			return err
+		}
+	}
+	remote, err := fetchOpencodeRemoteUsage(ctx, channel.Key, client)
 	if err != nil {
 		if recordErr := recordOpencodeCalibrationFailure(channelID, now, err); recordErr != nil {
 			return errors.Join(err, recordErr)
@@ -238,7 +256,7 @@ func calibrateClaimedOpencodeChannel(ctx context.Context, channelID int, now int
 // CalibrateOpencodeChannel forces one account-level OpenCode usage read. The
 // local request accounting remains active between calibrations and is only
 // replaced after a valid upstream response has been parsed completely.
-func CalibrateOpencodeChannel(ctx context.Context, channelID int, now int64) (*OpencodeUsageSnapshot, error) {
+func CalibrateOpencodeChannel(ctx context.Context, channelID int, now int64, clientFactory OpencodeCalibrationClientFactory) (*OpencodeUsageSnapshot, error) {
 	if now <= 0 {
 		now = time.Now().Unix()
 	}
@@ -249,7 +267,7 @@ func CalibrateOpencodeChannel(ctx context.Context, channelID int, now int64) (*O
 	if !claimed {
 		return nil, errors.New("opencode calibration was not claimed")
 	}
-	if err := calibrateClaimedOpencodeChannel(ctx, channelID, now); err != nil {
+	if err := calibrateClaimedOpencodeChannel(ctx, channelID, now, clientFactory); err != nil {
 		return nil, err
 	}
 	return GetOpencodeUsageSnapshot(channelID, now)
@@ -258,8 +276,9 @@ func CalibrateOpencodeChannel(ctx context.Context, channelID int, now int64) (*O
 // CalibrateDueOpencodeChannels processes due channels serially. The persisted
 // next time is derived from the channel ID, so channels do not form one burst
 // at the ten-minute boundary while the serial loop guarantees no parallel
-// upstream calibration requests within this runner.
-func CalibrateDueOpencodeChannels(ctx context.Context, now int64) (int, error) {
+// upstream calibration requests within this runner. clientFactory builds the
+// per-channel HTTP client (proxy-aware); nil falls back to a direct client.
+func CalibrateDueOpencodeChannels(ctx context.Context, now int64, clientFactory OpencodeCalibrationClientFactory) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -299,7 +318,7 @@ func CalibrateDueOpencodeChannels(ctx context.Context, now int64) (int, error) {
 		if !claimed {
 			continue
 		}
-		if err := calibrateClaimedOpencodeChannel(ctx, channel.Id, now); err != nil {
+		if err := calibrateClaimedOpencodeChannel(ctx, channel.Id, now, clientFactory); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}

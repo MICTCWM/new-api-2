@@ -45,7 +45,7 @@ func (opencodeUsageCalibrationHandler) Run(ctx context.Context, task *model.Syst
 		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int{"disabled": disabled, "enabled": enabled}, reconcileErr)
 		return
 	}
-	calibrated, err := model.CalibrateDueOpencodeChannels(ctx, time.Now().Unix())
+	calibrated, err := model.CalibrateDueOpencodeChannels(ctx, time.Now().Unix(), opencodeCalibrationClientFactory)
 	if err != nil {
 		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int{"calibrated": calibrated, "disabled": disabled, "enabled": enabled}, err)
 		return

@@ -527,6 +527,13 @@ func updateStandardChannelBalance(channel *model.Channel) (float64, error) {
 	return balance, nil
 }
 
+// opencodeCalibrationClientFactory builds the HTTP client for opencode usage
+// calibration so the upstream read follows the channel's proxy settings
+// (including xray relay self-heal) instead of the host's direct IP.
+func opencodeCalibrationClientFactory(channel *model.Channel) (*http.Client, error) {
+	return service.GetHttpClientWithProxy(channel.GetSetting().Proxy)
+}
+
 func UpdateChannelBalance(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -546,7 +553,7 @@ func UpdateChannelBalance(c *gin.Context) {
 		return
 	}
 	if channel.Type == constant.ChannelTypeOpencode {
-		usage, err := model.CalibrateOpencodeChannel(c.Request.Context(), id, common.GetTimestamp())
+		usage, err := model.CalibrateOpencodeChannel(c.Request.Context(), id, common.GetTimestamp(), opencodeCalibrationClientFactory)
 		if err != nil {
 			common.ApiError(c, err)
 			return
