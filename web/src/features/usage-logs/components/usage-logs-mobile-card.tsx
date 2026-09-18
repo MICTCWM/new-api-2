@@ -40,7 +40,7 @@ import { cn } from '@/lib/utils'
 
 import { LOG_TYPE_ENUM } from '../constants'
 import type { UsageLog } from '../data/schema'
-import { parseLogOther } from '../lib/format'
+import { getSessionEventRowClass, parseLogOther } from '../lib/format'
 import {
   getLogTypeConfig,
   isDisplayableLogType,
@@ -535,7 +535,17 @@ export function UsageLogsMobileList<TData>({
         const logType = (row.original as Record<string, unknown>).type as
           | number
           | undefined
-        const tintClass = logType != null ? (logTypeRowTint[logType] ?? '') : ''
+        const tintClass =
+          logCategory === 'session'
+            ? getSessionEventRowClass(
+                parseLogOther(
+                  ((row.original as Record<string, unknown>).other as string) ??
+                    ''
+                )
+              )
+            : logType != null
+              ? (logTypeRowTint[logType] ?? '')
+              : ''
 
         return (
           <div

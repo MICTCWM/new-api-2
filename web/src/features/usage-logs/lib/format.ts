@@ -24,6 +24,7 @@ import {
   type ParsedTier,
 } from '@/features/pricing/lib/billing-expr'
 
+import { SESSION_EVENT_ROW_TINTS } from '../constants'
 import type { UsageLog } from '../data/schema'
 import type { LogOtherData } from '../types'
 
@@ -174,6 +175,24 @@ export function parseLogOther(other: string): LogOtherData | null {
     console.error('Failed to parse log other field:', error)
     return null
   }
+}
+
+export function getSessionEventToken(other: LogOtherData | null): string {
+  if (!other) return ''
+  const fromParams = other.op?.params?.event
+  if (typeof fromParams === 'string' && fromParams !== '') return fromParams
+  const adminInfo = other.admin_info as Record<string, unknown> | undefined
+  const fromAdmin = adminInfo?.event
+  if (typeof fromAdmin === 'string' && fromAdmin !== '') return fromAdmin
+  const action = other.op?.action
+  if (typeof action === 'string' && action.startsWith('opencode.session.')) {
+    return action.slice('opencode.session.'.length)
+  }
+  return ''
+}
+
+export function getSessionEventRowClass(other: LogOtherData | null): string {
+  return SESSION_EVENT_ROW_TINTS[getSessionEventToken(other)] ?? ''
 }
 
 export function getReasoningEffortVariant(

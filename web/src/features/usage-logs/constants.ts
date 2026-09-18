@@ -141,6 +141,18 @@ export const SESSION_EVENT_MAPPINGS: Record<string, StatusMapping> = {
   expire: { label: 'Session expired', variant: 'grey' },
 }
 
+/** Row background + left-border tints for Session ID logs. Stronger than type=8 indigo. */
+export const SESSION_EVENT_ROW_TINTS: Record<string, string> = {
+  create:
+    'bg-emerald-100/90 dark:bg-emerald-950/55 border-l-4 border-l-emerald-500 dark:border-l-emerald-400',
+  hit: 'bg-cyan-100/90 dark:bg-cyan-950/55 border-l-4 border-l-cyan-500 dark:border-l-cyan-400',
+  move: 'bg-orange-100/90 dark:bg-orange-950/55 border-l-4 border-l-orange-500 dark:border-l-orange-400',
+  queue:
+    'bg-yellow-100/90 dark:bg-yellow-950/55 border-l-4 border-l-yellow-500 dark:border-l-yellow-400',
+  expire:
+    'bg-zinc-200/90 dark:bg-zinc-800/60 border-l-4 border-l-zinc-500 dark:border-l-zinc-400',
+}
+
 // ============================================================================
 // Drawing Logs (MjProxy) Constants
 // ============================================================================

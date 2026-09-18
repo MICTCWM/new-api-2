@@ -37,7 +37,7 @@ import {
   LOG_TYPE_ENUM,
 } from '../constants'
 import { useColumnsByCategory } from '../lib/columns'
-import { parseLogOther } from '../lib/format'
+import { getSessionEventRowClass, parseLogOther } from '../lib/format'
 import { fetchLogsByCategory } from '../lib/utils'
 import type { LogCategory } from '../types'
 import { CommonLogsFilterBar } from './common-logs-filter-bar'
@@ -223,10 +223,16 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         const logType = (row.original as Record<string, unknown>).type as
           | number
           | undefined
-        let tintClass =
-          (isCommon || isSession) && logType != null
-            ? (logTypeRowTint[logType] ?? '')
-            : ''
+        let tintClass = ''
+        if (isSession) {
+          tintClass = getSessionEventRowClass(
+            parseLogOther(
+              ((row.original as Record<string, unknown>).other as string) ?? ''
+            )
+          )
+        } else if (isCommon && logType != null) {
+          tintClass = logTypeRowTint[logType] ?? ''
+        }
         if (isCommon && isAdmin) {
           const other = parseLogOther(
             ((row.original as Record<string, unknown>).other as string) ?? ''

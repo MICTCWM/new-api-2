@@ -23,6 +23,8 @@ For commercial licensing, please contact support@quantumnous.com
 // Format utilities (usage-logs specific)
 export {
   parseLogOther,
+  getSessionEventToken,
+  getSessionEventRowClass,
   getTimeColor,
   formatModelName,
   formatDuration,

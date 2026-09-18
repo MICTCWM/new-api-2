@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 
 import { LOG_TYPE_ENUM, LOG_TYPE_FILTERS, RELAY_CONTEXT_LOG_TYPES } from '../../constants'
 import { buildSearchParams } from '../filter'
-import { renderAuditContent } from '../format'
+import { renderAuditContent, getSessionEventRowClass } from '../format'
 import { sessionEventMapper } from '../mappers'
 
 function interpolate(key: string, options?: Record<string, unknown>): string {
@@ -128,5 +128,24 @@ describe('opencode session usage log rendering', () => {
     expect(sessionEventMapper.getVariant('move')).toBe('orange')
     expect(sessionEventMapper.getVariant('queue')).toBe('yellow')
     expect(sessionEventMapper.getVariant('expire')).toBe('grey')
+  })
+
+  test('tints session rows by lifecycle event instead of a shared indigo', () => {
+    expect(
+      getSessionEventRowClass({
+        op: { action: 'opencode.session.create' },
+      })
+    ).toContain('bg-emerald-100')
+    expect(
+      getSessionEventRowClass({
+        op: { action: 'opencode.session.move' },
+      })
+    ).toContain('bg-orange-100')
+    expect(
+      getSessionEventRowClass({
+        op: { action: 'opencode.session.expire' },
+      })
+    ).toContain('bg-zinc-200')
+    expect(getSessionEventRowClass(null)).toBe('')
   })
 })
