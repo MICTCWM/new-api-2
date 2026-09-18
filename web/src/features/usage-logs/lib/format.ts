@@ -403,6 +403,12 @@ const AUDIT_TEMPLATES: Record<string, string> = {
     'Channel {{channel_name}} entered speed protection for group {{group}}',
   'speed_protection.kicked':
     'Channel {{channel_name}} kicked out of speed protection for group {{group}}',
+  'opencode.session.create': 'Created session {{session_id}}',
+  'opencode.session.hit': 'Reused session {{session_id}}',
+  'opencode.session.move':
+    'Moved session from channel {{from_channel_id}} to {{to_channel_id}}',
+  'opencode.session.queue': 'Queued session ({{result}})',
+  'opencode.session.expire': 'Session expired',
   // User management
   'user.create': 'Created user {{username}} (role {{role}})',
   'user.update': 'Updated user {{username}} (ID: {{id}})',

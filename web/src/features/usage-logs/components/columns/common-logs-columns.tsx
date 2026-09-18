@@ -35,7 +35,7 @@ import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import { LOG_TYPE_ALL_VALUE } from '../../constants'
+import { LOG_TYPE_ALL_VALUE, LOG_TYPE_ENUM } from '../../constants'
 import type { UsageLog } from '../../data/schema'
 import {
   formatModelName,
@@ -47,6 +47,7 @@ import {
 } from '../../lib/format'
 import {
   isDisplayableLogType,
+  isRelayContextLogType,
   isTimingLogType,
   getLogTypeConfig,
   isPerCallBilling,
@@ -112,9 +113,14 @@ function buildTypeDetailSegments(
   other: LogOtherData | null,
   t: (key: string, opts?: Record<string, unknown>) => string
 ): DetailSegment[] {
-  // Audit, login, and system state-transition logs: render localized content
+  // Audit, login, system, and session lifecycle logs: render localized content
   // from the structured op descriptor instead of the raw fallback content.
-  if (log.type === 3 || log.type === 4 || log.type === 7) {
+  if (
+    log.type === LOG_TYPE_ENUM.MANAGE ||
+    log.type === LOG_TYPE_ENUM.SYSTEM ||
+    log.type === LOG_TYPE_ENUM.LOGIN ||
+    log.type === LOG_TYPE_ENUM.SESSION
+  ) {
     const text = renderAuditContent(
       other,
       t,
@@ -332,7 +338,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
             useUsageLogsContext()
           const log = row.original
 
-          if (!isDisplayableLogType(log.type)) return null
+          if (!isRelayContextLogType(log.type)) return null
 
           const other = parseLogOther(log.other)
           const affinity = other?.admin_info?.channel_affinity
@@ -618,7 +624,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
       header: t('Model'),
       cell: function ModelCell({ row }) {
         const log = row.original
-        if (!isDisplayableLogType(log.type)) return null
+        if (!isRelayContextLogType(log.type)) return null
 
         const modelInfo = formatModelName(log)
 

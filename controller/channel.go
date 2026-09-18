@@ -189,6 +189,15 @@ func GetChannelRPMUsage(c *gin.Context) {
 	GetChannelConcurrencyUsage(c)
 }
 
+func GetCodeProviderSessionUsage(c *gin.Context) {
+	usage, err := service.GetOpencodeSessionUsage()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, usage)
+}
+
 func attachChannelAffinityConcurrencyUsage(channelID, usedConcurrency, concurrencyLimit int, usage interface{}) {
 	reservedConcurrency := service.GetChannelAffinityReservedConcurrency(channelID, common.GetTimestamp())
 	availableConcurrency := concurrencyLimit - usedConcurrency - reservedConcurrency

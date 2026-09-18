@@ -160,6 +160,17 @@ export interface LogOtherData {
     channel_retry_failures?: ChannelRetryFailure[]
     channel_affinity?: ChannelAffinityInfo
     opencode_session_affinity?: OpencodeSessionAffinityInfo
+    // Session lifecycle logs (type=8, admin only)
+    event?: string
+    session_id?: string
+    conversation_key?: string
+    channel_id?: number
+    from_channel_id?: number
+    to_channel_id?: number
+    result?: string
+    wait_seconds?: number
+    model?: string
+    group?: string
     // Top-up audit fields (type=1, admin only)
     payment_method?: string
     callback_payment_method?: string

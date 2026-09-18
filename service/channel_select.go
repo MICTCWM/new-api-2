@@ -496,6 +496,26 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		}
 
 		for _, group := range groups {
+			if sessionChannel, queueRequired, sessionErr := SelectOpencodeSessionChannel(param.Ctx, group, param.ModelName, param.RequestPath, nil, param.AttemptedChannelIDs); sessionErr != nil {
+				return nil, group, sessionErr
+			} else if sessionChannel != nil {
+				if param.TokenGroup == "auto" {
+					common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
+				}
+				if queueRequired {
+					waited, waitGroup, waitErr := waitForOpencodeSessionCapacity(param, group)
+					if waitErr != nil {
+						return nil, group, waitErr
+					}
+					if waited != nil {
+						return waited, waitGroup, nil
+					}
+					setOpencodeSessionHardFallback(param.Ctx, true)
+					setOpencodeSessionQueueRequired(param.Ctx, false)
+					return sessionChannel, group, nil
+				}
+				return sessionChannel, group, nil
+			}
 			if param.OpencodeIncludeRPMFull {
 				if queuedAffinity, queuedGroup, queuedErr := selectQueuedAffinityCandidate(param); queuedErr != nil {
 					return nil, group, queuedErr

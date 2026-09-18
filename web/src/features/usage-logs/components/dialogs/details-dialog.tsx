@@ -49,6 +49,7 @@ import {
   UserCog,
   Info,
   LogIn,
+  MessagesSquare,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -63,6 +64,7 @@ import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+import { LOG_TYPE_ENUM } from '../../constants'
 import type { UsageLog } from '../../data/schema'
 import {
   parseLogOther,
@@ -484,6 +486,154 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   )
 }
 
+const SESSION_EVENT_LABELS: Record<string, string> = {
+  create: 'Created session',
+  hit: 'Reused session',
+  move: 'Moved session',
+  queue: 'Queued session',
+  expire: 'Session expired',
+}
+
+const SESSION_QUEUE_RESULT_LABELS: Record<string, string> = {
+  released: 'Released',
+  waiting: 'Waiting',
+  timeout_hard_fallback: 'Timeout hard fallback',
+}
+
+function sessionField(
+  other: LogOtherData | null,
+  key: string
+): string | number | undefined {
+  const fromParams = other?.op?.params?.[key]
+  if (typeof fromParams === 'string' && fromParams !== '') return fromParams
+  if (typeof fromParams === 'number' && Number.isFinite(fromParams)) {
+    return fromParams
+  }
+  const adminInfo = other?.admin_info as Record<string, unknown> | undefined
+  const fromAdmin = adminInfo?.[key]
+  if (typeof fromAdmin === 'string' && fromAdmin !== '') return fromAdmin
+  if (typeof fromAdmin === 'number' && Number.isFinite(fromAdmin)) {
+    return fromAdmin
+  }
+  return undefined
+}
+
+function SessionLifecycleSection(props: {
+  log: UsageLog
+  other: LogOtherData | null
+  operationText: string | null
+  isAdmin: boolean
+  t: TFunction
+}) {
+  const eventToken = String(
+    sessionField(props.other, 'event') ??
+      props.other?.op?.action?.replace(/^opencode\.session\./, '') ??
+      ''
+  )
+  const eventLabel = SESSION_EVENT_LABELS[eventToken]
+  const sessionId = sessionField(props.other, 'session_id')
+  const conversationKey = sessionField(props.other, 'conversation_key')
+  const fromChannelId = sessionField(props.other, 'from_channel_id')
+  const toChannelId = sessionField(props.other, 'to_channel_id')
+  const waitSeconds = sessionField(props.other, 'wait_seconds')
+  const queueResult = sessionField(props.other, 'result')
+  const queueResultLabel =
+    typeof queueResult === 'string'
+      ? SESSION_QUEUE_RESULT_LABELS[queueResult]
+      : undefined
+  const modelName =
+    sessionField(props.other, 'model') || props.log.model_name || undefined
+  const groupName =
+    sessionField(props.other, 'group') ||
+    props.log.group ||
+    props.other?.group ||
+    undefined
+  const channelId =
+    sessionField(props.other, 'channel_id') ||
+    (props.log.channel > 0 ? props.log.channel : undefined)
+
+  return (
+    <DetailSection
+      icon={<MessagesSquare className='size-3.5' aria-hidden='true' />}
+      iconTone='info'
+      label={props.t('Session')}
+    >
+      {props.operationText != null && (
+        <DetailRow label={props.t('Operation')} value={props.operationText} />
+      )}
+      {eventLabel && (
+        <DetailRow label={props.t('Event')} value={props.t(eventLabel)} />
+      )}
+      {sessionId != null && (
+        <DetailRow
+          label={props.t('Session ID')}
+          value={String(sessionId)}
+          mono
+        />
+      )}
+      {props.isAdmin && channelId != null && (
+        <DetailRow
+          label={props.t('Channel')}
+          value={
+            <span>
+              {channelId}
+              {props.log.channel_name && (
+                <span className='text-muted-foreground'>
+                  {' '}
+                  ({props.log.channel_name})
+                </span>
+              )}
+            </span>
+          }
+          mono
+        />
+      )}
+      {modelName != null && modelName !== '' && (
+        <DetailRow label={props.t('Model')} value={String(modelName)} mono />
+      )}
+      {groupName != null && groupName !== '' && (
+        <DetailRow label={props.t('Group')} value={String(groupName)} mono />
+      )}
+      {props.isAdmin && fromChannelId != null && (
+        <DetailRow
+          label={props.t('From Channel')}
+          value={String(fromChannelId)}
+          mono
+        />
+      )}
+      {props.isAdmin && toChannelId != null && (
+        <DetailRow
+          label={props.t('To Channel')}
+          value={String(toChannelId)}
+          mono
+        />
+      )}
+      {waitSeconds != null && (
+        <DetailRow
+          label={props.t('Wait Time')}
+          value={`${waitSeconds}s`}
+          mono
+        />
+      )}
+      {queueResult != null && (
+        <DetailRow
+          label={props.t('Queue Result')}
+          value={
+            queueResultLabel ? props.t(queueResultLabel) : String(queueResult)
+          }
+        />
+      )}
+      {props.isAdmin && conversationKey != null && (
+        <DetailRow
+          label={props.t('Conversation Key')}
+          value={String(conversationKey)}
+          mono
+        />
+      )}
+    </DetailSection>
+  )
+}
+
 interface DetailsDialogProps {
   log: UsageLog
   isAdmin: boolean
@@ -601,7 +751,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
     isManage && props.isAdmin && (operationText != null || auditRoute != null)
 
   // Login audit (type=7); visible to the log owner, not admin-only.
-  const isLogin = props.log.type === 7
+  const isLogin = props.log.type === LOG_TYPE_ENUM.LOGIN
+  const isSession = props.log.type === LOG_TYPE_ENUM.SESSION
   const loginAuditFields = isLogin
     ? ([
         other?.login_method && {
@@ -629,7 +780,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
       : conversionChain.join(' -> ')
   const showConversion =
     props.isAdmin &&
-    props.log.type !== 6 &&
+    props.log.type !== LOG_TYPE_ENUM.REFUND &&
+    !isSession &&
     (other?.request_path || conversionChain.length > 0)
 
   const useChannel = other?.admin_info?.use_channel
@@ -1098,6 +1250,17 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
+        {/* OpenCode / Command session lifecycle (type=8) */}
+        {isSession && (
+          <SessionLifecycleSection
+            log={props.log}
+            other={other}
+            operationText={operationText}
+            isAdmin={props.isAdmin}
+            t={t}
+          />
+        )}
+
         {/* Audio/WebSocket token breakdown */}
         {hasAudioTokens && other && (
           <DetailSection
@@ -1212,7 +1375,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
         {/* Admin billing mode indicator for non-consume */}
         {props.isAdmin &&
           !isConsume &&
-          props.log.type !== 6 &&
+          !isSession &&
+          props.log.type !== LOG_TYPE_ENUM.REFUND &&
           other?.admin_info && (
             <DetailRow
               label={t('Billing Path')}

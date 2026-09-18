@@ -27,7 +27,7 @@ import {
   Shuffle,
   SlidersHorizontal,
 } from 'lucide-react'
-import { useState, useMemo, useContext, useEffect } from 'react'
+import { useState, useMemo, useContext, useEffect, lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -58,6 +58,7 @@ import { cn, truncateText } from '@/lib/utils'
 import {
   getCodexUsage,
   getCommandcodeQuota,
+  getCodeProviderSessionUsage,
   getCommandUsage,
   getChannelConcurrencyUsage,
   getOpencodeUsage,
@@ -70,6 +71,7 @@ import {
   MODEL_FETCHABLE_TYPES,
   isFixedCodeChannelType,
 } from '../constants'
+import { CODE_PROVIDER_SESSION_USAGE_QUERY_KEY } from '../lib/session-occupancy'
 import {
   formatRelativeTime,
   formatResponseTime,
@@ -387,6 +389,12 @@ function TagWeightCell({ channel }: { channel: TagRow }) {
 const MAX_INLINE_BALANCE_CHARS = 8
 const SENSITIVE_MASK = '••••'
 
+const SessionOccupancyChart = lazy(() =>
+  import('./session-occupancy-chart').then((module) => ({
+    default: module.SessionOccupancyChart,
+  }))
+)
+
 /**
  * Balance cell component with click to update
  */
@@ -397,6 +405,16 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
     queryKey: ['code-provider-usage', channel.id],
     queryFn: () =>
       isCommand ? getCommandUsage(channel.id) : getOpencodeUsage(channel.id),
+    enabled: isFixedCodeChannelType(channel.type),
+    refetchInterval: 15_000,
+  })
+  const {
+    data: sessionUsageResponse,
+    isError: sessionUsageError,
+    isPending: sessionUsagePending,
+  } = useQuery({
+    queryKey: CODE_PROVIDER_SESSION_USAGE_QUERY_KEY,
+    queryFn: getCodeProviderSessionUsage,
     enabled: isFixedCodeChannelType(channel.type),
     refetchInterval: 15_000,
   })
@@ -447,6 +465,17 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
       OpencodeUsageWindow,
       string,
     ][]
+  }
+  const occupancy = sessionUsageResponse?.data?.find(
+    (item) => item.channel_id === channel.id
+  )
+  let occupancyStatus: 'loading' | 'error' | 'empty' | 'ready' = 'empty'
+  if (sessionUsageError) {
+    occupancyStatus = 'error'
+  } else if (sessionUsagePending) {
+    occupancyStatus = 'loading'
+  } else if (occupancy && occupancy.capacity > 0) {
+    occupancyStatus = 'ready'
   }
   return (
     <div className='flex min-w-52 items-center gap-2'>
@@ -526,6 +555,17 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
           )
         })}
       </div>
+      <Suspense
+        fallback={
+          <div className='size-16 shrink-0' aria-hidden='true' />
+        }
+      >
+        <SessionOccupancyChart
+          activeSessions={occupancy?.active_sessions}
+          capacity={occupancy?.capacity}
+          status={occupancyStatus}
+        />
+      </Suspense>
     </div>
   )
 }

@@ -29,6 +29,7 @@ import type {
   ChannelConcurrencyUsageResponse,
   ChannelTestResponse,
   CodeProviderUsageOverrideRequest,
+  CodeProviderSessionUsageResponse,
   CommandUsageResponse,
   CopyChannelParams,
   CopyChannelResponse,
@@ -447,6 +448,14 @@ export async function getCommandUsage(
 ): Promise<CommandUsageResponse> {
   const res = await api.get(
     `/api/channel/${channelId}/command/usage`,
+    channelActionConfig({ disableDuplicate: true })
+  )
+  return res.data
+}
+
+export async function getCodeProviderSessionUsage(): Promise<CodeProviderSessionUsageResponse> {
+  const res = await api.get(
+    '/api/channel/code-provider/session-usage',
     channelActionConfig({ disableDuplicate: true })
   )
   return res.data

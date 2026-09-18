@@ -343,6 +343,7 @@ export type OperationsSettings = {
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean
   OpencodeConcurrencyLimit: number
+  OpencodeSessionRetentionSeconds: number
   AutoScalingEnabled: boolean
   AutoScalingRPMLimit: number
   AutoScalingCooldownMinutes: number

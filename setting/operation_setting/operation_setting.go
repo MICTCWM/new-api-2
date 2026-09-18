@@ -11,20 +11,26 @@ var DemoSiteEnabled = false
 var SelfUseModeEnabled = false
 
 const (
-	OpencodeConcurrencyLimitOptionKey = "OpencodeConcurrencyLimit"
-	OpencodeRPMLimitOptionKey         = "OpencodeRPMLimit" // legacy option key
-	DefaultOpencodeConcurrencyLimit   = 3
-	MinOpencodeConcurrencyLimit       = 1
-	MaxOpencodeConcurrencyLimit       = 1000
-	DefaultOpencodeRPMLimit           = DefaultOpencodeConcurrencyLimit
-	MinOpencodeRPMLimit               = MinOpencodeConcurrencyLimit
-	MaxOpencodeRPMLimit               = MaxOpencodeConcurrencyLimit
+	OpencodeConcurrencyLimitOptionKey      = "OpencodeConcurrencyLimit"
+	OpencodeRPMLimitOptionKey              = "OpencodeRPMLimit" // legacy option key
+	OpencodeSessionRetentionOptionKey      = "OpencodeSessionRetentionSeconds"
+	DefaultOpencodeConcurrencyLimit        = 3
+	MinOpencodeConcurrencyLimit            = 1
+	MaxOpencodeConcurrencyLimit            = 1000
+	DefaultOpencodeSessionRetentionSeconds = 30 * 60
+	MinOpencodeSessionRetentionSeconds     = 60
+	MaxOpencodeSessionRetentionSeconds     = 7 * 24 * 60 * 60
+	DefaultOpencodeRPMLimit                = DefaultOpencodeConcurrencyLimit
+	MinOpencodeRPMLimit                    = MinOpencodeConcurrencyLimit
+	MaxOpencodeRPMLimit                    = MaxOpencodeConcurrencyLimit
 )
 
 var opencodeConcurrencyLimit atomic.Int64
+var opencodeSessionRetentionSeconds atomic.Int64
 
 func init() {
 	opencodeConcurrencyLimit.Store(DefaultOpencodeConcurrencyLimit)
+	opencodeSessionRetentionSeconds.Store(DefaultOpencodeSessionRetentionSeconds)
 }
 
 func GetOpencodeConcurrencyLimit() int {
@@ -60,6 +66,27 @@ func ValidateOpencodeRPMLimit(value string) error {
 
 func SetOpencodeRPMLimit(value string) error {
 	return SetOpencodeConcurrencyLimit(value)
+}
+
+func GetOpencodeSessionRetentionSeconds() int {
+	return int(opencodeSessionRetentionSeconds.Load())
+}
+
+func ValidateOpencodeSessionRetentionSeconds(value string) error {
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds < MinOpencodeSessionRetentionSeconds || seconds > MaxOpencodeSessionRetentionSeconds {
+		return fmt.Errorf("OpenCode session retention must be an integer from %d to %d seconds", MinOpencodeSessionRetentionSeconds, MaxOpencodeSessionRetentionSeconds)
+	}
+	return nil
+}
+
+func SetOpencodeSessionRetentionSeconds(value string) error {
+	if err := ValidateOpencodeSessionRetentionSeconds(value); err != nil {
+		return err
+	}
+	seconds, _ := strconv.Atoi(strings.TrimSpace(value))
+	opencodeSessionRetentionSeconds.Store(int64(seconds))
+	return nil
 }
 
 var AutomaticDisableKeywords = []string{

@@ -31,6 +31,7 @@ const defaultOperationsSettings: OperationsSettings = {
   DemoSiteEnabled: false,
   SelfUseModeEnabled: false,
   OpencodeConcurrencyLimit: 3,
+  OpencodeSessionRetentionSeconds: 1800,
   AutoScalingEnabled: false,
   AutoScalingRPMLimit: 50,
   AutoScalingCooldownMinutes: 30,

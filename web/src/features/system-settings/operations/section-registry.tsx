@@ -37,6 +37,8 @@ const OPERATIONS_SECTIONS = [
           DemoSiteEnabled: settings.DemoSiteEnabled,
           SelfUseModeEnabled: settings.SelfUseModeEnabled,
           OpencodeConcurrencyLimit: settings.OpencodeConcurrencyLimit,
+          OpencodeSessionRetentionSeconds:
+            settings.OpencodeSessionRetentionSeconds,
           AutoScalingEnabled: settings.AutoScalingEnabled,
           AutoScalingRPMLimit: settings.AutoScalingRPMLimit,
           AutoScalingCooldownMinutes: settings.AutoScalingCooldownMinutes,

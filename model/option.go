@@ -170,6 +170,7 @@ func InitOptionMap() {
 	concurrencyLimit := strconv.Itoa(operation_setting.GetOpencodeConcurrencyLimit())
 	common.OptionMap[operation_setting.OpencodeConcurrencyLimitOptionKey] = concurrencyLimit
 	common.OptionMap[operation_setting.OpencodeRPMLimitOptionKey] = concurrencyLimit
+	common.OptionMap[operation_setting.OpencodeSessionRetentionOptionKey] = strconv.Itoa(operation_setting.GetOpencodeSessionRetentionSeconds())
 	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.ModelRequestRateLimitEnabled)
 	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
 	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
@@ -243,6 +244,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == operation_setting.OpencodeConcurrencyLimitOptionKey || key == operation_setting.OpencodeRPMLimitOptionKey {
 		return operation_setting.ValidateOpencodeConcurrencyLimit(value)
+	}
+	if key == operation_setting.OpencodeSessionRetentionOptionKey {
+		return operation_setting.ValidateOpencodeSessionRetentionSeconds(value)
 	}
 	if key == operation_setting.AutoScalingRPMLimitOptionKey {
 		return operation_setting.ValidateAutoScalingRPMLimit(value)
@@ -453,6 +457,8 @@ func updateOptionMap(key string, value string) (err error) {
 	switch key {
 	case operation_setting.OpencodeConcurrencyLimitOptionKey, operation_setting.OpencodeRPMLimitOptionKey:
 		err = operation_setting.SetOpencodeConcurrencyLimit(value)
+	case operation_setting.OpencodeSessionRetentionOptionKey:
+		err = operation_setting.SetOpencodeSessionRetentionSeconds(value)
 	case "EmailDomainWhitelist":
 		common.EmailDomainWhitelist = strings.Split(value, ",")
 	case "SMTPServer":

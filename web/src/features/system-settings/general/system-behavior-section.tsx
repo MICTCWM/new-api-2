@@ -49,6 +49,7 @@ const behaviorSchema = z.object({
   DemoSiteEnabled: z.boolean(),
   SelfUseModeEnabled: z.boolean(),
   OpencodeConcurrencyLimit: z.number().int().min(1).max(1000),
+  OpencodeSessionRetentionSeconds: z.number().int().min(60).max(604800),
   AutoScalingEnabled: z.boolean(),
   AutoScalingRPMLimit: z.number().int().min(1),
   AutoScalingCooldownMinutes: z.number().int().min(1).max(1440),
@@ -171,6 +172,39 @@ export function SystemBehaviorSection({
                     type='number'
                     min={1}
                     max={1000}
+                    step={1}
+                    value={field.value}
+                    onChange={(event) =>
+                      field.onChange(event.target.valueAsNumber)
+                    }
+                    onBlur={field.onBlur}
+                    name={field.name}
+                    ref={field.ref}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='OpencodeSessionRetentionSeconds'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>
+                  {t('OpenCode session retention (seconds)')}
+                </FormLabel>
+                <FormDescription>
+                  {t(
+                    'How long idle OpenCode/Command sessions stay mapped to a channel after the last request'
+                  )}
+                </FormDescription>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={60}
+                    max={604800}
                     step={1}
                     value={field.value}
                     onChange={(event) =>

@@ -256,6 +256,20 @@ export interface ChannelConcurrencyUsageResponse {
 export type ChannelRPMUsageSnapshot = ChannelConcurrencyUsageSnapshot
 export type ChannelRPMUsageResponse = ChannelConcurrencyUsageResponse
 
+export interface CodeProviderSessionUsage {
+  channel_id: number
+  channel_name: string
+  channel_type: number
+  active_sessions: number
+  capacity: number
+}
+
+export interface CodeProviderSessionUsageResponse {
+  success: boolean
+  message?: string
+  data?: CodeProviderSessionUsage[]
+}
+
 export interface CodeProviderUsageOverrideRequest {
   five_hour_used_usd: number
   week_used_usd: number

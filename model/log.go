@@ -90,7 +90,75 @@ const (
 	LogTypeError   = 5
 	LogTypeRefund  = 6
 	LogTypeLogin   = 7
+	LogTypeSession = 8
 )
+
+type OpencodeSessionLogParams struct {
+	UserID          int
+	Event           string
+	SessionID       string
+	ConversationKey string
+	ChannelID       int
+	FromChannelID   int
+	ToChannelID     int
+	ModelName       string
+	Group           string
+	Result          string
+	WaitSeconds     int
+}
+
+// RecordOpencodeSessionLog stores session lifecycle events in the common log
+// table so the existing admin log filters and retention policies apply.
+func RecordOpencodeSessionLog(params OpencodeSessionLogParams) {
+	username, _ := GetUsernameById(params.UserID, false)
+	adminInfo := map[string]interface{}{
+		"event":            params.Event,
+		"session_id":       params.SessionID,
+		"conversation_key": params.ConversationKey,
+		"channel_id":       params.ChannelID,
+		"model":            params.ModelName,
+		"group":            params.Group,
+	}
+	opParams := map[string]interface{}{
+		"session_id": params.SessionID,
+		"channel_id": params.ChannelID,
+		"model":      params.ModelName,
+		"group":      params.Group,
+	}
+	if params.FromChannelID > 0 {
+		adminInfo["from_channel_id"] = params.FromChannelID
+		opParams["from_channel_id"] = params.FromChannelID
+	}
+	if params.ToChannelID > 0 {
+		adminInfo["to_channel_id"] = params.ToChannelID
+		opParams["to_channel_id"] = params.ToChannelID
+	}
+	if params.Result != "" {
+		adminInfo["result"] = params.Result
+		opParams["result"] = params.Result
+	}
+	if params.WaitSeconds > 0 {
+		adminInfo["wait_seconds"] = params.WaitSeconds
+		opParams["wait_seconds"] = params.WaitSeconds
+	}
+	log := &Log{
+		UserId:    params.UserID,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeSession,
+		Content:   "OpenCode session " + params.Event,
+		ModelName: params.ModelName,
+		ChannelId: params.ChannelID,
+		Group:     params.Group,
+		Other: common.MapToJsonStr(map[string]interface{}{
+			"admin_info": adminInfo,
+			"op":         buildOpField("opencode.session."+params.Event, opParams),
+		}),
+	}
+	if err := createLog(log); err != nil {
+		common.SysError("failed to record opencode session log: " + err.Error())
+	}
+}
 
 func ensureLogRequestId(log *Log) {
 	if log != nil && log.RequestId == "" {
@@ -581,9 +649,12 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 const logSearchCountLimit = 10000
 
 func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+	if logType == LogTypeSession {
+		return []*Log{}, 0, nil
+	}
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
-		tx = LOG_DB.Where("logs.user_id = ?", userId)
+		tx = LOG_DB.Where("logs.user_id = ? AND logs.type <> ?", userId, LogTypeSession)
 	} else {
 		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
 	}

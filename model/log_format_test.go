@@ -4,8 +4,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // TestFormatUserLogsStripsQuotaSaturation verifies the admin-only quota
@@ -34,4 +35,43 @@ func TestFormatUserLogsStripsQuotaSaturation(t *testing.T) {
 	require.False(t, hasAdminInfo, "admin_info (and nested quota_saturation) must be stripped for non-admin views")
 	// Non-admin billing fields remain visible.
 	require.Contains(t, parsed, "model_price")
+}
+
+func TestGetUserLogsExcludesSessionLifecycle(t *testing.T) {
+	previousLogDB := LOG_DB
+	logDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, logDB.AutoMigrate(&Log{}))
+	LOG_DB = logDB
+	t.Cleanup(func() {
+		LOG_DB = previousLogDB
+	})
+
+	require.NoError(t, LOG_DB.Create(&Log{
+		UserId:    42,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeSession,
+		Content:   "OpenCode session create",
+		ModelName: "deepseek-v4-flash",
+		ChannelId: 9,
+		Group:     "default",
+	}).Error)
+	require.NoError(t, LOG_DB.Create(&Log{
+		UserId:    42,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeConsume,
+		Content:   "consume",
+		ModelName: "deepseek-v4-flash",
+	}).Error)
+
+	logs, total, err := GetUserLogs(42, LogTypeUnknown, 0, 0, "", "", 0, 20, "", "", "")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, logs, 1)
+	require.Equal(t, LogTypeConsume, logs[0].Type)
+
+	sessionLogs, sessionTotal, err := GetUserLogs(42, LogTypeSession, 0, 0, "", "", 0, 20, "", "", "")
+	require.NoError(t, err)
+	require.Zero(t, sessionTotal)
+	require.Empty(t, sessionLogs)
 }

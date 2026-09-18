@@ -60,16 +60,33 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 		return nil, "", errors.New("unsupported code provider model")
 	}
 
+	// Session-capacity wait is independent of the in-flight request lease queue.
+	// Do it first so a full session table cannot occupy concurrency slots, and
+	// so timeout can switch away from an affinity channel.
+	if IsOpencodeSessionQueueRequired(param.Ctx) {
+		if _, _, err := waitForOpencodeSessionCapacity(param, queueGroupForParam(param)); err != nil {
+			return nil, "", err
+		}
+	}
+
+	affinityID := GetPendingChannelAffinitySelection(param.Ctx)
+	if affinityID <= 0 {
+		affinityID = GetCurrentChannelAffinitySelection(param.Ctx)
+	}
+	selectedID := rememberedOpencodeSessionChannelID(param.Ctx)
+	channelID := affinityID
+	if selectedID > 0 && affinityID > 0 && selectedID != affinityID {
+		// Session wait moved or hard-fell back. Do not keep the request-lease
+		// queue pinned to the previous affinity channel.
+		channelID = 0
+	}
 	entry := &opencodeQueueEntry{
 		item: newOpencodeQueueItem(param, inputTokens),
 		queueKey: opencodeQueueKey{
 			group:     queueGroupForParam(param),
 			model:     param.ModelName,
-			channelID: GetPendingChannelAffinitySelection(param.Ctx),
+			channelID: channelID,
 		},
-	}
-	if entry.queueKey.channelID <= 0 {
-		entry.queueKey.channelID = GetCurrentChannelAffinitySelection(param.Ctx)
 	}
 	opencodeQueueMu.Lock()
 	entry.item.Position = len(opencodeQueue) + 1
@@ -100,7 +117,12 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 			}
 
 			if entry.queueKey.channelID > 0 {
-				if GetPendingChannelAffinitySelection(param.Ctx) <= 0 && GetCurrentChannelAffinitySelection(param.Ctx) <= 0 {
+				pendingID := GetPendingChannelAffinitySelection(param.Ctx)
+				currentID := GetCurrentChannelAffinitySelection(param.Ctx)
+				selectedID := rememberedOpencodeSessionChannelID(param.Ctx)
+				if pendingID <= 0 && currentID <= 0 {
+					entry.queueKey.channelID = 0
+				} else if selectedID > 0 && selectedID != entry.queueKey.channelID {
 					entry.queueKey.channelID = 0
 				} else {
 					wake := opencodeQueueWake
@@ -184,9 +206,16 @@ func TryReserveOpencodeAffinityChannel(param *RetryParam) (*model.Channel, strin
 	if param == nil || param.Ctx == nil {
 		return nil, "", false, nil
 	}
-	channel, group, err := selectQueuedAffinityCandidate(param)
+	selection := *param
+	selection.OpencodeIncludeRPMFull = true
+	channel, group, err := CacheGetRandomSatisfiedChannel(&selection)
 	if err != nil || channel == nil {
 		return nil, group, false, err
+	}
+	if IsOpencodeSessionQueueRequired(param.Ctx) {
+		// Session capacity is still waiting. Do not take a request lease or
+		// treat the least-loaded fallback as a successful fast path.
+		return nil, group, false, nil
 	}
 	allowed, err := model.ReserveCodeProviderConcurrency(channel.Type, channel.Id)
 	if err != nil || !allowed {
@@ -268,16 +297,6 @@ func newOpencodeQueueItem(param *RetryParam, inputTokens int) OpencodeQueueItem 
 }
 
 func tryReserveOpencodeChannel(param *RetryParam) (*model.Channel, string, error) {
-	if affinityChannel, group, err := selectQueuedAffinityCandidate(param); err != nil || affinityChannel != nil {
-		if err != nil || affinityChannel == nil {
-			return nil, group, err
-		}
-		allowed, err := model.ReserveCodeProviderConcurrency(affinityChannel.Type, affinityChannel.Id)
-		if err != nil || !allowed {
-			return nil, group, err
-		}
-		return affinityChannel, group, nil
-	}
 	selection := *param
 	selection.OpencodeIncludeRPMFull = false
 	selection.AttemptedChannelIDs = copyChannelIDs(param.AttemptedChannelIDs)
@@ -286,12 +305,20 @@ func tryReserveOpencodeChannel(param *RetryParam) (*model.Channel, string, error
 		if err != nil || channel == nil {
 			return channel, group, err
 		}
+		if IsOpencodeSessionQueueRequired(param.Ctx) {
+			return nil, group, nil
+		}
 		allowed, err := model.ReserveCodeProviderConcurrency(channel.Type, channel.Id)
 		if err != nil {
 			return nil, group, err
 		}
 		if allowed {
 			return channel, group, nil
+		}
+		if rememberedOpencodeSessionChannelID(param.Ctx) == channel.Id {
+			// Same active session: wait for this channel's request lease instead
+			// of spinning through other channels or occupying a new session slot.
+			return nil, group, nil
 		}
 		selection.AttemptedChannelIDs[channel.Id] = struct{}{}
 	}

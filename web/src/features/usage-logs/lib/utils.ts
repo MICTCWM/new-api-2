@@ -30,6 +30,7 @@ import {
 import {
   LOG_TYPES,
   DISPLAYABLE_LOG_TYPES,
+  RELAY_CONTEXT_LOG_TYPES,
   TIMING_LOG_TYPES,
 } from '../constants'
 import type {
@@ -49,6 +50,14 @@ import type {
  */
 export function isDisplayableLogType(type: number): boolean {
   return (DISPLAYABLE_LOG_TYPES as readonly number[]).includes(type)
+}
+
+/**
+ * Check if log type should show channel / model context.
+ * Session logs (type=8) need this without consume billing columns.
+ */
+export function isRelayContextLogType(type: number): boolean {
+  return (RELAY_CONTEXT_LOG_TYPES as readonly number[]).includes(type)
 }
 
 /**
