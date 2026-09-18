@@ -41,6 +41,7 @@ import { parseLogOther } from '../lib/format'
 import { fetchLogsByCategory } from '../lib/utils'
 import type { LogCategory } from '../types'
 import { CommonLogsFilterBar } from './common-logs-filter-bar'
+import { SessionLogsFilterBar } from './session-logs-filter-bar'
 import { TaskLogsFilterBar } from './task-logs-filter-bar'
 import { UsageLogsMobileList } from './usage-logs-mobile-card'
 import { useLogsViewScope } from './usage-logs-provider'
@@ -82,7 +83,9 @@ interface UsageLogsTableProps {
 
 export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { t } = useTranslation()
-  const { isAdminView: isAdmin } = useLogsViewScope()
+  const { isAdminView } = useLogsViewScope()
+  const isSession = logCategory === 'session'
+  const isAdmin = isSession || isAdminView
   const isMobile = useMediaQuery('(max-width: 640px)')
   const searchParams = route.useSearch()
 
@@ -107,16 +110,12 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       { columnId: 'model_name', searchKey: 'model', type: 'string' as const },
       { columnId: 'token_name', searchKey: 'token', type: 'string' as const },
       { columnId: 'group', searchKey: 'group', type: 'string' as const },
+      { columnId: 'username', searchKey: 'username', type: 'string' as const },
       ...(isAdmin
         ? [
             {
               columnId: 'channel',
               searchKey: 'channel',
-              type: 'string' as const,
-            },
-            {
-              columnId: 'username',
-              searchKey: 'username',
               type: 'string' as const,
             },
           ]
@@ -183,6 +182,17 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   })
 
   const isCommon = logCategory === 'common'
+  let toolbar = (
+    <TaskLogsFilterBar
+      table={table}
+      logCategory={logCategory as 'drawing' | 'task'}
+    />
+  )
+  if (logCategory === 'common') {
+    toolbar = <CommonLogsFilterBar table={table} />
+  } else if (logCategory === 'session') {
+    toolbar = <SessionLogsFilterBar table={table} />
+  }
 
   return (
     <DataTablePage
@@ -192,7 +202,9 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       isFetching={isFetching}
       emptyTitle={t('No Logs Found')}
       emptyDescription={t(
-        'No usage logs available. Logs will appear here once API calls are made.'
+        isSession
+          ? 'No session ID logs available. Lifecycle events will appear here when OpenCode or Command sessions are assigned.'
+          : 'No usage logs available. Logs will appear here once API calls are made.'
       )}
       skeletonKeyPrefix='usage-log-skeleton'
       applyHeaderSize
@@ -206,19 +218,15 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
           logCategory={logCategory}
         />
       }
-      toolbar={
-        isCommon ? (
-          <CommonLogsFilterBar table={table} />
-        ) : (
-          <TaskLogsFilterBar table={table} logCategory={logCategory} />
-        )
-      }
+      toolbar={toolbar}
       renderRow={(row) => {
         const logType = (row.original as Record<string, unknown>).type as
           | number
           | undefined
         let tintClass =
-          isCommon && logType != null ? (logTypeRowTint[logType] ?? '') : ''
+          (isCommon || isSession) && logType != null
+            ? (logTypeRowTint[logType] ?? '')
+            : ''
         if (isCommon && isAdmin) {
           const other = parseLogOther(
             ((row.original as Record<string, unknown>).other as string) ?? ''
@@ -237,7 +245,9 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
             key={row.id}
             row={row}
             className={cn('transition-colors', tintClass)}
-            getColumnClassName={() => (isCommon ? 'py-2' : 'py-3.5')}
+            getColumnClassName={() =>
+              isCommon || isSession ? 'py-2' : 'py-3.5'
+            }
           />
         )
       }}

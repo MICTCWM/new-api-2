@@ -25,6 +25,7 @@ import type {
   LogFilters,
   CommonLogFilters,
   DrawingLogFilters,
+  SessionLogFilters,
   TaskLogFilters,
 } from '../types'
 
@@ -58,6 +59,16 @@ export function buildSearchParams(
         ...(commonFilters.upstreamRequestId && {
           upstreamRequestId: commonFilters.upstreamRequestId,
         }),
+      }
+    }
+    case 'session': {
+      const sessionFilters = filters as SessionLogFilters
+      return {
+        ...baseParams,
+        ...(sessionFilters.model && { model: sessionFilters.model }),
+        ...(sessionFilters.group && { group: sessionFilters.group }),
+        ...(sessionFilters.username && { username: sessionFilters.username }),
+        ...(sessionFilters.event && { event: sessionFilters.event }),
       }
     }
     case 'drawing': {

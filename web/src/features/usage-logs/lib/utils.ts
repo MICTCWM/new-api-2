@@ -271,6 +271,24 @@ export async function fetchLogsByCategory(
   const { logCategory, isAdmin, page, pageSize, searchParams, columnFilters } =
     config
 
+  if (logCategory === 'session') {
+    if (!isAdmin) {
+      return { success: true, data: { items: [], total: 0, page, page_size: pageSize } }
+    }
+    const params = buildApiParams({
+      page,
+      pageSize,
+      searchParams,
+      columnFilters,
+      isAdmin: true,
+    })
+    params.type = 8
+    if (typeof searchParams.event === 'string' && searchParams.event !== '') {
+      params.session_event = searchParams.event
+    }
+    return await getAllLogs(params)
+  }
+
   if (logCategory === 'common') {
     const params = buildApiParams({
       page,

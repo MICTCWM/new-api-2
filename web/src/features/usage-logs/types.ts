@@ -29,7 +29,7 @@ import type { UsageLog } from './data/schema'
 /**
  * Log category for different log types
  */
-export type LogCategory = 'common' | 'drawing' | 'task'
+export type LogCategory = 'common' | 'drawing' | 'task' | 'session'
 
 // ============================================================================
 // Filter Types
@@ -71,9 +71,23 @@ export interface TaskLogFilters extends CommonFilters {
 }
 
 /**
+ * Session ID logs specific filters (admin-only page).
+ */
+export interface SessionLogFilters extends CommonFilters {
+  model?: string
+  group?: string
+  username?: string
+  event?: string
+}
+
+/**
  * Union type for all log filters
  */
-export type LogFilters = CommonLogFilters | DrawingLogFilters | TaskLogFilters
+export type LogFilters =
+  | CommonLogFilters
+  | DrawingLogFilters
+  | TaskLogFilters
+  | SessionLogFilters
 
 // ============================================================================
 // Common Logs Additional Types
@@ -375,6 +389,7 @@ export interface GetLogsParams {
   group?: string
   request_id?: string
   upstream_request_id?: string
+  session_event?: string
 }
 
 export interface GetLogsResponse {

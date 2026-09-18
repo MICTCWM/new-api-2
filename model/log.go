@@ -552,14 +552,17 @@ func RecordAutoScalingLog(content string) {
 	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, sessionEvent string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
-		tx = LOG_DB
+		tx = LOG_DB.Where("logs.type <> ?", LogTypeSession)
 	} else {
 		tx = LOG_DB.Where("logs.type = ?", logType)
 	}
 
+	if sessionEvent != "" {
+		tx = tx.Where("logs.content = ?", "OpenCode session "+sessionEvent)
+	}
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
 		return nil, 0, err
 	}

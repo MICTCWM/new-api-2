@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { LOG_TYPE_ENUM, LOG_TYPE_FILTERS, RELAY_CONTEXT_LOG_TYPES } from '../../constants'
+import { buildSearchParams } from '../filter'
 import { renderAuditContent } from '../format'
 
 function interpolate(key: string, options?: Record<string, unknown>): string {
@@ -88,10 +89,35 @@ describe('opencode session usage log rendering', () => {
     expect(rendered).toBe('Session expired')
   })
 
-  test('exposes Session in common log type filters and relay context types', () => {
-    expect(LOG_TYPE_FILTERS.map((type) => type.value)).toContain(
+  test('keeps Session logs on the dedicated page instead of common type filters', () => {
+    expect(LOG_TYPE_FILTERS.map((type) => type.value)).not.toContain(
       String(LOG_TYPE_ENUM.SESSION)
     )
     expect(RELAY_CONTEXT_LOG_TYPES).toContain(LOG_TYPE_ENUM.SESSION)
+  })
+
+  test('builds dedicated session log search params without a common type filter', () => {
+    const start = new Date('2026-09-19T00:00:00.000Z')
+    const params = buildSearchParams(
+      {
+        startTime: start,
+        model: 'deepseek-v4-flash',
+        group: 'default',
+        username: 'alice',
+        event: 'move',
+        channel: '11',
+      },
+      'session'
+    )
+
+    expect(params).toEqual({
+      startTime: start.getTime(),
+      model: 'deepseek-v4-flash',
+      group: 'default',
+      username: 'alice',
+      event: 'move',
+      channel: '11',
+    })
+    expect(params).not.toHaveProperty('type')
   })
 })

@@ -40,7 +40,6 @@ import {
 
 import {
   LOG_TYPE_ALL_VALUE,
-  LOG_TYPE_ENUM,
   LOG_TYPE_FILTERS,
 } from '../constants'
 import { buildSearchParams } from '../lib/filter'
@@ -256,22 +255,13 @@ export function CommonLogsFilterBar<TData>(
     filters.upstreamRequestId,
   ].filter(Boolean).length
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
-  const visibleLogTypeFilters = useMemo(
-    () =>
-      isAdmin
-        ? LOG_TYPE_FILTERS
-        : LOG_TYPE_FILTERS.filter(
-            (type) => type.value !== String(LOG_TYPE_ENUM.SESSION)
-          ),
-    [isAdmin]
-  )
   const logTypeItems = useMemo(
     () =>
-      visibleLogTypeFilters.map((type) => ({
+      LOG_TYPE_FILTERS.map((type) => ({
         value: type.value,
         label: t(type.label),
       })),
-    [t, visibleLogTypeFilters]
+    [t]
   )
   const logTypeLabel =
     logTypeItems.find((type) => type.value === logType)?.label ?? t('All Types')
@@ -361,7 +351,7 @@ export function CommonLogsFilterBar<TData>(
         </SelectTrigger>
         <SelectContent alignItemWithTrigger={false}>
           <SelectGroup>
-            {visibleLogTypeFilters.map((type) => (
+            {LOG_TYPE_FILTERS.map((type) => (
               <SelectItem key={type.value} value={type.value}>
                 {t(type.label)}
               </SelectItem>

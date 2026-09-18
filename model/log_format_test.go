@@ -75,3 +75,44 @@ func TestGetUserLogsExcludesSessionLifecycle(t *testing.T) {
 	require.Zero(t, sessionTotal)
 	require.Empty(t, sessionLogs)
 }
+
+func TestGetAllLogsKeepsSessionOnDedicatedType(t *testing.T) {
+	previousLogDB := LOG_DB
+	logDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, logDB.AutoMigrate(&Log{}))
+	LOG_DB = logDB
+	t.Cleanup(func() {
+		LOG_DB = previousLogDB
+	})
+
+	require.NoError(t, LOG_DB.Create(&Log{
+		UserId:    7,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeSession,
+		Content:   "OpenCode session create",
+		ModelName: "deepseek-v4-flash",
+		ChannelId: 9,
+		Group:     "default",
+	}).Error)
+	require.NoError(t, LOG_DB.Create(&Log{
+		UserId:    7,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeConsume,
+		Content:   "consume",
+		ModelName: "deepseek-v4-flash",
+	}).Error)
+
+	allLogs, allTotal, err := GetAllLogs(LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", "", "", "")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), allTotal)
+	require.Len(t, allLogs, 1)
+	require.Equal(t, LogTypeConsume, allLogs[0].Type)
+
+	sessionLogs, sessionTotal, err := GetAllLogs(LogTypeSession, 0, 0, "", "", "", 0, 20, 0, "", "", "", "create")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), sessionTotal)
+	require.Len(t, sessionLogs, 1)
+	require.Equal(t, LogTypeSession, sessionLogs[0].Type)
+	require.Equal(t, "OpenCode session create", sessionLogs[0].Content)
+}

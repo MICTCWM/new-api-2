@@ -371,6 +371,46 @@ function CommonLogsCard<TData>({
   )
 }
 
+function SessionLogsCard<TData>({
+  cells,
+}: {
+  cells: Map<string, Cell<TData, unknown>>
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <div className='space-y-2.5'>
+      <div className='flex min-w-0 items-start justify-between gap-3'>
+        <CompactCell
+          cell={cells.get('session_id')}
+          className='flex-1'
+          primaryOnly
+        />
+        <CompactCell
+          cell={cells.get('created_at')}
+          className='shrink-0 text-right [&_.flex-col]:items-end'
+        />
+      </div>
+
+      <div className='grid grid-cols-2 gap-1.5'>
+        <SummaryField label={t('User')} cell={cells.get('username')} />
+        <SummaryField
+          label={t('Channel')}
+          cell={cells.get('channel')}
+          valueClassName='[&_.flex-col]:max-w-none'
+        />
+        <SummaryField label={t('Model')} cell={cells.get('model_name')} />
+        <SummaryField label={t('Group')} cell={cells.get('group')} />
+        <SummaryField
+          label={t('Details')}
+          cell={cells.get('content')}
+          className='col-span-2 bg-transparent px-0 py-0'
+        />
+      </div>
+    </div>
+  )
+}
+
 function TaskLogsCard<TData>({
   cells,
 }: {
@@ -506,6 +546,7 @@ export function UsageLogsMobileList<TData>({
             )}
           >
             {logCategory === 'common' && <CommonLogsCard cells={cells} />}
+            {logCategory === 'session' && <SessionLogsCard cells={cells} />}
             {logCategory === 'task' && <TaskLogsCard cells={cells} />}
             {logCategory === 'drawing' && <DrawingLogsCard cells={cells} />}
           </div>
