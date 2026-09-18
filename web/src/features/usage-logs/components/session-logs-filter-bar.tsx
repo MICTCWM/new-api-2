@@ -32,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { StatusBadge } from '@/components/status-badge'
 import {
   Tooltip,
   TooltipContent,
@@ -43,6 +44,7 @@ import {
   SESSION_LOG_EVENT_FILTERS,
 } from '../constants'
 import { buildSearchParams } from '../lib/filter'
+import { sessionEventMapper } from '../lib/mappers'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { SessionLogFilters } from '../types'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
@@ -250,13 +252,35 @@ export function SessionLogsFilterBar<TData>(
         }}
       >
         <SelectTrigger>
-          <SelectValue>{eventLabel}</SelectValue>
+          <SelectValue>
+            {eventValue ? (
+              <StatusBadge
+                label={eventLabel}
+                variant={sessionEventMapper.getVariant(eventValue)}
+                size='sm'
+                copyable={false}
+                className='!text-xs [&_span]:!text-xs'
+              />
+            ) : (
+              eventLabel
+            )}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent alignItemWithTrigger={false}>
           <SelectGroup>
             {SESSION_LOG_EVENT_FILTERS.map((item) => (
               <SelectItem key={item.value || 'all'} value={item.value || 'all'}>
-                {t(item.label)}
+                {item.value ? (
+                  <StatusBadge
+                    label={t(item.label)}
+                    variant={sessionEventMapper.getVariant(item.value)}
+                    size='sm'
+                    copyable={false}
+                    className='!text-xs [&_span]:!text-xs'
+                  />
+                ) : (
+                  t(item.label)
+                )}
               </SelectItem>
             ))}
           </SelectGroup>

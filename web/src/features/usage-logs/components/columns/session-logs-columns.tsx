@@ -27,23 +27,16 @@ import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import { SESSION_LOG_EVENT_FILTERS } from '../../constants'
 import type { UsageLog } from '../../data/schema'
 import {
   formatModelName,
   parseLogOther,
   renderAuditContent,
 } from '../../lib/format'
+import { sessionEventMapper } from '../../lib/mappers'
 import { DetailsDialog } from '../dialogs/details-dialog'
 import { ModelBadge } from '../model-badge'
 import { useUsageLogsContext } from '../usage-logs-provider'
-
-function sessionEventLabel(event: string): string {
-  return (
-    SESSION_LOG_EVENT_FILTERS.find((item) => item.value === event)?.label ??
-    event
-  )
-}
 
 function readSessionField(
   other: ReturnType<typeof parseLogOther>,
@@ -78,7 +71,7 @@ export function useSessionLogsColumns(): ColumnDef<UsageLog>[] {
             other?.op?.action?.replace(/^opencode\.session\./, '') ??
             ''
         )
-        const eventKey = sessionEventLabel(eventToken)
+        const eventKey = sessionEventMapper.getLabel(eventToken, eventToken)
 
         return (
           <div className='flex min-w-0 flex-col gap-0.5'>
@@ -88,7 +81,7 @@ export function useSessionLogsColumns(): ColumnDef<UsageLog>[] {
             {eventToken !== '' && (
               <StatusBadge
                 label={t(eventKey)}
-                variant='indigo'
+                variant={sessionEventMapper.getVariant(eventToken)}
                 size='sm'
                 copyable={false}
                 className='-ml-1.5 !text-xs [&_span]:!text-xs'

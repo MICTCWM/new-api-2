@@ -52,6 +52,7 @@ export { createStatusMapper } from './status'
 
 // Mappers
 export {
+  sessionEventMapper,
   mjTaskTypeMapper,
   mjStatusMapper,
   taskActionMapper,

@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest'
 import { LOG_TYPE_ENUM, LOG_TYPE_FILTERS, RELAY_CONTEXT_LOG_TYPES } from '../../constants'
 import { buildSearchParams } from '../filter'
 import { renderAuditContent } from '../format'
+import { sessionEventMapper } from '../mappers'
 
 function interpolate(key: string, options?: Record<string, unknown>): string {
   if (!options) return key
@@ -119,5 +120,13 @@ describe('opencode session usage log rendering', () => {
       channel: '11',
     })
     expect(params).not.toHaveProperty('type')
+  })
+
+  test('maps session lifecycle events to distinct badge colors', () => {
+    expect(sessionEventMapper.getVariant('create')).toBe('green')
+    expect(sessionEventMapper.getVariant('hit')).toBe('cyan')
+    expect(sessionEventMapper.getVariant('move')).toBe('orange')
+    expect(sessionEventMapper.getVariant('queue')).toBe('yellow')
+    expect(sessionEventMapper.getVariant('expire')).toBe('grey')
   })
 })

@@ -133,6 +133,14 @@ export const SESSION_LOG_EVENT_FILTERS = [
   { value: 'expire', label: 'Session expired' },
 ] as const
 
+export const SESSION_EVENT_MAPPINGS: Record<string, StatusMapping> = {
+  create: { label: 'Created session', variant: 'green' },
+  hit: { label: 'Reused session', variant: 'cyan' },
+  move: { label: 'Moved session', variant: 'orange' },
+  queue: { label: 'Queued session', variant: 'yellow' },
+  expire: { label: 'Session expired', variant: 'grey' },
+}
+
 // ============================================================================
 // Drawing Logs (MjProxy) Constants
 // ============================================================================

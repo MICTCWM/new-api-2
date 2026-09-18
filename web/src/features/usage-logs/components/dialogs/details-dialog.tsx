@@ -80,6 +80,7 @@ import {
   getUpstreamCostUSD,
   renderAuditContent,
 } from '../../lib/format'
+import { sessionEventMapper } from '../../lib/mappers'
 import {
   getLogTypeConfig,
   isPerCallBilling,
@@ -486,14 +487,6 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   )
 }
 
-const SESSION_EVENT_LABELS: Record<string, string> = {
-  create: 'Created session',
-  hit: 'Reused session',
-  move: 'Moved session',
-  queue: 'Queued session',
-  expire: 'Session expired',
-}
-
 const SESSION_QUEUE_RESULT_LABELS: Record<string, string> = {
   released: 'Released',
   waiting: 'Waiting',
@@ -530,7 +523,9 @@ function SessionLifecycleSection(props: {
       props.other?.op?.action?.replace(/^opencode\.session\./, '') ??
       ''
   )
-  const eventLabel = SESSION_EVENT_LABELS[eventToken]
+  const eventLabel = eventToken
+    ? sessionEventMapper.getLabel(eventToken, eventToken)
+    : ''
   const sessionId = sessionField(props.other, 'session_id')
   const conversationKey = sessionField(props.other, 'conversation_key')
   const fromChannelId = sessionField(props.other, 'from_channel_id')
@@ -562,7 +557,17 @@ function SessionLifecycleSection(props: {
         <DetailRow label={props.t('Operation')} value={props.operationText} />
       )}
       {eventLabel && (
-        <DetailRow label={props.t('Event')} value={props.t(eventLabel)} />
+        <DetailRow
+          label={props.t('Event')}
+          value={
+            <StatusBadge
+              label={props.t(eventLabel)}
+              variant={sessionEventMapper.getVariant(eventToken)}
+              size='sm'
+              copyable={false}
+            />
+          }
+        />
       )}
       {sessionId != null && (
         <DetailRow

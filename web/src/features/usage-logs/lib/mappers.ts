@@ -24,11 +24,14 @@ import {
   MJ_TASK_TYPE_MAPPINGS,
   MJ_STATUS_MAPPINGS,
   MJ_SUBMIT_RESULT_MAPPINGS,
+  SESSION_EVENT_MAPPINGS,
   TASK_ACTION_MAPPINGS,
   TASK_STATUS_MAPPINGS,
   TASK_PLATFORM_MAPPINGS,
 } from '../constants'
 import { createStatusMapper } from './status'
+
+export const sessionEventMapper = createStatusMapper(SESSION_EVENT_MAPPINGS)
 
 // ============================================================================
 // MjProxy (Drawing) Logs Mappers
