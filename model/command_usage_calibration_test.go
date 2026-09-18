@@ -103,3 +103,121 @@ func TestClaimCommandCalibrationAttemptStaggersChannels(t *testing.T) {
 	require.Equal(t, usage701.NextCalibrationAt, usage701b.LastCalibrationAttemptAt)
 	require.Greater(t, usage701b.NextCalibrationAt, usage701.NextCalibrationAt)
 }
+
+// commandCalibrationPoolSetup 创建给定模型列表的 Command 渠道并结算一次指定模型用量，
+// 返回渠道与 now（供后续断言快照使用）。
+func commandCalibrationPoolSetup(t *testing.T, models string, settleModel string, settleMicroUSD int64, now int64) (*Channel, int64) {
+	t.Helper()
+	channel := &Channel{Type: constant.ChannelTypeCommand, Status: common.ChannelStatusEnabled, Key: "k", Models: models}
+	require.NoError(t, DB.Create(channel).Error)
+	if settleMicroUSD > 0 {
+		require.NoError(t, SettleCommandCostForModel(channel.Id, settleModel, settleMicroUSD, time.Unix(now, 0)))
+	}
+	return channel, now
+}
+
+func TestApplyCommandUsageCalibrationScalesPoolsProportionallyDown(t *testing.T) {
+	useCommandUsageDB(t)
+	now := int64(1_800_000_000)
+	channel, now := commandCalibrationPoolSetup(t, CommandFlashModel+","+CommandV41FlashModel+","+CommandProModel, CommandV41FlashModel, 33_000_000, now)
+	require.NoError(t, SettleCommandCostForModel(channel.Id, CommandFlashModel, 1_000_000, time.Unix(now, 0)))
+	calib := CommandWindowCalibration{HasMonth: true, MonthUsed: 29_000_000}
+	require.NoError(t, ApplyCommandUsageCalibration(channel.Id, calib, now))
+
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now)
+	require.NoError(t, err)
+	require.Equal(t, int64(28_147_059), snapshot.V41Pool.UsedMicroUSD)
+	require.Equal(t, int64(852_941), snapshot.FlashPool.UsedMicroUSD)
+	require.Equal(t, int64(0), snapshot.ProPool.UsedMicroUSD)
+	require.Equal(t, int64(29_000_000), snapshot.Pool.UsedMicroUSD)
+}
+
+func TestApplyCommandUsageCalibrationScalesPoolsProportionallyUp(t *testing.T) {
+	useCommandUsageDB(t)
+	now := int64(1_800_000_000)
+	channel, now := commandCalibrationPoolSetup(t, CommandFlashModel+","+CommandV41FlashModel, CommandV41FlashModel, 5_000_000, now)
+	require.NoError(t, SettleCommandCostForModel(channel.Id, CommandFlashModel, 5_000_000, time.Unix(now, 0)))
+	calib := CommandWindowCalibration{HasMonth: true, MonthUsed: 29_000_000}
+	require.NoError(t, ApplyCommandUsageCalibration(channel.Id, calib, now))
+
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now)
+	require.NoError(t, err)
+	require.True(t, snapshot.SplitPools)
+	require.Equal(t, int64(14_500_000), snapshot.V41Pool.UsedMicroUSD)
+	require.Equal(t, int64(14_500_000), snapshot.FlashPool.UsedMicroUSD)
+	require.Equal(t, int64(29_000_000), snapshot.Pool.UsedMicroUSD)
+}
+
+func TestApplyCommandUsageCalibrationResetsPoolsOnMonthRollover(t *testing.T) {
+	useCommandUsageDB(t)
+	now := int64(1_800_000_000)
+	channel, now := commandCalibrationPoolSetup(t, CommandV41FlashModel+","+CommandProModel, CommandV41FlashModel, 6_000_000, now)
+
+	calib := CommandWindowCalibration{HasMonth: true, MonthUsed: 20_000_000}
+	require.NoError(t, ApplyCommandUsageCalibration(channel.Id, calib, now))
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now)
+	require.NoError(t, err)
+	require.Equal(t, int64(20_000_000), snapshot.V41Pool.UsedMicroUSD)
+
+	// 上游月用量骤降（2m*2 < 20m）→ 视为新账期，启用池清零。
+	rollover := CommandWindowCalibration{HasMonth: true, MonthUsed: 2_000_000}
+	require.NoError(t, ApplyCommandUsageCalibration(channel.Id, rollover, now))
+	snapshot, err = GetCommandUsageSnapshot(channel.Id, now)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), snapshot.V41Pool.UsedMicroUSD)
+	require.Equal(t, int64(0), snapshot.ProPool.UsedMicroUSD)
+	require.Equal(t, int64(2_000_000), snapshot.Month.UsedMicroUSD)
+}
+
+func TestApplyCommandUsageCalibrationSinglePoolTracksMonth(t *testing.T) {
+	useCommandUsageDB(t)
+	now := int64(1_800_000_000)
+	channel, now := commandCalibrationPoolSetup(t, CommandFlashModel, CommandFlashModel, 4_000_000, now)
+	calib := CommandWindowCalibration{HasMonth: true, MonthUsed: 20_000_000}
+	require.NoError(t, ApplyCommandUsageCalibration(channel.Id, calib, now))
+
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now)
+	require.NoError(t, err)
+	require.False(t, snapshot.SplitPools)
+	require.Equal(t, int64(20_000_000), snapshot.Pool.UsedMicroUSD)
+}
+
+func TestApplyCommandUsageCalibrationClampsPoolToLimit(t *testing.T) {
+	useCommandUsageDB(t)
+	now := int64(1_800_000_000)
+	channel, now := commandCalibrationPoolSetup(t, CommandFlashModel, CommandFlashModel, 50_000_000, now)
+	// r = 70m/50m = 1.4 → 70m 超出合并池 60m 上限，应截断到 60m。
+	calib := CommandWindowCalibration{HasMonth: true, MonthUsed: 70_000_000}
+	require.NoError(t, ApplyCommandUsageCalibration(channel.Id, calib, now))
+
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now)
+	require.NoError(t, err)
+	require.Equal(t, CommandCombinedPoolLimitMicroUSD, snapshot.Pool.UsedMicroUSD)
+}
+
+func TestApplyCommandUsageCalibrationSkipsPoolsWithoutMonthWindow(t *testing.T) {
+	useCommandUsageDB(t)
+	now := int64(1_800_000_000)
+	channel, now := commandCalibrationPoolSetup(t, CommandV41FlashModel, CommandV41FlashModel, 6_000_000, now)
+	// 无 HasMonth：窗口照常覆盖，但模型池应保持本地估算不动。
+	calib := CommandWindowCalibration{HasFiveHour: true, FiveHourUsed: 3_000_000, HasWeek: true, WeekUsed: 8_000_000}
+	require.NoError(t, ApplyCommandUsageCalibration(channel.Id, calib, now))
+
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now)
+	require.NoError(t, err)
+	require.Equal(t, int64(6_000_000), snapshot.V41Pool.UsedMicroUSD)
+	require.Equal(t, int64(3_000_000), snapshot.FiveHour.UsedMicroUSD)
+	require.Equal(t, int64(8_000_000), snapshot.Week.UsedMicroUSD)
+}
+
+func TestApplyCommandUsageCalibrationZeroesPoolsWhenUpstreamExplicitZero(t *testing.T) {
+	useCommandUsageDB(t)
+	now := int64(1_800_000_000)
+	channel, now := commandCalibrationPoolSetup(t, CommandV41FlashModel, CommandV41FlashModel, 6_000_000, now)
+	calib := CommandWindowCalibration{HasMonth: true, MonthUsed: 0, ResetAllZeroOK: true}
+	require.NoError(t, ApplyCommandUsageCalibration(channel.Id, calib, now))
+
+	snapshot, err := GetCommandUsageSnapshot(channel.Id, now)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), snapshot.V41Pool.UsedMicroUSD)
+}

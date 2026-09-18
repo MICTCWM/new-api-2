@@ -9,12 +9,14 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
 // Command 用量校准：以 commandcode.ai 额度查询（/alpha/billing/credits 与
 // /alpha/usage/summary）返回的小时/周/月窗口为准，覆盖本地按请求估算的
-// 窗口累计。模型池（flash/4.1/4p）上游不提供拆分，仍以本地估算为准。
+// 窗口累计。模型池（flash/4.1/4p）上游不提供拆分，仍以本地估算为准，
+// 但以月窗口为权威锚定值做加权平均缩放，抑制长期漂移。
 // HTTP 编排（客户端工厂、上游取数）位于 service 层，本文件只负责登记
 // 与落库。
 
@@ -138,6 +140,8 @@ func ApplyCommandUsageCalibration(channelID int, calib CommandWindowCalibration,
 		if err != nil {
 			return err
 		}
+		// 记下覆盖前的旧月值：模型池校准需要它检测新账期（上游月用量骤降）。
+		oldMonth := usage.MonthUsed
 		if calib.HasFiveHour {
 			if calib.FiveHourUsed > 0 || calib.ResetAllZeroOK {
 				usage.FiveHourUsed = minMaxOpencode(calib.FiveHourUsed, 0, CommandFiveHourLimitMicroUSD)
@@ -157,10 +161,99 @@ func ApplyCommandUsageCalibration(channelID int, calib CommandWindowCalibration,
 			if usage.MonthStart == 0 {
 				usage.MonthStart = now
 			}
+			// 月窗口是权威锚定值：同一事务内对模型池做加权平均校准。
+			if err := applyCommandPoolCalibration(tx, channelID, calib, now, oldMonth); err != nil {
+				return err
+			}
 		}
 		usage.CalibrationLastError = ""
 		return tx.Save(usage).Error
 	})
+}
+
+// applyCommandPoolCalibration 以月窗口为权威锚定值，对当前启用的模型池做
+// 加权平均校准：月滚动（上游月用量骤降过半）与上游显式清零时把启用池
+// 清零，否则按 r = 月权威值 / 本地池总和 双向缩放，并 clamp 到各池限额。
+// 仅在 calib.HasMonth 时调用；渠道不存在或非 Command 时跳过（窗口照常写）。
+func applyCommandPoolCalibration(tx *gorm.DB, channelID int, calib CommandWindowCalibration, now, oldMonth int64) error {
+	channel, found, err := getCommandChannelTx(tx, channelID)
+	if err != nil {
+		return err
+	}
+	if !found || channel.Type != constant.ChannelTypeCommand {
+		return nil
+	}
+
+	// 确定当前启用的池：分池按模型逐个判定，否则走合并池。
+	type poolTarget struct {
+		key   string
+		limit int64
+	}
+	var targets []poolTarget
+	if commandChannelUsesSplitPools(channel) {
+		if commandChannelServesModel(channel, CommandFlashModel) {
+			targets = append(targets, poolTarget{CommandFlashPoolKey(channelID), CommandFlashPoolLimitMicroUSD})
+		}
+		if commandChannelServesModel(channel, CommandV41FlashModel) {
+			targets = append(targets, poolTarget{CommandV41PoolKey(channelID), CommandV41PoolLimitMicroUSD})
+		}
+		if commandChannelServesModel(channel, CommandProModel) {
+			targets = append(targets, poolTarget{CommandProPoolKey(channelID), CommandProPoolLimitMicroUSD})
+		}
+	} else {
+		targets = append(targets, poolTarget{CommandPoolKey(channelID), CommandCombinedPoolLimitMicroUSD})
+	}
+
+	// 读取/创建池行（自带行锁），累加本地池总和 Σ。
+	pools := make([]*CommandPoolUsage, 0, len(targets))
+	sum := int64(0)
+	for _, target := range targets {
+		pool, err := getOrCreateCommandPoolUsageByKeyTx(tx, target.key, now)
+		if err != nil {
+			return err
+		}
+		sum += pool.Used
+		pools = append(pools, pool)
+	}
+
+	// 月滚动（新账期检测）：上游月用量骤降超过一半 → 启用池清零，新账期从 0 开始。
+	// 用减法比较（calib.MonthUsed < oldMonth-oldMonth/2）避免上游超大值在 *2 时
+	// 溢出为负数而误判；oldMonth 为本地已 clamp 的月值（≤ 月限额），减法无溢出。
+	if oldMonth > 0 && calib.MonthUsed < oldMonth-oldMonth/2 {
+		for _, pool := range pools {
+			pool.Used, pool.ResetTime = 0, now
+			if err := tx.Save(pool).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// 上游明确清零：月窗口权威值为 0 且允许清零 → 启用池清零。
+	if calib.MonthUsed <= 0 && calib.ResetAllZeroOK {
+		for _, pool := range pools {
+			pool.Used, pool.ResetTime = 0, now
+			if err := tx.Save(pool).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// 加权平均比例缩放（双向）：本地无用量（Σ=0）时跳过，不凭空给池加量。
+	if calib.MonthUsed > 0 && sum > 0 {
+		ratio := decimal.NewFromInt(calib.MonthUsed).Div(decimal.NewFromInt(sum))
+		for i, target := range targets {
+			newUsed := decimal.NewFromInt(pools[i].Used).Mul(ratio).Round(0).IntPart()
+			newUsed = minMaxOpencode(newUsed, 0, target.limit)
+			if newUsed != pools[i].Used {
+				pools[i].Used = newUsed
+				if err := tx.Save(pools[i]).Error; err != nil {
+					return err
+				}
+			}
+		}
+	}
+	// calib.MonthUsed == 0 且不允许清零时保持池不动。
+	return nil
 }
 
 // CalibrateCommandChannelFromUpstream 供 service 层编排：认领 → 上游取数 →
