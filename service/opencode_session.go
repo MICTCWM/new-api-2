@@ -178,7 +178,7 @@ func resetOpencodeSessionStateForTest() error {
 // 不会在渠道确定前创建一个无法迁移的 session。
 func ResolveOpencodeSession(c *gin.Context, info *relaycommon.RelayInfo) string {
 	channelID := opencodeChannelID(c, info)
-	conversationKey := opencodeConversationKeyOrFallback(c, info, deriveOpencodeConversationKey(c, info))
+	conversationKey := resolveOpencodeConversationKey(c, info, "")
 	if channelID <= 0 {
 		// 无渠道上下文：返回确定性的会话 ID，保证同一会话稳定且非空。
 		return deterministicOpencodeSession(conversationKey)
@@ -296,6 +296,12 @@ func deriveOpencodeConversationKey(c *gin.Context, info *relaycommon.RelayInfo) 
 			return value
 		}
 	}
+	// 无显式 session id 时，用对话开头（到第一条 assistant 之前的 system/user）
+	// 作为身份：同对话多轮可复用缓存，内容不同的独立请求不会挤进同一个 session。
+	if root := opencodeMessageRoot(c); root != "" {
+		sum := sha256.Sum256([]byte("opencode-msgroot:" + root))
+		return "msgroot:" + hex.EncodeToString(sum[:])
+	}
 	return ""
 }
 
@@ -339,37 +345,129 @@ func opencodeBodyString(c *gin.Context, path string) string {
 	}
 }
 
-// opencodeConversationKeyOrFallback 在会话身份缺失时回退到 token/user/model 组合。
-func opencodeConversationKeyOrFallback(c *gin.Context, info *relaycommon.RelayInfo, conversationKey string) string {
-	if conversationKey != "" {
-		return conversationKey
-	}
-	tokenID, userID := 0, 0
-	modelName := ""
-	if info != nil {
-		tokenID = info.TokenId
-		userID = info.UserId
-		modelName = strings.TrimSpace(info.OriginModelName)
-		// UpstreamModelName 位于嵌入的 *ChannelMeta 上，ChannelMeta 为 nil 时不可解引用。
-		if modelName == "" && info.ChannelMeta != nil {
-			modelName = strings.TrimSpace(info.UpstreamModelName)
-		}
-	} else if c != nil {
-		tokenID = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
-		userID = common.GetContextKeyInt(c, constant.ContextKeyUserId)
-	}
-	fallback := fmt.Sprintf("token:%d:user:%d:model:%s", tokenID, userID, modelName)
-	return fallback
+// resolveOpencodeConversationKey 统一会话身份：
+// 1. 客户端显式 session / prompt_cache_key
+// 2. 无显式 id 时用 messages 对话开头（可复用缓存，且能拆开不同对话）
+// 3. 仍没有可用身份时才回退到 token/user/model（避免「完全不复用」）
+func resolveOpencodeConversationKey(c *gin.Context, info *relaycommon.RelayInfo, modelName string) string {
+	key := deriveOpencodeConversationKey(c, info)
+	tokenID, userID, resolvedModel := opencodeIdentityScope(c, info, modelName)
+	return qualifyOpencodeConversationKey(tokenID, userID, resolvedModel, key)
 }
 
 func opencodeConversationKeyForModel(c *gin.Context, modelName string) string {
-	conversationKey := deriveOpencodeConversationKey(c, nil)
-	if conversationKey != "" {
-		return conversationKey
+	return resolveOpencodeConversationKey(c, nil, modelName)
+}
+
+func opencodeIdentityScope(c *gin.Context, info *relaycommon.RelayInfo, modelName string) (tokenID, userID int, model string) {
+	model = strings.TrimSpace(modelName)
+	if info != nil {
+		tokenID = info.TokenId
+		userID = info.UserId
+		if model == "" {
+			model = strings.TrimSpace(info.OriginModelName)
+		}
+		if model == "" && info.ChannelMeta != nil {
+			model = strings.TrimSpace(info.UpstreamModelName)
+		}
 	}
-	tokenID := common.GetContextKeyInt(c, constant.ContextKeyTokenId)
-	userID := common.GetContextKeyInt(c, constant.ContextKeyUserId)
-	return fmt.Sprintf("token:%d:user:%d:model:%s", tokenID, userID, strings.TrimSpace(modelName))
+	if c != nil {
+		if tokenID == 0 {
+			tokenID = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
+		}
+		if userID == 0 {
+			userID = common.GetContextKeyInt(c, constant.ContextKeyUserId)
+		}
+	}
+	return tokenID, userID, model
+}
+
+func qualifyOpencodeConversationKey(tokenID, userID int, modelName, conversationKey string) string {
+	if conversationKey == "" {
+		return fmt.Sprintf("token:%d:user:%d:model:%s", tokenID, userID, modelName)
+	}
+	// 消息指纹不是全局唯一的（不同用户可能说同一句），必须挂上 token/user。
+	if strings.HasPrefix(conversationKey, "msgroot:") {
+		return fmt.Sprintf("token:%d:user:%d:%s", tokenID, userID, conversationKey)
+	}
+	return conversationKey
+}
+
+// opencodeMessageRoot 取出对话开头：从 messages[0] 走到第一条 assistant/tool 之前。
+// 多轮请求若带完整历史，开头不变，因而能命中同一 session；独立任务的首条 user 不同则拆开。
+func opencodeMessageRoot(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return ""
+	}
+	body, err := storage.Bytes()
+	if err != nil || len(body) == 0 {
+		return ""
+	}
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		messages = gjson.GetBytes(body, "input")
+	}
+	if !messages.IsArray() {
+		return ""
+	}
+	var b strings.Builder
+	foundUser := false
+	messages.ForEach(func(_, msg gjson.Result) bool {
+		role := strings.ToLower(strings.TrimSpace(msg.Get("role").String()))
+		if role == "assistant" || role == "tool" || role == "function" {
+			return false
+		}
+		text := opencodeMessageText(msg)
+		if text == "" {
+			return true
+		}
+		if role == "user" || role == "" {
+			foundUser = true
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(role)
+		b.WriteByte(':')
+		b.WriteString(text)
+		return true
+	})
+	if !foundUser {
+		return ""
+	}
+	return b.String()
+}
+
+func opencodeMessageText(msg gjson.Result) string {
+	content := msg.Get("content")
+	switch {
+	case content.Type == gjson.String:
+		return strings.TrimSpace(content.String())
+	case content.IsArray():
+		var parts []string
+		content.ForEach(func(_, part gjson.Result) bool {
+			if part.Type == gjson.String {
+				if text := strings.TrimSpace(part.String()); text != "" {
+					parts = append(parts, text)
+				}
+				return true
+			}
+			partType := strings.ToLower(part.Get("type").String())
+			if partType == "" || partType == "text" || partType == "input_text" || partType == "output_text" {
+				if text := strings.TrimSpace(part.Get("text").String()); text != "" {
+					parts = append(parts, text)
+				}
+			}
+			return true
+		})
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	default:
+		return strings.TrimSpace(msg.Get("text").String())
+	}
 }
 
 func getOpencodeActiveSessions(channelID int, now int64) (map[string]int64, error) {

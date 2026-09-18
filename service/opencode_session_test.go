@@ -127,18 +127,43 @@ func TestResolveOpencodeSession_MetadataSessionIDIsolatesConversations(t *testin
 	require.NotEqual(t, sessionA, sessionB, "metadata.session_id must isolate conversations even under a token-level affinity key")
 }
 
-// 客户端完全不带会话身份时，身份回退到 token/user/model 组合：
-// 同一 token 的不同对话共享同一上游 session，属既有兜底语义（无对话身份可区分）。
-func TestResolveOpencodeSession_NoIdentityFallsBackToTokenScope(t *testing.T) {
+// 无显式 session id 时，用对话开头区分：内容不同的独立请求不得挤进同一 session。
+func TestResolveOpencodeSession_MessageRootIsolatesDifferentConversations(t *testing.T) {
 	const channelID = 61012
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID}, TokenId: 61012}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID}, TokenId: 61012, UserId: 7}
 
-	first := newOpencodeSessionTestContext(t, `{"messages":[{"role":"user","content":"hi"}]}`, "", "")
+	first := newOpencodeSessionTestContext(t, `{"messages":[{"role":"user","content":"write the login page"}]}`, "", "")
 	sessionA := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(first, info))
-	second := newOpencodeSessionTestContext(t, `{"messages":[{"role":"user","content":"another conversation"}]}`, "", "")
+	second := newOpencodeSessionTestContext(t, `{"messages":[{"role":"user","content":"write the payment module"}]}`, "", "")
 	sessionB := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(second, info))
 
-	require.Equal(t, sessionA, sessionB, "without any client identity, sessions fall back to token scope by design")
+	require.NotEqual(t, sessionA, sessionB, "different first user messages must not share a session")
+}
+
+// 无显式 session id 的多轮：完整历史下对话开头不变，应复用同一 session 以保留缓存。
+func TestResolveOpencodeSession_MessageRootReusesFollowUpTurns(t *testing.T) {
+	const channelID = 61013
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID}, TokenId: 61013, UserId: 7}
+
+	opening := newOpencodeSessionTestContext(t, `{"messages":[{"role":"system","content":"you are a coder"},{"role":"user","content":"fix the auth bug"}]}`, "", "")
+	sessionA := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(opening, info))
+	followUp := newOpencodeSessionTestContext(t, `{"messages":[{"role":"system","content":"you are a coder"},{"role":"user","content":"fix the auth bug"},{"role":"assistant","content":"looking"},{"role":"user","content":"also check the tests"}]}`, "", "")
+	sessionB := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(followUp, info))
+
+	require.Equal(t, sessionA, sessionB, "follow-up turns that keep the same opening must reuse the session")
+}
+
+// body 里既没有 session 字段也没有 messages 时，才回退到 token/user/model，避免「完全不复用」。
+func TestResolveOpencodeSession_NoMessagesFallsBackToTokenScope(t *testing.T) {
+	const channelID = 61014
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID}, TokenId: 61014, UserId: 7}
+
+	first := newOpencodeSessionTestContext(t, `{"model":"deepseek-v4-flash"}`, "", "")
+	sessionA := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(first, info))
+	second := newOpencodeSessionTestContext(t, `{"model":"deepseek-v4-flash","stream":true}`, "", "")
+	sessionB := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(second, info))
+
+	require.Equal(t, sessionA, sessionB, "without messages or session id, sessions still fall back to token scope")
 }
 
 func TestResolveOpencodeSession_RecordsAffinityInfo(t *testing.T) {
