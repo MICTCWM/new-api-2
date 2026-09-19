@@ -445,6 +445,47 @@ func TestOpencodeSessionCapacity_ActiveReuseDoesNotWriteSessionLog(t *testing.T)
 	require.Len(t, listOpencodeSessionLogs(t), 1)
 }
 
+func TestOpencodeSessionCapacity_SkipsAttemptedRememberedChannel(t *testing.T) {
+	db := useOpencodeSessionCapacityEnv(t, 3)
+	channels := createOpencodeCapacityChannels(t, db, 2)
+	conv := t.Name() + "-conv"
+	original, queueRequired := selectOpencodeCapacityChannel(t, newOpencodeCapacityContext(t, conv))
+	require.False(t, queueRequired)
+
+	retryCtx := newOpencodeCapacityContext(t, conv)
+	rememberOpencodeSessionSelection(retryCtx, original.Id)
+	attempted := map[int]struct{}{original.Id: {}}
+	channel, queueRequired, err := SelectOpencodeSessionChannel(retryCtx, "default", model.OpencodeModel, "/v1/chat/completions", nil, attempted)
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	require.False(t, queueRequired)
+	require.NotEqual(t, original.Id, channel.Id)
+	require.Equal(t, otherOpencodeChannelID(channels, original.Id), channel.Id)
+}
+
+func TestOpencodeSessionCapacity_MovesWhenBindingChannelAttempted(t *testing.T) {
+	db := useOpencodeSessionCapacityEnv(t, 3)
+	channels := createOpencodeCapacityChannels(t, db, 2)
+	conv := t.Name() + "-conv"
+	original, queueRequired := selectOpencodeCapacityChannel(t, newOpencodeCapacityContext(t, conv))
+	require.False(t, queueRequired)
+	require.Len(t, listOpencodeSessionLogs(t), 1)
+
+	retryCtx := newOpencodeCapacityContext(t, conv)
+	attempted := map[int]struct{}{original.Id: {}}
+	channel, queueRequired, err := SelectOpencodeSessionChannel(retryCtx, "default", model.OpencodeModel, "/v1/chat/completions", nil, attempted)
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	require.False(t, queueRequired)
+	require.NotEqual(t, original.Id, channel.Id)
+	require.Equal(t, otherOpencodeChannelID(channels, original.Id), channel.Id)
+
+	logs := listOpencodeSessionLogs(t)
+	require.Len(t, logs, 2)
+	require.Equal(t, "OpenCode session move", logs[1].Content)
+	require.Equal(t, channel.Id, logs[1].ChannelId)
+}
+
 func otherOpencodeChannelID(channels []*model.Channel, except int) int {
 	for _, channel := range channels {
 		if channel != nil && channel.Id != except {

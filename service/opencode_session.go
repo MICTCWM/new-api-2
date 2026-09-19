@@ -597,6 +597,14 @@ func rememberedOpencodeSessionChannelID(c *gin.Context) int {
 	return c.GetInt(ginKeyOpencodeSessionSelectedID)
 }
 
+func isOpencodeChannelAttempted(attempted map[int]struct{}, channelID int) bool {
+	if channelID <= 0 || attempted == nil {
+		return false
+	}
+	_, ok := attempted[channelID]
+	return ok
+}
+
 // SelectOpencodeSessionChannel applies the session-capacity gate before the
 // ordinary least-loaded request selection. It returns queueRequired when all
 // eligible channels are at session capacity; the caller must wait on the
@@ -637,7 +645,7 @@ func SelectOpencodeSessionChannel(c *gin.Context, group, modelName, requestPath 
 		return nil, false, nil
 	}
 
-	if selectedID := rememberedOpencodeSessionChannelID(c); selectedID > 0 {
+	if selectedID := rememberedOpencodeSessionChannelID(c); selectedID > 0 && !isOpencodeChannelAttempted(attempted, selectedID) {
 		if channel := findOpencodeCandidate(allCandidates, selectedID); channel != nil {
 			return channel, false, nil
 		}
@@ -656,8 +664,9 @@ func SelectOpencodeSessionChannel(c *gin.Context, group, modelName, requestPath 
 	}
 	assign := !shouldDeferOpencodeSessionAssignment(c, group, modelName)
 	if found {
+		attemptedOriginal := isOpencodeChannelAttempted(attempted, binding.ChannelID)
 		original := findOpencodeCandidate(allCandidates, binding.ChannelID)
-		if original == nil {
+		if original == nil && !attemptedOriginal {
 			if channel, channelErr := model.CacheGetChannel(binding.ChannelID); channelErr == nil && channel != nil && channel.Status == common.ChannelStatusEnabled && model.IsChannelEnabledForGroupModel(group, modelName, channel.Id) && model.ChannelSupportsRequestPath(channel, requestPath, modelName) {
 				quotaAvailable, quotaErr := model.CodeProviderChannelHasCapacity(channel, modelName, time.Now().Unix(), false)
 				if quotaErr != nil {
@@ -669,8 +678,19 @@ func SelectOpencodeSessionChannel(c *gin.Context, group, modelName, requestPath 
 			}
 		}
 		if original == nil {
-			_, _ = getOpencodeSessionCache().DeleteMany([]string{sessionKey})
-			found = false
+			if attemptedOriginal {
+				if channel, ok, capacityErr := chooseOpencodeSessionCapacity(c, allCandidates, binding.ChannelID, sessionKey, binding, group, modelName, assign); capacityErr != nil {
+					return nil, false, capacityErr
+				} else if ok {
+					return channel, false, nil
+				} else if channel != nil {
+					setOpencodeSessionQueueRequired(c, true)
+					return channel, true, nil
+				}
+			} else {
+				_, _ = getOpencodeSessionCache().DeleteMany([]string{sessionKey})
+				found = false
+			}
 		} else {
 			active, activeErr := isOpencodeActiveSession(original.Id, sessionKey, time.Now().Unix())
 			if activeErr != nil {
@@ -892,7 +912,7 @@ func waitForOpencodeSessionCapacity(param *RetryParam, group string) (*model.Cha
 		group = queueGroupForParam(param)
 	}
 	if param.Ctx.GetBool(ginKeyOpencodeSessionWaitDone) {
-		if selectedID := rememberedOpencodeSessionChannelID(param.Ctx); selectedID > 0 {
+		if selectedID := rememberedOpencodeSessionChannelID(param.Ctx); selectedID > 0 && !isOpencodeChannelAttempted(param.AttemptedChannelIDs, selectedID) {
 			if channel, err := model.CacheGetChannel(selectedID); err == nil && channel != nil {
 				setOpencodeSessionQueueRequired(param.Ctx, false)
 				return channel, group, nil

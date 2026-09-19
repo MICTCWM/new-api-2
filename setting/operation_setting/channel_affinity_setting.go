@@ -149,8 +149,18 @@ var channelAffinitySetting = ChannelAffinitySetting{
 			UserAgentInclude:      nil,
 		},
 		{
-			Name:       "opencode session trace",
-			ModelRegex: []string{"^deepseek-v4-flash$", "^glm-5\\.3-flash$"},
+			Name: "opencode session trace",
+			// Includes the Command-channel native models (no import: setting would
+			// otherwise rely on model or relay/channel/command, both of which depend
+			// back on this package). Keep values in sync with command adaptor's
+			// Model/ProModel/V41Model constants.
+			ModelRegex: []string{
+				"^deepseek-v4-flash$",
+				"^glm-5\\.3-flash$",
+				"^deepseek/deepseek-v4-flash$",
+				"^deepseek/deepseek-v4-pro$",
+				"^deepseek/deepseek-v4\\.1-flash$",
+			},
 			PathRegex:  []string{"/v1/chat/completions"},
 			KeySources: []ChannelAffinityKeySource{
 				{Type: "gjson", Path: "prompt_cache_key"},

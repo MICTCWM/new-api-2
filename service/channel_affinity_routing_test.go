@@ -671,6 +671,41 @@ func TestConvertChannelAffinityReservationToActual_ReleasesLeaseWhenSlotAcquired
 	require.Equal(t, 1, GetChannelAffinityReservedConcurrency(channel.Id, now), "successful request must re-arm the lease for its next turn")
 }
 
+// 默认亲规则 "opencode session trace" 必须同时匹配 Command 渠道的原生模型名
+// （带 deepseek/ 前缀），否则 Command 请求无法建立渠道亲和、会在多个渠道间漂移。
+func TestCommandNativeModelGetsChannelAffinityFromDefaultRule(t *testing.T) {
+	useChannelAffinityRoutingDB(t)
+	const commandModel = "deepseek/deepseek-v4-flash"
+	affinityValue := "command-affinity-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+
+	// 使用全局默认亲规则（不覆盖 setting.Rules），验证模型名匹配到 command 原生模型。
+	newRequest := func() *gin.Context {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(
+			`{"model":"`+commandModel+`","prompt_cache_key":"`+affinityValue+`","stream":true}`,
+		))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		return ctx
+	}
+
+	// 首次请求：规则应匹配并构建亲和上下文，但缓存尚无记录。
+	firstCtx := newRequest()
+	preferredID, found := GetPreferredChannelByAffinity(firstCtx, commandModel, "default")
+	require.False(t, found)
+	require.Zero(t, preferredID)
+
+	// 记录该亲和值绑定到某渠道，模拟一次成功请求后的缓存写入。
+	firstCtx.Set("channel_id", 4321)
+	RecordChannelAffinity(firstCtx, 4321)
+
+	// 后续同亲和值的请求必须命中并返回已记录渠道。
+	secondCtx := newRequest()
+	preferredID, found = GetPreferredChannelByAffinity(secondCtx, commandModel, "default")
+	require.True(t, found)
+	require.Equal(t, 4321, preferredID)
+}
+
 // 没有亲和上下文的请求调用转换必须是安全 no-op，不影响其他请求的租约。
 func TestConvertChannelAffinityReservationToActual_NoopWithoutAffinityMeta(t *testing.T) {
 	useChannelAffinityRoutingDB(t)
