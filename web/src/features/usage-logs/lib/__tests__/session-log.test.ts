@@ -124,28 +124,38 @@ describe('opencode session usage log rendering', () => {
 
   test('maps session lifecycle events to distinct badge colors', () => {
     expect(sessionEventMapper.getVariant('create')).toBe('green')
-    expect(sessionEventMapper.getVariant('hit')).toBe('cyan')
-    expect(sessionEventMapper.getVariant('move')).toBe('orange')
-    expect(sessionEventMapper.getVariant('queue')).toBe('yellow')
+    expect(sessionEventMapper.getVariant('hit')).toBe('blue')
+    expect(sessionEventMapper.getVariant('move')).toBe('amber')
+    expect(sessionEventMapper.getVariant('queue')).toBe('violet')
     expect(sessionEventMapper.getVariant('expire')).toBe('grey')
   })
 
-  test('tints session rows by lifecycle event instead of a shared indigo', () => {
+  test('tints session rows with gradient wash and left stripe per event', () => {
     expect(
       getSessionEventRowClass({
         op: { action: 'opencode.session.create' },
       })
-    ).toContain('bg-emerald-100')
+    ).toContain('bg-gradient-to-r')
+    expect(
+      getSessionEventRowClass({
+        op: { action: 'opencode.session.create' },
+      })
+    ).toContain('border-l-emerald-600')
     expect(
       getSessionEventRowClass({
         op: { action: 'opencode.session.move' },
       })
-    ).toContain('bg-orange-100')
+    ).toContain('border-l-amber-600')
+    expect(
+      getSessionEventRowClass({
+        op: { action: 'opencode.session.queue' },
+      })
+    ).toContain('border-l-violet-600')
     expect(
       getSessionEventRowClass({
         op: { action: 'opencode.session.expire' },
       })
-    ).toContain('bg-zinc-200')
+    ).toContain('border-l-slate-500')
     expect(getSessionEventRowClass(null)).toBe('')
   })
 })

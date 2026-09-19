@@ -135,22 +135,22 @@ export const SESSION_LOG_EVENT_FILTERS = [
 
 export const SESSION_EVENT_MAPPINGS: Record<string, StatusMapping> = {
   create: { label: 'Created session', variant: 'green' },
-  hit: { label: 'Reused session', variant: 'cyan' },
-  move: { label: 'Moved session', variant: 'orange' },
-  queue: { label: 'Queued session', variant: 'yellow' },
+  hit: { label: 'Reused session', variant: 'blue' },
+  move: { label: 'Moved session', variant: 'amber' },
+  queue: { label: 'Queued session', variant: 'violet' },
   expire: { label: 'Session expired', variant: 'grey' },
 }
 
-/** Row background + left-border tints for Session ID logs. Stronger than type=8 indigo. */
+/** Session log rows: 3px left stripe + subtle gradient wash (no solid row fill). */
 export const SESSION_EVENT_ROW_TINTS: Record<string, string> = {
   create:
-    'bg-emerald-100/90 dark:bg-emerald-950/55 border-l-4 border-l-emerald-500 dark:border-l-emerald-400',
-  hit: 'bg-cyan-100/90 dark:bg-cyan-950/55 border-l-4 border-l-cyan-500 dark:border-l-cyan-400',
-  move: 'bg-orange-100/90 dark:bg-orange-950/55 border-l-4 border-l-orange-500 dark:border-l-orange-400',
+    'border-l-[3px] border-l-emerald-600 dark:border-l-emerald-400 bg-gradient-to-r from-emerald-500/12 via-emerald-500/5 to-transparent dark:from-emerald-400/14 dark:via-emerald-400/6 dark:to-transparent',
+  hit: 'border-l-[3px] border-l-sky-600 dark:border-l-sky-400 bg-gradient-to-r from-sky-500/12 via-sky-500/5 to-transparent dark:from-sky-400/14 dark:via-sky-400/6 dark:to-transparent',
+  move: 'border-l-[3px] border-l-amber-600 dark:border-l-amber-400 bg-gradient-to-r from-amber-500/12 via-amber-500/5 to-transparent dark:from-amber-400/14 dark:via-amber-400/6 dark:to-transparent',
   queue:
-    'bg-yellow-100/90 dark:bg-yellow-950/55 border-l-4 border-l-yellow-500 dark:border-l-yellow-400',
+    'border-l-[3px] border-l-violet-600 dark:border-l-violet-400 bg-gradient-to-r from-violet-500/12 via-violet-500/5 to-transparent dark:from-violet-400/14 dark:via-violet-400/6 dark:to-transparent',
   expire:
-    'bg-zinc-200/90 dark:bg-zinc-800/60 border-l-4 border-l-zinc-500 dark:border-l-zinc-400',
+    'border-l-[3px] border-l-slate-500 dark:border-l-slate-400 bg-gradient-to-r from-slate-500/10 via-slate-500/4 to-transparent dark:from-slate-400/12 dark:via-slate-400/5 dark:to-transparent',
 }
 
 // ============================================================================
