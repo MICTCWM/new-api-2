@@ -181,12 +181,8 @@ export interface OpencodeUsageSnapshot {
   rpm_count: number
   rpm_limit: number
   rpm_reset_at: number
-  affinity_reserved_rpm: number
-  available_rpm: number
   concurrency_count: number
   concurrency_limit: number
-  affinity_reserved_concurrency: number
-  available_concurrency: number
   calibration: {
     last_attempt_at: number
     last_success_at: number
@@ -220,12 +216,8 @@ export interface CommandUsageSnapshot {
   rpm_count: number
   rpm_limit: number
   rpm_reset_at: number
-  affinity_reserved_rpm: number
-  available_rpm: number
   concurrency_count: number
   concurrency_limit: number
-  affinity_reserved_concurrency: number
-  available_concurrency: number
 }
 
 export interface CommandUsageResponse {
@@ -239,12 +231,8 @@ export interface ChannelConcurrencyUsageSnapshot {
   rpm_count: number
   rpm_limit: number
   rpm_reset_at: number
-  affinity_reserved_rpm: number
-  available_rpm: number
   concurrency_count: number
   concurrency_limit: number
-  affinity_reserved_concurrency: number
-  available_concurrency: number
 }
 
 export interface ChannelConcurrencyUsageResponse {

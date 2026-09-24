@@ -95,6 +95,23 @@ func TestGenerateTextOtherInfoRecordsOpencodeUpstreamCostForAdmins(t *testing.T)
 	require.Equal(t, pricingPeriod, adminInfo["opencode_pricing_period"])
 }
 
+func TestGenerateTextOtherInfoRecordsMappedSplitUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(nil)
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "nn",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			IsModelMapped:     true,
+			UpstreamModelName: "deepseek/deepseek-v4-flash",
+		},
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
+	require.Equal(t, true, other["is_model_mapped"])
+	require.Equal(t, "deepseek/deepseek-v4-flash", other["upstream_model_name"])
+	require.NotContains(t, other, "model_name")
+}
+
 func TestPreConsumeBillingRejectsSaturatedQuotaBeforeDeduction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(nil)

@@ -196,7 +196,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		OpencodePool:        common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeOpencode || common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeCommand,
 		AttemptedChannelIDs: make(map[int]struct{}),
 	}
-	if model.IsCodeProviderModel(relayInfo.OriginModelName) && !retryParam.OpencodePool {
+	retryRoutingModel := relayInfo.OriginModelName
+	if target := service.RequestModelSplitTarget(c); target != "" {
+		retryRoutingModel = target
+	}
+	if model.IsCodeProviderModel(retryRoutingModel) && !retryParam.OpencodePool {
 		retryParam.ExcludeCodeProviderChannels = true
 	}
 
@@ -296,11 +300,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			channelConcurrencyReserved = true
 		}
 		addUsedChannel(c, channel.Id)
-		// 并发位已由本请求实际占用：释放该请求的亲和预留租约，避免"预留 + 实际"
-		// 对同一请求重复计数；请求成功结束时 RecordChannelAffinity 会重新武装租约。
-		if concurrencyReserved || channelConcurrencyReserved {
-			service.ConvertChannelAffinityReservationToActual(c)
-		}
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			if concurrencyReserved {
 				releaseOpencodeConcurrency(c, channel.Type, channel.Id)
@@ -329,6 +328,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+
+		// Install a fresh response rewriter for this attempt. It only rewrites
+		// the outbound client copy (model id / response text); the upstream
+		// request body, billing and logs are untouched.
+		service.InstallResponseRewriter(c, relayInfo)
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:

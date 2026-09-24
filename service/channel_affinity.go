@@ -41,15 +41,7 @@ var (
 	channelAffinityUsageCacheStatsCache *cachex.HybridCache[ChannelAffinityUsageCacheCounters]
 
 	channelAffinityRegexCache sync.Map // map[string]*regexp.Regexp
-
-	channelAffinityProtectionMu sync.Mutex
-	channelAffinityProtections  = make(map[string]channelAffinityProtectionLease)
 )
-
-type channelAffinityProtectionLease struct {
-	ChannelID int
-	ExpiresAt int64
-}
 
 type channelAffinityMeta struct {
 	CacheKey       string
@@ -602,7 +594,11 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		if ttlSeconds <= 0 {
 			ttlSeconds = setting.DefaultTTLSeconds
 		}
-		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
+		// Regex matched the caller-provided model (split target after routing).
+		// IncludeModelName cache keys use the user's original model so V4.1/Flash
+		// share stickiness instead of splitting on the target.
+		identityModel := requestSessionIdentityModel(c, nil, modelName)
+		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, identityModel, usingGroup, affinityValue)
 		cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
 		setChannelAffinityContext(c, channelAffinityMeta{
 			CacheKey:       cacheKeyFull,
@@ -627,7 +623,6 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 			return 0, false
 		}
 		if found {
-			rememberChannelAffinityProtection(cacheKeyFull, channelID, ttlSeconds)
 			c.Set(ginKeyChannelAffinityCacheHit, true)
 			return channelID, true
 		}
@@ -666,7 +661,6 @@ func ClearCurrentChannelAffinityCache(c *gin.Context) bool {
 	if !ok || cacheKey == "" {
 		return false
 	}
-	forgetChannelAffinityProtection(cacheKey)
 
 	cache := getChannelAffinityCache()
 	deleted, err := cache.DeleteMany([]string{cacheKey})
@@ -725,39 +719,6 @@ func GetPendingChannelAffinitySelection(c *gin.Context) int {
 		return 0
 	}
 	return c.GetInt(ginKeyChannelAffinityPendingID)
-}
-
-func touchChannelAffinityProtection(c *gin.Context) {
-	if c == nil {
-		return
-	}
-	cacheKey, ttlSeconds, ok := getChannelAffinityContext(c)
-	if ok {
-		rememberChannelAffinityProtection(cacheKey, GetCurrentChannelAffinitySelection(c), ttlSeconds)
-	}
-}
-
-func GetChannelAffinityReservedConcurrency(channelID int, now int64) int {
-	if channelID <= 0 || now <= 0 {
-		return 0
-	}
-	channelAffinityProtectionMu.Lock()
-	defer channelAffinityProtectionMu.Unlock()
-	reserved := 0
-	for cacheKey, lease := range channelAffinityProtections {
-		if lease.ExpiresAt <= now {
-			delete(channelAffinityProtections, cacheKey)
-			continue
-		}
-		if lease.ChannelID == channelID {
-			reserved++
-		}
-	}
-	return reserved
-}
-
-func GetChannelAffinityReservedRPM(channelID int, now int64) int {
-	return GetChannelAffinityReservedConcurrency(channelID, now)
 }
 
 func ShouldKeepChannelAffinityOnChannelDisabled() bool {
@@ -839,46 +800,7 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 		common.SysError(fmt.Sprintf("channel affinity cache set failed: key=%s, err=%v", cacheKey, err))
 		return
 	}
-	rememberChannelAffinityProtection(cacheKey, channelID, ttlSeconds)
 	c.Set(ginKeyChannelAffinityPendingID, 0)
-}
-
-// ConvertChannelAffinityReservationToActual 在请求实际占用渠道并发位后释放其预留租约。
-// 预留租约预测的是"这个请求即将到达"，而实际并发位已被同一请求占用：两个名额对应同一个
-// 请求，若不同步释放会让渠道负载被重复计数（预留 1→0，实际 0→1），其他请求会看到
-// 一个并不存在的占用而提前规避该渠道。
-// 调用时机：并发位预留成功之后（含 OpenCode 队列占位）；请求成功结束时
-// RecordChannelAffinity 会重新武装租约，为下一轮请求继续预留。
-func ConvertChannelAffinityReservationToActual(c *gin.Context) {
-	if c == nil {
-		return
-	}
-	cacheKey, _, ok := getChannelAffinityContext(c)
-	if !ok || cacheKey == "" {
-		return
-	}
-	forgetChannelAffinityProtection(cacheKey)
-}
-
-func rememberChannelAffinityProtection(cacheKey string, channelID, ttlSeconds int) {
-	if cacheKey == "" || channelID <= 0 || ttlSeconds <= 0 {
-		return
-	}
-	channelAffinityProtectionMu.Lock()
-	channelAffinityProtections[cacheKey] = channelAffinityProtectionLease{
-		ChannelID: channelID,
-		ExpiresAt: time.Now().Unix() + operation_setting.ChannelAffinityProtectionLeaseSeconds,
-	}
-	channelAffinityProtectionMu.Unlock()
-}
-
-func forgetChannelAffinityProtection(cacheKey string) {
-	if cacheKey == "" {
-		return
-	}
-	channelAffinityProtectionMu.Lock()
-	delete(channelAffinityProtections, cacheKey)
-	channelAffinityProtectionMu.Unlock()
 }
 
 type ChannelAffinityUsageCacheStats struct {

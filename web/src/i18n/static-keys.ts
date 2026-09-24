@@ -215,6 +215,39 @@ export const STATIC_I18N_KEYS = [
   // Channel Affinity section
   'Channel Affinity',
 
+  // Group mapping section
+  'Group Model Mapping',
+
+  // Model split section
+  'Model Split Routing',
+  '{{value}} (debt)',
+  'Original model is required',
+  'Both split models are required',
+  'Split models must be different',
+  'Percents must be integers between 0 and 100',
+  'Image model is required when image split is enabled',
+  'Image model must be one of the two split models',
+  'Rule ID is required',
+  'Rule IDs must be unique',
+  'Enabled rules conflict for the same group and original model',
+
+  // Response rewrite section
+  'Response Rewrite',
+  'Model ID Rewrite',
+  'Response Text Rewrite',
+  'Applicable Groups',
+  'Find Fragment',
+  'Replace Fragment',
+  'Find fragment is required',
+  'Duplicate find fragment in the same group',
+  'Leave empty to apply to all groups.',
+  'Response rewrite only changes the responses returned to the client. It never affects upstream routing or billing.',
+  'When enabled, responses returned to the client always show the model name the client requested. Upstream routing and billing are unaffected.',
+  'Replace text fragments in responses returned to the client.',
+  'Text to find in the response',
+  'Replacement text',
+  'Optional',
+
   // Models constants
   'Exact Match',
   'Prefix Match',

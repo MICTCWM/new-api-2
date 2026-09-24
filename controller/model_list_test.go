@@ -215,6 +215,97 @@ func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {
 	require.Empty(t, decodeUserModelsResponse(t, vipRecorder))
 }
 
+func withGroupMappingRules(t *testing.T, rules []operation_setting.GroupMappingRule) {
+	t.Helper()
+	setting := operation_setting.GetGroupMappingSetting()
+	originalEnabled := setting.Enabled
+	originalRules := setting.Rules
+	setting.Enabled = true
+	setting.Rules = rules
+	t.Cleanup(func() {
+		setting.Enabled = originalEnabled
+		setting.Rules = originalRules
+	})
+}
+
+func TestGetUserModelsAppliesGroupMapping(t *testing.T) {
+	withGroupMappingRules(t, []operation_setting.GroupMappingRule{{
+		Enabled: true,
+		Groups:  []string{"default"},
+		Entries: []operation_setting.GroupMappingEntry{{
+			From:         "zz-mapped-alias",
+			To:           "zz-default-only-model",
+			FirstModel:   "zz-mapped-alias",
+			DefaultModel: "zz-mapped-alias",
+			HideOriginal: true,
+			HiddenModels: []string{"zz-default-only-model"},
+		}},
+	}})
+
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&model.User{
+		Id:       1004,
+		Username: "group-mapping-model-user",
+		Password: "password",
+		Group:    "default",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "zz-default-only-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "zz-visible-model", ChannelId: 1, Enabled: true},
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?group=default", nil)
+	ctx.Set("id", 1004)
+
+	GetUserModels(ctx)
+
+	models := decodeUserModelsResponse(t, recorder)
+	require.Equal(t, []string{"zz-mapped-alias", "zz-visible-model"}, models)
+}
+
+func TestListModelsIncludesGroupMappedAlias(t *testing.T) {
+	withSelfUseModeEnabled(t)
+	withGroupMappingRules(t, []operation_setting.GroupMappingRule{{
+		Enabled: true,
+		Groups:  []string{"default"},
+		Entries: []operation_setting.GroupMappingEntry{{
+			From:         "zz-mapped-alias",
+			To:           "zz-default-only-model",
+			FirstModel:   "zz-mapped-alias",
+			HideOriginal: true,
+			HiddenModels: []string{"zz-default-only-model"},
+		}},
+	}})
+
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&model.User{
+		Id:       1005,
+		Username: "group-mapping-list-user",
+		Password: "password",
+		Group:    "default",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "zz-default-only-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "zz-visible-model", ChannelId: 1, Enabled: true},
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 1005)
+
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+
+	ids := decodeListModelsResponse(t, recorder)
+	require.Contains(t, ids, "zz-mapped-alias")
+	require.Contains(t, ids, "zz-visible-model")
+	require.NotContains(t, ids, "zz-default-only-model")
+}
+
 func TestGetUserModelsExpandsAutoGroupsInConfiguredOrder(t *testing.T) {
 	originalAutoGroups := setting.AutoGroups2JsonString()
 	originalUsableGroups := setting.UserUsableGroups2JSONString()

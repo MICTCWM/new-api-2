@@ -247,7 +247,7 @@ func ListModels(c *gin.Context, modelType int) {
 				continue
 			}
 		}
-		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
+		if !acceptUnsetRatioModel && !service.GroupMappedModelHasBilling(ownerGroups, modelName, helper.HasModelBillingConfig) {
 			continue
 		}
 		userModelNames = append(userModelNames, modelName)

@@ -14,9 +14,13 @@ describe('upstream cost formatting data', () => {
 
   test('falls back to OpenCode and rejects invalid values', () => {
     expect(getUpstreamCostUSD({ opencode_upstream_cost_usd: 0.75 })).toBe(0.75)
-    expect(getUpstreamCostUSD({ command_upstream_cost_usd: -1 })).toBeUndefined()
     expect(
-      getUpstreamCostUSD({ command_upstream_cost_usd: Number.POSITIVE_INFINITY })
+      getUpstreamCostUSD({ command_upstream_cost_usd: -1 })
+    ).toBeUndefined()
+    expect(
+      getUpstreamCostUSD({
+        command_upstream_cost_usd: Number.POSITIVE_INFINITY,
+      })
     ).toBeUndefined()
   })
 })

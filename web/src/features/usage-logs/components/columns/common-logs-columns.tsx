@@ -124,9 +124,7 @@ function buildTypeDetailSegments(
     const text = renderAuditContent(
       other,
       t,
-      log.channel_name
-        ? { channel_name: log.channel_name }
-        : undefined
+      log.channel_name ? { channel_name: log.channel_name } : undefined
     )
     return text ? [{ text }] : []
   }
@@ -342,8 +340,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
 
           const other = parseLogOther(log.other)
           const affinity = other?.admin_info?.channel_affinity
-          const sessionAffinity =
-            other?.admin_info?.opencode_session_affinity
+          const sessionAffinity = other?.admin_info?.opencode_session_affinity
           const rawUseChannel = other?.admin_info?.use_channel ?? []
           const useChannel = Array.isArray(rawUseChannel)
             ? rawUseChannel.map(String).filter(Boolean)
@@ -472,9 +469,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                     {sessionAffinity?.affinitized &&
                       sessionAffinity.session_id && (
                         <div className='border-t pt-1 text-xs'>
-                          <p className='font-medium'>
-                            {t('Session Affinity')}
-                          </p>
+                          <p className='font-medium'>{t('Session Affinity')}</p>
                           <p>
                             {t('Session ID')}:{' '}
                             <span className='break-all'>
@@ -487,7 +482,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                             {t(
                               sessionAffinity.cache_hit === true
                                 ? 'Reused'
-                                : 'New',
+                                : 'New'
                             )}
                           </p>
                         </div>

@@ -603,22 +603,8 @@ function ChannelConcurrencyGaugeCell({ channel }: { channel: Channel }) {
     usage.concurrency_limit,
     Math.max(0, usage.concurrency_count)
   )
-  const affinityReservedCount = Math.max(
-    0,
-    usage.affinity_reserved_concurrency ?? 0
-  )
-  const occupiedCount = Math.min(
-    usage.concurrency_limit,
-    actualCount + affinityReservedCount
-  )
-  const availableCount = Math.min(
-    usage.concurrency_limit,
-    Math.max(
-      0,
-      usage.available_concurrency ??
-        usage.concurrency_limit - actualCount - affinityReservedCount
-    )
-  )
+  const occupiedCount = actualCount
+  const availableCount = Math.max(0, usage.concurrency_limit - occupiedCount)
   const ratio = occupiedCount / Math.max(1, usage.concurrency_limit)
   let color = 'text-green-500'
   if (ratio >= 1) {
@@ -673,12 +659,6 @@ function ChannelConcurrencyGaugeCell({ channel }: { channel: Channel }) {
             <div>
               {t('Occupied concurrency')}: {occupiedCount} /{' '}
               {usage.concurrency_limit}
-            </div>
-            <div>
-              {t('Actual concurrency')}: {actualCount}
-            </div>
-            <div>
-              {t('Affinity reserved concurrency')}: {affinityReservedCount}
             </div>
             <div>
               {t('Available concurrency')}: {availableCount}

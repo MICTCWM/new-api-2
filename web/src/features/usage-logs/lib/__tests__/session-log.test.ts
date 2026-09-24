@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'vitest'
 
-import { LOG_TYPE_ENUM, LOG_TYPE_FILTERS, RELAY_CONTEXT_LOG_TYPES } from '../../constants'
+import {
+  LOG_TYPE_ENUM,
+  LOG_TYPE_FILTERS,
+  RELAY_CONTEXT_LOG_TYPES,
+} from '../../constants'
 import { buildSearchParams } from '../filter'
 import { renderAuditContent, getSessionEventRowClass } from '../format'
 import { sessionEventMapper } from '../mappers'

@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -66,6 +67,8 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	jsonData, err := common.Marshal(resp)
 	if err != nil {
 		common.SysError("error marshalling stream response: " + err.Error())
+	} else if frames, handled := service.RewriteStreamChunk(c, string(jsonData)); handled {
+		writeResponseRewriteFrames(c, frames)
 	} else {
 		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
 		c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
@@ -79,6 +82,11 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
 		return
 	}
 
+	if frames, handled := service.RewriteStreamChunk(c, data); handled {
+		writeResponseRewriteFrames(c, frames)
+		return
+	}
+
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
 	_ = FlushWriter(c)
@@ -87,6 +95,11 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) error {
 	if requestContextDone(c) {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+	}
+
+	if frames, handled := service.RewriteStreamChunk(c, data); handled {
+		writeResponseRewriteFrames(c, frames)
+		return nil
 	}
 
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
@@ -103,8 +116,25 @@ func StringData(c *gin.Context, str string) error {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
+	if frames, handled := service.RewriteStreamChunk(c, str); handled {
+		writeResponseRewriteFrames(c, frames)
+		return nil
+	}
+
 	c.Render(-1, common.CustomEvent{Data: "data: " + str})
 	return FlushWriter(c)
+}
+
+// writeResponseRewriteFrames writes already-rewritten client protocol chunks,
+// re-emitting the SSE event name for protocols that use named events.
+func writeResponseRewriteFrames(c *gin.Context, frames []service.ResponseRewriteFrame) {
+	for _, frame := range frames {
+		if frame.Event != "" {
+			c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", frame.Event)})
+		}
+		c.Render(-1, common.CustomEvent{Data: "data: " + frame.JSON})
+	}
+	_ = FlushWriter(c)
 }
 
 func PingData(c *gin.Context) error {
@@ -134,6 +164,11 @@ func ObjectData(c *gin.Context, object interface{}) error {
 }
 
 func Done(c *gin.Context) {
+	// Emit any text still held back by the streaming-safe rewrite buffer before
+	// the terminal sentinel, so a match spanning the last chunks is not lost.
+	if frames := service.FlushResponseRewrite(c); len(frames) > 0 {
+		writeResponseRewriteFrames(c, frames)
+	}
 	_ = StringData(c, "[DONE]")
 }
 

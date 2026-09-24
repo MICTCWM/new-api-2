@@ -105,11 +105,15 @@ const createRoutingReliabilitySchema = (
           .int(t('Enter a positive integer'))
           .min(
             MIN_SPEED_PROTECTION_PROBE_INTERVAL,
-            t('Speed protection probe interval must be between 1 and 1440 minutes')
+            t(
+              'Speed protection probe interval must be between 1 and 1440 minutes'
+            )
           )
           .max(
             MAX_SPEED_PROTECTION_PROBE_INTERVAL,
-            t('Speed protection probe interval must be between 1 and 1440 minutes')
+            t(
+              'Speed protection probe interval must be between 1 and 1440 minutes'
+            )
           ),
       }),
     })

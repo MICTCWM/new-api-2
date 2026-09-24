@@ -142,7 +142,6 @@ func GetOpencodeChannelUsage(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	attachChannelAffinityConcurrencyUsage(usage.ChannelID, usage.ConcurrencyCount, usage.ConcurrencyLimit, usage)
 	common.ApiSuccess(c, usage)
 }
 
@@ -166,7 +165,6 @@ func GetCommandChannelUsage(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	attachChannelAffinityConcurrencyUsage(usage.ChannelID, usage.ConcurrencyCount, usage.ConcurrencyLimit, usage)
 	common.ApiSuccess(c, usage)
 }
 
@@ -181,7 +179,6 @@ func GetChannelConcurrencyUsage(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	attachChannelAffinityConcurrencyUsage(usage.ChannelID, usage.ConcurrencyCount, usage.ConcurrencyLimit, usage)
 	common.ApiSuccess(c, usage)
 }
 
@@ -196,31 +193,6 @@ func GetCodeProviderSessionUsage(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, usage)
-}
-
-func attachChannelAffinityConcurrencyUsage(channelID, usedConcurrency, concurrencyLimit int, usage interface{}) {
-	reservedConcurrency := service.GetChannelAffinityReservedConcurrency(channelID, common.GetTimestamp())
-	availableConcurrency := concurrencyLimit - usedConcurrency - reservedConcurrency
-	if availableConcurrency < 0 {
-		availableConcurrency = 0
-	}
-	switch snapshot := usage.(type) {
-	case *model.OpencodeUsageSnapshot:
-		snapshot.AffinityReservedRPM = reservedConcurrency
-		snapshot.AvailableRPM = availableConcurrency
-		snapshot.AffinityReservedConcurrency = reservedConcurrency
-		snapshot.AvailableConcurrency = availableConcurrency
-	case *model.CommandUsageSnapshot:
-		snapshot.AffinityReservedRPM = reservedConcurrency
-		snapshot.AvailableRPM = availableConcurrency
-		snapshot.AffinityReservedConcurrency = reservedConcurrency
-		snapshot.AvailableConcurrency = availableConcurrency
-	case *model.ChannelRPMUsageSnapshot:
-		snapshot.AffinityReservedRPM = reservedConcurrency
-		snapshot.AvailableRPM = availableConcurrency
-		snapshot.AffinityReservedConcurrency = reservedConcurrency
-		snapshot.AvailableConcurrency = availableConcurrency
-	}
 }
 
 type codeProviderUsageOverrideRequest struct {

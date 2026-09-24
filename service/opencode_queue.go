@@ -62,9 +62,11 @@ func WaitForOpencodeChannel(param *RetryParam, inputTokens int) (*model.Channel,
 
 	// Session-capacity wait is independent of the in-flight request lease queue.
 	// Do it first so a full session table cannot occupy concurrency slots, and
-	// so timeout can switch away from an affinity channel.
+	// so timeout can switch away from an affinity channel. Wait/Select remap to
+	// the split target; the lease queue below stays keyed by the request model.
 	if IsOpencodeSessionQueueRequired(param.Ctx) {
-		if _, _, err := waitForOpencodeSessionCapacity(param, queueGroupForParam(param)); err != nil {
+		waitGroup := queueGroupForParam(param)
+		if _, _, err := waitForOpencodeSessionCapacity(retryParamForGroup(param, waitGroup), waitGroup); err != nil {
 			return nil, "", err
 		}
 	}

@@ -57,7 +57,11 @@ export function RetryChainPopover(props: RetryChainPopoverProps) {
           </span>
         )}
       </PopoverTrigger>
-      <PopoverContent side='top' align='start' className='w-80 max-w-[90vw] text-xs'>
+      <PopoverContent
+        side='top'
+        align='start'
+        className='w-80 max-w-[90vw] text-xs'
+      >
         <div className='flex min-w-0 flex-col gap-2'>
           <p className='font-medium'>{t('Retry Chain')}</p>
           <p className='text-muted-foreground font-mono break-all'>

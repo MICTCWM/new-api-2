@@ -23,6 +23,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -32,17 +33,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { StatusBadge } from '@/components/status-badge'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
-import {
-  SESSION_LOG_EVENT_ALL,
-  SESSION_LOG_EVENT_FILTERS,
-} from '../constants'
+import { SESSION_LOG_EVENT_ALL, SESSION_LOG_EVENT_FILTERS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { sessionEventMapper } from '../lib/mappers'
 import { getDefaultTimeRange } from '../lib/utils'
@@ -383,8 +380,9 @@ export function SessionLogsFilterBar<TData>(
         ].filter(Boolean).length
       }
       hasAdvancedActiveFilters={!!filters.username || !!filters.channel}
-      advancedFilterCount={[filters.username, filters.channel].filter(Boolean)
-        .length}
+      advancedFilterCount={
+        [filters.username, filters.channel].filter(Boolean).length
+      }
       hasActiveFilters={hasActiveFilters}
       onSearch={handleApply}
       searchLoading={fetchingLogs > 0}

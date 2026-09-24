@@ -1193,7 +1193,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
           <DetailSection
             icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}
             iconTone={
-              speedProtectionEvent.event === 'kicked' ? 'destructive' : 'success'
+              speedProtectionEvent.event === 'kicked'
+                ? 'destructive'
+                : 'success'
             }
             label={t('Speed protection')}
             variant={

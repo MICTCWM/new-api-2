@@ -24,6 +24,9 @@ import { ClaudeSettingsCard } from './claude-settings-card'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
+import { GroupMappingSection } from './group-mapping'
+import { ModelSplitSection } from './model-split'
+import { ResponseRewriteSection } from './response-rewrite'
 import { RoutingReliabilitySection } from './routing-reliability-section'
 
 function formatJsonForEditor(value: string, fallback: string) {
@@ -171,6 +174,53 @@ const MODELS_SECTIONS = [
             settings['channel_affinity_setting.default_ttl_seconds'],
           'channel_affinity_setting.rules':
             settings['channel_affinity_setting.rules'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'group-mapping',
+    titleKey: 'Group Model Mapping',
+    build: (settings: ModelSettings) => (
+      <GroupMappingSection
+        defaultValues={{
+          'group_mapping_setting.enabled':
+            settings['group_mapping_setting.enabled'],
+          'group_mapping_setting.rules':
+            settings['group_mapping_setting.rules'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'model-split',
+    titleKey: 'Model Split Routing',
+    build: (settings: ModelSettings) => (
+      <ModelSplitSection
+        defaultValues={{
+          'model_split_setting.enabled':
+            settings['model_split_setting.enabled'],
+          'model_split_setting.rules': settings['model_split_setting.rules'],
+          'group_mapping_setting.rules':
+            settings['group_mapping_setting.rules'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'response-rewrite',
+    titleKey: 'Response Rewrite',
+    build: (settings: ModelSettings) => (
+      <ResponseRewriteSection
+        defaultValues={{
+          'response_rewrite_setting.model_id_enabled':
+            settings['response_rewrite_setting.model_id_enabled'],
+          'response_rewrite_setting.model_id_groups':
+            settings['response_rewrite_setting.model_id_groups'],
+          'response_rewrite_setting.text_enabled':
+            settings['response_rewrite_setting.text_enabled'],
+          'response_rewrite_setting.text_rules':
+            settings['response_rewrite_setting.text_rules'],
         }}
       />
     ),

@@ -254,6 +254,15 @@ func validateOptionValue(key string, value string) error {
 	if key == operation_setting.AutoScalingCooldownMinutesOptionKey {
 		return operation_setting.ValidateAutoScalingCooldownMinutes(value)
 	}
+	if key == operation_setting.GroupMappingRulesOptionKey {
+		return operation_setting.ValidateGroupMappingRulesJSON(value)
+	}
+	if key == operation_setting.ModelSplitRulesOptionKey {
+		return operation_setting.ValidateModelSplitRulesJSON(value)
+	}
+	if key == operation_setting.ResponseRewriteTextRulesOptionKey {
+		return operation_setting.ValidateResponseRewriteTextRulesJSON(value)
+	}
 	return nil
 }
 
@@ -715,6 +724,8 @@ func handleConfigUpdate(key, value string) bool {
 	} else if configName == "billing_setting" {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
+	} else if configName == "group_mapping_setting" {
+		InvalidatePricingCache()
 	}
 
 	return true // 已处理

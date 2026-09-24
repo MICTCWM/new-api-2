@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -493,4 +494,152 @@ func otherOpencodeChannelID(channels []*model.Channel, except int) int {
 		}
 	}
 	return 0
+}
+
+func createCommandModelChannel(t *testing.T, db *gorm.DB, modelName string) *model.Channel {
+	t.Helper()
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    fmt.Sprintf("command-split-%s-%d", modelName, time.Now().UnixNano()),
+		Models: modelName,
+		Group:  "default",
+	}
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group:     "default",
+		Model:     modelName,
+		ChannelId: channel.Id,
+		Enabled:   true,
+	}).Error)
+	return channel
+}
+
+func TestOpencodeSessionCapacity_ModelSplitInheritsSessionWhenTargetChannelChanges(t *testing.T) {
+	db := useOpencodeSessionCapacityEnv(t, 3)
+	flash := createCommandModelChannel(t, db, model.CommandFlashModel)
+	v41 := createCommandModelChannel(t, db, model.CommandV41FlashModel)
+	model.InitChannelCache()
+
+	conv := t.Name() + "-conv"
+	firstCtx := newOpencodeCapacityContext(t, conv)
+	common.SetContextKey(firstCtx, constant.ContextKeyOriginalModel, "nn")
+	common.SetContextKey(firstCtx, constant.ContextKeyModelSplitTarget, model.CommandFlashModel)
+	first, queueRequired, err := SelectOpencodeSessionChannel(firstCtx, "default", model.CommandFlashModel, "/v1/chat/completions", nil, map[int]struct{}{})
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.False(t, queueRequired)
+	require.Equal(t, flash.Id, first.Id)
+
+	sessionKey := opencodeSessionKey(opencodeConversationKeyForModel(firstCtx, model.CommandFlashModel))
+	firstBinding, found, err := getOpencodeSessionBinding(sessionKey)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEmpty(t, firstBinding.Session)
+
+	secondCtx := newOpencodeCapacityContext(t, conv)
+	common.SetContextKey(secondCtx, constant.ContextKeyOriginalModel, "nn")
+	common.SetContextKey(secondCtx, constant.ContextKeyModelSplitTarget, model.CommandV41FlashModel)
+	second, queueRequired, err := SelectOpencodeSessionChannel(secondCtx, "default", model.CommandV41FlashModel, "/v1/chat/completions", nil, map[int]struct{}{})
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.False(t, queueRequired)
+	require.Equal(t, v41.Id, second.Id)
+
+	secondBinding, found, err := getOpencodeSessionBinding(sessionKey)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, firstBinding.Session, secondBinding.Session, "split must migrate the existing session instead of deleting it")
+	require.Equal(t, v41.Id, secondBinding.ChannelID)
+
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: second.Id}, OriginModelName: "nn"}
+	require.Equal(t, firstBinding.Session, ResolveOpencodeSession(secondCtx, info))
+}
+
+func TestOpencodeSessionCapacity_WithoutSplitCreatesNewSessionWhenChannelCannotServeModel(t *testing.T) {
+	db := useOpencodeSessionCapacityEnv(t, 3)
+	flash := createCommandModelChannel(t, db, model.CommandFlashModel)
+	v41 := createCommandModelChannel(t, db, model.CommandV41FlashModel)
+	model.InitChannelCache()
+
+	conv := t.Name() + "-conv"
+	firstCtx := newOpencodeCapacityContext(t, conv)
+	first, queueRequired, err := SelectOpencodeSessionChannel(firstCtx, "default", model.CommandFlashModel, "/v1/chat/completions", nil, map[int]struct{}{})
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.False(t, queueRequired)
+	require.Equal(t, flash.Id, first.Id)
+
+	sessionKey := opencodeSessionKey(opencodeConversationKeyForModel(firstCtx, model.CommandFlashModel))
+	firstBinding, found, err := getOpencodeSessionBinding(sessionKey)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	secondCtx := newOpencodeCapacityContext(t, conv)
+	second, queueRequired, err := SelectOpencodeSessionChannel(secondCtx, "default", model.CommandV41FlashModel, "/v1/chat/completions", nil, map[int]struct{}{})
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.False(t, queueRequired)
+	require.Equal(t, v41.Id, second.Id)
+
+	secondBinding, found, err := getOpencodeSessionBinding(sessionKey)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEqual(t, firstBinding.Session, secondBinding.Session, "without a split, a channel that cannot serve the model must mint a new session")
+
+	logs := listOpencodeSessionLogs(t)
+	require.GreaterOrEqual(t, len(logs), 2)
+	require.Equal(t, "OpenCode session create", logs[len(logs)-1].Content, "cleared binding must mint a create, not a move")
+}
+
+func TestWaitForOpencodeSessionCapacity_ModelSplitLooksUpTargetNotOriginal(t *testing.T) {
+	db := useOpencodeSessionCapacityEnv(t, 3)
+	flash := createCommandModelChannel(t, db, model.CommandFlashModel)
+	model.InitChannelCache()
+
+	c := newOpencodeCapacityContext(t, t.Name()+"-conv")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "nn")
+	common.SetContextKey(c, constant.ContextKeyModelSplitTarget, model.CommandFlashModel)
+	param := &RetryParam{
+		Ctx:                 c,
+		TokenGroup:          "default",
+		ModelName:           "nn",
+		RequestPath:         "/v1/chat/completions",
+		Retry:               common.GetPointer(0),
+		OpencodePool:        true,
+		AttemptedChannelIDs: make(map[int]struct{}),
+	}
+
+	selected, _, err := waitForOpencodeSessionCapacity(param, "default")
+	require.NoError(t, err)
+	require.NotNil(t, selected, "wait/Select must look up the split target, not spin on the original model")
+	require.Equal(t, flash.Id, selected.Id)
+}
+
+func TestSelectOpencodeSessionChannel_RememberedHitRefreshesSessionTTL(t *testing.T) {
+	db := useOpencodeSessionCapacityEnv(t, 3)
+	_ = createOpencodeCapacityChannels(t, db, 1)
+	conv := t.Name() + "-conv"
+	c := newOpencodeCapacityContext(t, conv)
+	original, queueRequired := selectOpencodeCapacityChannel(t, c)
+	require.False(t, queueRequired)
+
+	sessionKey := opencodeSessionKey(opencodeConversationKeyForModel(c, model.OpencodeModel))
+	oldSeen := time.Now().Unix() - 5
+	plantOpencodeActiveLastSeen(t, original.Id, sessionKey, oldSeen)
+
+	retryCtx := newOpencodeCapacityContext(t, conv)
+	rememberOpencodeSessionSelection(retryCtx, original.Id)
+	channel, queueRequired, err := SelectOpencodeSessionChannel(retryCtx, "default", model.OpencodeModel, "/v1/chat/completions", nil, map[int]struct{}{})
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	require.False(t, queueRequired)
+	require.Equal(t, original.Id, channel.Id)
+
+	opencodeActiveMu.Lock()
+	active, found, err := getOpencodeActiveCache().Get(strconv.Itoa(original.Id))
+	opencodeActiveMu.Unlock()
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Greater(t, active[sessionKey], oldSeen, "remembered hit must refresh the sliding active window")
 }

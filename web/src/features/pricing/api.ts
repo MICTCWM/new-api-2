@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { api } from '@/lib/api'
+import { api, type ApiRequestConfig } from '@/lib/api'
 
 import type { PricingData } from './types'
 
@@ -24,8 +24,12 @@ import type { PricingData } from './types'
 // Pricing APIs
 // ----------------------------------------------------------------------------
 
-// Get model pricing data
-export async function getPricing(): Promise<PricingData> {
-  const res = await api.get('/api/pricing')
+// Get model pricing data.
+// `config` lets callers opt out of the shared error toast (e.g. pages that
+// render their own empty/error state) while reusing the same query and cache.
+export async function getPricing(
+  config?: ApiRequestConfig
+): Promise<PricingData> {
+  const res = await api.get('/api/pricing', config)
   return res.data
 }

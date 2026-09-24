@@ -216,8 +216,7 @@ func selectLeastLoadedCodeProviderCandidate(candidates []*model.Channel, now int
 		if err != nil {
 			return nil, err
 		}
-		reservedConcurrency := GetChannelAffinityReservedConcurrency(candidate.Id, now)
-		effectiveLoad := usedConcurrency + reservedConcurrency
+		effectiveLoad := usedConcurrency
 		if !allowFull && concurrencyLimit > 0 && effectiveLoad >= concurrencyLimit {
 			continue
 		}
@@ -236,7 +235,31 @@ func selectLeastLoadedCodeProviderCandidate(candidates []*model.Channel, now int
 	return leastLoaded[index], nil
 }
 
+func channelLookupModel(param *RetryParam, group string) string {
+	if param == nil {
+		return ""
+	}
+	if target := RequestModelSplitTarget(param.Ctx); target != "" {
+		return target
+	}
+	return ResolveGroupMappedModel(group, param.ModelName)
+}
+
+func retryParamForGroup(param *RetryParam, group string) *RetryParam {
+	if param == nil {
+		return nil
+	}
+	mapped := channelLookupModel(param, group)
+	if mapped == param.ModelName {
+		return param
+	}
+	copied := *param
+	copied.ModelName = mapped
+	return &copied
+}
+
 func selectSpeedProtectedCandidate(param *RetryParam, group string) (*model.Channel, error) {
+	param = retryParamForGroup(param, group)
 	if param == nil || param.Ctx == nil || !common.GetContextKeyBool(param.Ctx, constant.ContextKeyIsStream) {
 		return nil, nil
 	}
@@ -306,6 +329,7 @@ func GetSpeedProtectedChannel(param *RetryParam) (*model.Channel, string, error)
 }
 
 func selectAffinityCodeProviderCandidate(param *RetryParam, group string) (*model.Channel, error) {
+	param = retryParamForGroup(param, group)
 	if param == nil || param.Ctx == nil || group == "" {
 		return nil, nil
 	}
@@ -400,8 +424,7 @@ func selectQueuedAffinityCandidate(param *RetryParam) (*model.Channel, string, e
 		return nil, "", err
 	}
 	if channel.Status != common.ChannelStatusEnabled ||
-		(channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand) ||
-		!model.ChannelSupportsRequestPath(channel, param.RequestPath, param.ModelName) {
+		(channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand) {
 		if !ShouldKeepChannelAffinityOnChannelDisabled() {
 			ClearCurrentChannelAffinityCache(param.Ctx)
 		} else {
@@ -420,16 +443,12 @@ func selectQueuedAffinityCandidate(param *RetryParam) (*model.Channel, string, e
 		}
 	}
 	now := time.Now().Unix()
-	quotaAvailable, err := model.CodeProviderChannelHasCapacity(channel, param.ModelName, now, false)
-	if err != nil {
-		return nil, "", err
-	}
-	if !quotaAvailable {
-		ClearCurrentChannelAffinityCache(param.Ctx)
-		return nil, "", nil
-	}
 	for _, group := range groups {
-		if !model.IsChannelEnabledForGroupModel(group, param.ModelName, channel.Id) {
+		lookupModel := channelLookupModel(param, group)
+		if !model.ChannelSupportsRequestPath(channel, param.RequestPath, lookupModel) {
+			continue
+		}
+		if !model.IsChannelEnabledForGroupModel(group, lookupModel, channel.Id) {
 			continue
 		}
 		kicked, err := model.IsSpeedProtectionChannelKicked(channel, group)
@@ -439,7 +458,13 @@ func selectQueuedAffinityCandidate(param *RetryParam) (*model.Channel, string, e
 		if kicked {
 			continue
 		}
-		touchChannelAffinityProtection(param.Ctx)
+		quotaAvailable, err := model.CodeProviderChannelHasCapacity(channel, lookupModel, now, false)
+		if err != nil {
+			return nil, "", err
+		}
+		if !quotaAvailable {
+			continue
+		}
 		return channel, group, nil
 	}
 	if !ShouldKeepChannelAffinityOnChannelDisabled() {
@@ -448,32 +473,6 @@ func selectQueuedAffinityCandidate(param *RetryParam) (*model.Channel, string, e
 		ClearCurrentChannelAffinitySelection(param.Ctx)
 	}
 	return nil, "", nil
-}
-
-func filterCodeProviderCandidatesByAffinityReserve(param *RetryParam, candidates []*model.Channel) ([]*model.Channel, error) {
-	if param == nil || len(candidates) == 0 {
-		return candidates, nil
-	}
-	filtered := make([]*model.Channel, 0, len(candidates))
-	now := time.Now().Unix()
-	for _, candidate := range candidates {
-		if candidate == nil {
-			continue
-		}
-		reserved := GetChannelAffinityReservedConcurrency(candidate.Id, now)
-		if reserved <= 0 {
-			filtered = append(filtered, candidate)
-			continue
-		}
-		available, err := model.CodeProviderChannelHasGeneralCapacity(candidate, param.ModelName, now, reserved)
-		if err != nil {
-			return nil, err
-		}
-		if available {
-			filtered = append(filtered, candidate)
-		}
-	}
-	return filtered, nil
 }
 
 func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, error) {
@@ -496,14 +495,15 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		}
 
 		for _, group := range groups {
-			if sessionChannel, queueRequired, sessionErr := SelectOpencodeSessionChannel(param.Ctx, group, param.ModelName, param.RequestPath, nil, param.AttemptedChannelIDs); sessionErr != nil {
+			lookupModel := channelLookupModel(param, group)
+			if sessionChannel, queueRequired, sessionErr := SelectOpencodeSessionChannel(param.Ctx, group, lookupModel, param.RequestPath, nil, param.AttemptedChannelIDs); sessionErr != nil {
 				return nil, group, sessionErr
 			} else if sessionChannel != nil {
 				if param.TokenGroup == "auto" {
 					common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
 				}
 				if queueRequired {
-					waited, waitGroup, waitErr := waitForOpencodeSessionCapacity(param, group)
+					waited, waitGroup, waitErr := waitForOpencodeSessionCapacity(retryParamForGroup(param, group), group)
 					if waitErr != nil {
 						return nil, group, waitErr
 					}
@@ -536,9 +536,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			var candidates []*model.Channel
 			if param.OpencodeIncludeRPMFull {
-				candidates, err = model.GetCodeProviderQuotaCandidates(group, param.ModelName, param.AttemptedChannelIDs)
+				candidates, err = model.GetCodeProviderQuotaCandidates(group, lookupModel, param.AttemptedChannelIDs)
 			} else {
-				candidates, err = model.GetCodeProviderCandidates(group, param.ModelName, param.AttemptedChannelIDs)
+				candidates, err = model.GetCodeProviderCandidates(group, lookupModel, param.AttemptedChannelIDs)
 			}
 			if err != nil {
 				return nil, group, err
@@ -555,15 +555,6 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 					return speedChannel, group, nil
 				}
 				continue
-			}
-			if !param.OpencodeIncludeRPMFull {
-				candidates, err = filterCodeProviderCandidatesByAffinityReserve(param, candidates)
-				if err != nil {
-					return nil, group, err
-				}
-				if len(candidates) == 0 {
-					continue
-				}
 			}
 			balancedChannel, balancedErr := selectLeastLoadedCodeProviderCandidate(candidates, time.Now().Unix(), param.OpencodeIncludeRPMFull)
 			if balancedErr != nil {
@@ -610,6 +601,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				priorityRetry = 0
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
+			lookupModel := channelLookupModel(param, autoGroup)
 			if speedChannel, speedErr := selectSpeedProtectedCandidate(param, autoGroup); speedErr != nil {
 				return nil, autoGroup, speedErr
 			} else if speedChannel != nil {
@@ -619,14 +611,14 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 
 			if param.ExcludeCodeProviderChannels {
-				channel, _ = model.GetRandomSatisfiedOrdinaryChannelWithAttempted(autoGroup, param.ModelName, priorityRetry, param.RequestPath, param.AttemptedChannelIDs)
+				channel, _ = model.GetRandomSatisfiedOrdinaryChannelWithAttempted(autoGroup, lookupModel, priorityRetry, param.RequestPath, param.AttemptedChannelIDs)
 			} else {
-				channel, _ = model.GetRandomSatisfiedChannelWithAttempted(autoGroup, param.ModelName, priorityRetry, param.RequestPath, param.AttemptedChannelIDs)
+				channel, _ = model.GetRandomSatisfiedChannelWithAttempted(autoGroup, lookupModel, priorityRetry, param.RequestPath, param.AttemptedChannelIDs)
 			}
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
-				logger.LogDebug(param.Ctx, "No available channel in group %s for model %s at priorityRetry %d, trying next group", autoGroup, param.ModelName, priorityRetry)
+				logger.LogDebug(param.Ctx, "No available channel in group %s for model %s at priorityRetry %d, trying next group", autoGroup, lookupModel, priorityRetry)
 				// 重置状态以尝试下一个分组
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, 0)
@@ -665,10 +657,11 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		} else if speedChannel != nil {
 			return speedChannel, param.TokenGroup, nil
 		}
+		lookupModel := channelLookupModel(param, param.TokenGroup)
 		if param.ExcludeCodeProviderChannels {
-			channel, err = model.GetRandomSatisfiedOrdinaryChannelWithAttempted(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, param.AttemptedChannelIDs)
+			channel, err = model.GetRandomSatisfiedOrdinaryChannelWithAttempted(param.TokenGroup, lookupModel, param.GetRetry(), param.RequestPath, param.AttemptedChannelIDs)
 		} else {
-			channel, err = model.GetRandomSatisfiedChannelWithAttempted(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, param.AttemptedChannelIDs)
+			channel, err = model.GetRandomSatisfiedChannelWithAttempted(param.TokenGroup, lookupModel, param.GetRetry(), param.RequestPath, param.AttemptedChannelIDs)
 		}
 		if err != nil {
 			return nil, param.TokenGroup, err

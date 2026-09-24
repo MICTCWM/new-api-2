@@ -286,3 +286,100 @@ func TestResolveOpencodeSession_NeverEmpty(t *testing.T) {
 		})
 	}
 }
+
+func TestOpencodeConversationKeyUsesOriginalModelAcrossSplitTargets(t *testing.T) {
+	c := newOpencodeSessionTestContext(t, `{"model":"nn"}`, "", "")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "nn")
+	common.SetContextKey(c, constant.ContextKeyTokenId, 7)
+	common.SetContextKey(c, constant.ContextKeyUserId, 8)
+
+	common.SetContextKey(c, constant.ContextKeyModelSplitTarget, "deepseek/deepseek-v4-flash")
+	keyFlash := opencodeConversationKeyForModel(c, "deepseek/deepseek-v4-flash")
+	common.SetContextKey(c, constant.ContextKeyModelSplitTarget, "deepseek/deepseek-v4.1-flash")
+	keyV41 := opencodeConversationKeyForModel(c, "deepseek/deepseek-v4.1-flash")
+
+	require.Equal(t, "token:7:user:8:model:nn", keyFlash)
+	require.Equal(t, keyFlash, keyV41)
+
+	info := &relaycommon.RelayInfo{OriginModelName: "nn", TokenId: 7, UserId: 8}
+	resolveKey := resolveOpencodeConversationKey(c, info, info.GetUpstreamModelName())
+	require.Equal(t, keyFlash, resolveKey)
+}
+
+func TestRequestSessionIdentityModelNeverUsesSplitTarget(t *testing.T) {
+	c := newOpencodeSessionTestContext(t, `{"model":"nn"}`, "", "")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "nn")
+	common.SetContextKey(c, constant.ContextKeyModelSplitTarget, "deepseek/deepseek-v4-flash")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "nn",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "deepseek/deepseek-v4-flash"},
+	}
+	require.Equal(t, "nn", requestSessionIdentityModel(c, info, "deepseek/deepseek-v4-flash"))
+	require.Equal(t, "nn", requestSessionIdentityModel(c, info, "deepseek/deepseek-v4.1-flash"))
+}
+
+func TestRequestSessionIdentityModel_EmptyOriginFallsBackToUpstream(t *testing.T) {
+	c := newOpencodeSessionTestContext(t, "", "", "")
+	common.SetContextKey(c, constant.ContextKeyTokenId, 3)
+	common.SetContextKey(c, constant.ContextKeyUserId, 4)
+	target := "deepseek/deepseek-v4-flash"
+	info := &relaycommon.RelayInfo{
+		TokenId:     3,
+		UserId:      4,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: target},
+	}
+
+	require.Equal(t, target, requestSessionIdentityModel(c, info, ""))
+	got := resolveOpencodeConversationKey(c, info, info.GetUpstreamModelName())
+	require.Equal(t, opencodeConversationKeyForModel(c, target), got)
+	require.Equal(t, "token:3:user:4:model:"+target, got)
+
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "nn")
+	require.Equal(t, "nn", requestSessionIdentityModel(c, info, target))
+	got = resolveOpencodeConversationKey(c, info, info.GetUpstreamModelName())
+	require.Equal(t, "token:3:user:4:model:nn", got)
+}
+
+func TestResolveOpencodeSession_ReusesSessionAcrossModelSplitTargets(t *testing.T) {
+	const channelID = 61101
+	c := newOpencodeSessionTestContext(t, `{"model":"nn"}`, "", "")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "nn")
+	common.SetContextKey(c, constant.ContextKeyTokenId, 11)
+	common.SetContextKey(c, constant.ContextKeyUserId, 22)
+	common.SetContextKey(c, constant.ContextKeyModelSplitTarget, "deepseek/deepseek-v4-flash")
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+		OriginModelName: "nn",
+		TokenId:         11,
+		UserId:          22,
+	}
+
+	first := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(c, info))
+	common.SetContextKey(c, constant.ContextKeyModelSplitTarget, "deepseek/deepseek-v4.1-flash")
+	second := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(c, info))
+	require.Equal(t, first, second, "split targets of the same original model must reuse the session")
+}
+
+func TestResolveOpencodeSession_ModelSplitKeepsSessionWhenChannelMoves(t *testing.T) {
+	body := `{"prompt_cache_key":"conv-split-move-61102"}`
+	c := newOpencodeSessionTestContext(t, body, "", "")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "nn")
+	common.SetContextKey(c, constant.ContextKeyModelSplitTarget, "deepseek/deepseek-v4.1-flash")
+	infoA := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 61102}}
+	infoB := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 61103}}
+
+	sessionA := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(c, infoA))
+	sessionB := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(c, infoB))
+	require.Equal(t, sessionA, sessionB, "model split must inherit the session when the bound channel changes")
+}
+
+func TestResolveOpencodeSession_WithoutSplitDifferentChannelsStillDiffer(t *testing.T) {
+	body := `{"prompt_cache_key":"conv-no-split-61104"}`
+	c := newOpencodeSessionTestContext(t, body, "", "")
+	infoA := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 61104}}
+	infoB := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 61105}}
+
+	sessionA := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(c, infoA))
+	sessionB := assertOpencodeSessionNonEmpty(t, ResolveOpencodeSession(c, infoB))
+	require.NotEqual(t, sessionA, sessionB, "without a split, a different channel must mint a new session")
+}

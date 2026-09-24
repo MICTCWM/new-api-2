@@ -34,7 +34,8 @@ export function getUpstreamCostUSD(
   adminInfo: LogOtherData['admin_info'] | undefined
 ): number | undefined {
   const cost =
-    adminInfo?.command_upstream_cost_usd ?? adminInfo?.opencode_upstream_cost_usd
+    adminInfo?.command_upstream_cost_usd ??
+    adminInfo?.opencode_upstream_cost_usd
   if (cost == null || !Number.isFinite(cost) || cost < 0) return undefined
   return cost
 }

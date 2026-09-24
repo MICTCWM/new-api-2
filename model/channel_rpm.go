@@ -31,16 +31,12 @@ type ChannelRPMUsage struct {
 }
 
 type ChannelRPMUsageSnapshot struct {
-	ChannelID                   int   `json:"channel_id"`
-	RPMCount                    int   `json:"rpm_count"`
-	RPMLimit                    int   `json:"rpm_limit"`
-	RPMResetAt                  int64 `json:"rpm_reset_at"`
-	AffinityReservedRPM         int   `json:"affinity_reserved_rpm"`
-	AvailableRPM                int   `json:"available_rpm"`
-	ConcurrencyCount            int   `json:"concurrency_count"`
-	ConcurrencyLimit            int   `json:"concurrency_limit"`
-	AffinityReservedConcurrency int   `json:"affinity_reserved_concurrency"`
-	AvailableConcurrency        int   `json:"available_concurrency"`
+	ChannelID        int   `json:"channel_id"`
+	RPMCount         int   `json:"rpm_count"`
+	RPMLimit         int   `json:"rpm_limit"`
+	RPMResetAt       int64 `json:"rpm_reset_at"`
+	ConcurrencyCount int   `json:"concurrency_count"`
+	ConcurrencyLimit int   `json:"concurrency_limit"`
 }
 
 func ValidateChannelRPMLimit(limit int) error {

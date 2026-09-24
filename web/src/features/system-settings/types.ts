@@ -248,6 +248,14 @@ export type ModelSettings = {
   'channel_affinity_setting.max_entries': number
   'channel_affinity_setting.default_ttl_seconds': number
   'channel_affinity_setting.rules': string
+  'group_mapping_setting.enabled': boolean
+  'group_mapping_setting.rules': string
+  'model_split_setting.enabled': boolean
+  'model_split_setting.rules': string
+  'response_rewrite_setting.model_id_enabled': boolean
+  'response_rewrite_setting.model_id_groups': string
+  'response_rewrite_setting.text_enabled': boolean
+  'response_rewrite_setting.text_rules': string
   'model_deployment.ionet.api_key': string
   'model_deployment.ionet.enabled': boolean
 }

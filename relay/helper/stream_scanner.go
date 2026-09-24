@@ -308,6 +308,17 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	}
 
 	cleanup()
+
+	// Flush any text still held back by the response rewriter. Protocols whose
+	// terminal event triggers a flush (Claude / Responses / Gemini) already
+	// drained the buffer; this covers OpenAI chat and truncated streams. The
+	// call is idempotent and skipped once the client is gone.
+	if !requestContextDone(c) {
+		if frames := service.FlushResponseRewrite(c); len(frames) > 0 {
+			writeResponseRewriteFrames(c, frames)
+		}
+	}
+
 	if info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() {
 		logger.LogInfo(c, fmt.Sprintf("stream ended: %s", info.StreamStatus.Summary()))
 	} else {

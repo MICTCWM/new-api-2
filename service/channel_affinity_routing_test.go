@@ -1,7 +1,6 @@
 package service
 
 import (
-	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -23,12 +22,11 @@ func useChannelAffinityRoutingDB(t *testing.T) *gorm.DB {
 	previousDB := model.DB
 	previousType := common.MainDatabaseType()
 	previousMemoryCache := common.MemoryCacheEnabled
-	channelAffinityProtectionMu.Lock()
-	previousProtection := channelAffinityProtections
-	channelAffinityProtections = make(map[string]channelAffinityProtectionLease)
-	channelAffinityProtectionMu.Unlock()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(
 		&model.Channel{},
 		&model.Ability{},
@@ -43,9 +41,6 @@ func useChannelAffinityRoutingDB(t *testing.T) *gorm.DB {
 	common.MemoryCacheEnabled = true
 	model.InitChannelCache()
 	t.Cleanup(func() {
-		channelAffinityProtectionMu.Lock()
-		channelAffinityProtections = previousProtection
-		channelAffinityProtectionMu.Unlock()
 		model.DB = previousDB
 		common.SetMainDatabaseType(previousType)
 		common.MemoryCacheEnabled = previousMemoryCache
@@ -489,58 +484,6 @@ func TestOpenCodeAffinityKeepsTheSameChannelAcrossRequests(t *testing.T) {
 	require.Contains(t, []int{channels[0].Id, channels[1].Id, channels[2].Id}, firstChannelID)
 }
 
-func TestAffinityReservedRPMUsesTheSharedChannelLimit(t *testing.T) {
-	db := useChannelAffinityRoutingDB(t)
-	previousRPMLimit := operation_setting.GetOpencodeRPMLimit()
-	require.NoError(t, operation_setting.SetOpencodeRPMLimit("5"))
-	t.Cleanup(func() {
-		require.NoError(t, operation_setting.SetOpencodeRPMLimit(strconv.Itoa(previousRPMLimit)))
-	})
-
-	channel := &model.Channel{
-		Type:   constant.ChannelTypeOpencode,
-		Status: common.ChannelStatusEnabled,
-		Key:    "opencode-hidden-rpm",
-		Models: model.OpencodeModel,
-		Group:  "default",
-	}
-	require.NoError(t, db.Create(channel).Error)
-	require.NoError(t, db.Create(&model.Ability{
-		Group:     "default",
-		Model:     model.OpencodeModel,
-		ChannelId: channel.Id,
-		Enabled:   true,
-	}).Error)
-	model.InitChannelCache()
-
-	const firstProtectionKey = "channel-affinity-test-shared-rpm-first"
-	const secondProtectionKey = "channel-affinity-test-shared-rpm-second"
-	rememberChannelAffinityProtection(firstProtectionKey, channel.Id, 60)
-	rememberChannelAffinityProtection(secondProtectionKey, channel.Id, 60)
-	t.Cleanup(func() {
-		forgetChannelAffinityProtection(firstProtectionKey)
-		forgetChannelAffinityProtection(secondProtectionKey)
-	})
-
-	now := time.Now().Unix()
-	for i := 0; i < 3; i++ {
-		allowed, err := model.ReserveOpencodeConcurrency(channel.Id)
-		require.NoError(t, err)
-		require.True(t, allowed)
-	}
-	require.Equal(t, 2, GetChannelAffinityReservedRPM(channel.Id, now))
-	param := &RetryParam{ModelName: model.OpencodeModel}
-	filtered, err := filterCodeProviderCandidatesByAffinityReserve(param, []*model.Channel{channel})
-	require.NoError(t, err)
-	require.Empty(t, filtered)
-
-	require.NoError(t, model.ReleaseOpencodeConcurrency(channel.Id))
-	filtered, err = filterCodeProviderCandidatesByAffinityReserve(param, []*model.Channel{channel})
-	require.NoError(t, err)
-	require.Len(t, filtered, 1)
-	require.Equal(t, 0, GetChannelAffinityReservedRPM(channel.Id, now+operation_setting.ChannelAffinityProtectionLeaseSeconds+1))
-}
-
 func TestQueuedAffinityReleasesIneligibleCurrentSelection(t *testing.T) {
 	db := useChannelAffinityRoutingDB(t)
 	channel := &model.Channel{
@@ -593,7 +536,8 @@ func TestQueuedAffinityReleasesIneligibleCurrentSelection(t *testing.T) {
 	require.Zero(t, GetPendingChannelAffinitySelection(ctx))
 }
 
-func TestNewCodeProviderSelectionUsesLeastEffectiveLoad(t *testing.T) {
+// 渠道选择只依据实际并发占用：无占用的渠道应被判为 least-loaded。
+func TestNewCodeProviderSelectionUsesLeastActualConcurrencyLoad(t *testing.T) {
 	db := useChannelAffinityRoutingDB(t)
 	channels := []*model.Channel{
 		{Type: constant.ChannelTypeCommand, Status: common.ChannelStatusEnabled, Key: "balanced-command-a", Models: model.CommandFlashModel, Group: "default"},
@@ -620,55 +564,10 @@ func TestNewCodeProviderSelectionUsesLeastEffectiveLoad(t *testing.T) {
 	allowed, err := model.ReserveCommandConcurrency(channels[1].Id)
 	require.NoError(t, err)
 	require.True(t, allowed)
-	const affinityKey = "channel-affinity-balanced-command-b"
-	rememberChannelAffinityProtection(affinityKey, channels[1].Id, 60)
-	t.Cleanup(func() { forgetChannelAffinityProtection(affinityKey) })
 
 	selected, err := selectLeastLoadedCodeProviderCandidate(channels, now, false)
 	require.NoError(t, err)
 	require.Equal(t, channels[2].Id, selected.Id)
-}
-
-// 亲和请求实际占用并发位后必须释放自己的预留租约：预留(1→0) + 实际(0→1) 对应同一个
-// 请求，不释放会让 least-loaded 选路把该渠道的负载看高一个名额，造成容量浪费。
-func TestConvertChannelAffinityReservationToActual_ReleasesLeaseWhenSlotAcquired(t *testing.T) {
-	db := useChannelAffinityRoutingDB(t)
-	channel := &model.Channel{
-		Type:   constant.ChannelTypeOpencode,
-		Status: common.ChannelStatusEnabled,
-		Key:    "opencode-affinity-convert",
-		Models: model.OpencodeModel,
-		Group:  "default",
-	}
-	require.NoError(t, db.Create(channel).Error)
-	require.NoError(t, db.Create(&model.Ability{
-		Group:     "default",
-		Model:     model.OpencodeModel,
-		ChannelId: channel.Id,
-		Enabled:   true,
-	}).Error)
-	model.InitChannelCache()
-
-	cacheKey := channelAffinityCacheNamespace + ":opencode session trace:test-convert"
-	rememberChannelAffinityProtection(cacheKey, channel.Id, 60)
-	t.Cleanup(func() { forgetChannelAffinityProtection(cacheKey) })
-
-	now := time.Now().Unix()
-	require.Equal(t, 1, GetChannelAffinityReservedConcurrency(channel.Id, now))
-
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	setChannelAffinityContext(c, channelAffinityMeta{CacheKey: cacheKey, TTLSeconds: 60, RuleName: "opencode session trace"})
-	MarkChannelAffinityUsed(c, "default", channel.Id)
-
-	ConvertChannelAffinityReservationToActual(c)
-	require.Equal(t, 0, GetChannelAffinityReservedConcurrency(channel.Id, now), "in-flight request must not keep holding its reservation lease")
-
-	// 请求成功结束时 RecordChannelAffinity 重新武装租约，为下一轮请求继续预留。
-	RecordChannelAffinity(c, channel.Id)
-	require.Equal(t, 1, GetChannelAffinityReservedConcurrency(channel.Id, now), "successful request must re-arm the lease for its next turn")
 }
 
 // 默认亲规则 "opencode session trace" 必须同时匹配 Command 渠道的原生模型名
@@ -706,21 +605,50 @@ func TestCommandNativeModelGetsChannelAffinityFromDefaultRule(t *testing.T) {
 	require.Equal(t, 4321, preferredID)
 }
 
-// 没有亲和上下文的请求调用转换必须是安全 no-op，不影响其他请求的租约。
-func TestConvertChannelAffinityReservationToActual_NoopWithoutAffinityMeta(t *testing.T) {
+func TestCommandSplitTargetsShareAffinityCacheKeyOnOriginalModel(t *testing.T) {
 	useChannelAffinityRoutingDB(t)
+	const original = "nn"
+	flash := "deepseek/deepseek-v4-flash"
+	v41 := "deepseek/deepseek-v4.1-flash"
+	affinityValue := "command-split-affinity-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 
-	otherKey := channelAffinityCacheNamespace + ":opencode session trace:test-noop"
-	rememberChannelAffinityProtection(otherKey, 999001, 60)
-	t.Cleanup(func() { forgetChannelAffinityProtection(otherKey) })
+	newRequest := func(target string) *gin.Context {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(
+			`{"model":"`+original+`","prompt_cache_key":"`+affinityValue+`","stream":true}`,
+		))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		common.SetContextKey(ctx, constant.ContextKeyOriginalModel, original)
+		common.SetContextKey(ctx, constant.ContextKeyModelSplitTarget, target)
+		return ctx
+	}
 
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	firstCtx := newRequest(flash)
+	preferredID, found := GetPreferredChannelByAffinity(firstCtx, flash, "default")
+	require.False(t, found)
+	require.Zero(t, preferredID)
 
-	ConvertChannelAffinityReservationToActual(c)
-	ConvertChannelAffinityReservationToActual(nil)
+	rule := operation_setting.ChannelAffinityRule{
+		Name:              "opencode session trace",
+		IncludeRuleName:   true,
+		IncludeModelName:  true,
+		IncludeUsingGroup: true,
+	}
+	flashSuffix := buildChannelAffinityCacheKeySuffix(rule, flash, "default", affinityValue)
+	identitySuffix := buildChannelAffinityCacheKeySuffix(rule, original, "default", affinityValue)
+	require.NotEqual(t, flashSuffix, identitySuffix, "affinity cache key must not include the split target")
 
-	require.Equal(t, 1, GetChannelAffinityReservedConcurrency(999001, time.Now().Unix()), "unrelated lease must survive the no-op conversion")
+	firstCtx.Set("channel_id", 4321)
+	RecordChannelAffinity(firstCtx, 4321)
+
+	secondCtx := newRequest(v41)
+	preferredID, found = GetPreferredChannelByAffinity(secondCtx, v41, "default")
+	require.True(t, found)
+	require.Equal(t, 4321, preferredID, "V4.1 and V4 Flash must share the original-model affinity key")
+
+	aliasCtx := newRequest(flash)
+	preferredID, found = GetPreferredChannelByAffinity(aliasCtx, original, "default")
+	require.False(t, found)
+	require.Zero(t, preferredID, "alias nn must not match the Command native model regex")
 }

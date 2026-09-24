@@ -36,8 +36,6 @@ type ChannelAffinitySetting struct {
 	Rules                 []ChannelAffinityRule `json:"rules"`
 }
 
-const ChannelAffinityProtectionLeaseSeconds int64 = 15
-
 // Keep Codex CLI passthrough aligned with upstream. Codex uses lower-case
 // header names, while HTTP matching here is case-insensitive.
 // Request session/thread headers:

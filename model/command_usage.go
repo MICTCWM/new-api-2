@@ -103,19 +103,15 @@ type CommandUsageSnapshot struct {
 	SplitPools bool                `json:"split_pools"`
 	// *_pool_active 标记该模型池是否随当前渠道模型列表启用，
 	// 前端只展示启用的池。
-	FlashPoolActive             bool   `json:"flash_pool_active"`
-	V41PoolActive               bool   `json:"v41_pool_active"`
-	ProPoolActive               bool   `json:"pro_pool_active"`
-	PricingPeriod               string `json:"pricing_period"`
-	RPMCount                    int    `json:"rpm_count"`
-	RPMLimit                    int    `json:"rpm_limit"`
-	RPMResetAt                  int64  `json:"rpm_reset_at"`
-	AffinityReservedRPM         int    `json:"affinity_reserved_rpm"`
-	AvailableRPM                int    `json:"available_rpm"`
-	ConcurrencyCount            int    `json:"concurrency_count"`
-	ConcurrencyLimit            int    `json:"concurrency_limit"`
-	AffinityReservedConcurrency int    `json:"affinity_reserved_concurrency"`
-	AvailableConcurrency        int    `json:"available_concurrency"`
+	FlashPoolActive  bool   `json:"flash_pool_active"`
+	V41PoolActive    bool   `json:"v41_pool_active"`
+	ProPoolActive    bool   `json:"pro_pool_active"`
+	PricingPeriod    string `json:"pricing_period"`
+	RPMCount         int    `json:"rpm_count"`
+	RPMLimit         int    `json:"rpm_limit"`
+	RPMResetAt       int64  `json:"rpm_reset_at"`
+	ConcurrencyCount int    `json:"concurrency_count"`
+	ConcurrencyLimit int    `json:"concurrency_limit"`
 }
 
 func CommandPoolKey(channelID int) string {

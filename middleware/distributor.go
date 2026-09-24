@@ -30,6 +30,13 @@ type ModelRequest struct {
 	Group string `json:"group,omitempty"`
 }
 
+func applyModelSplitRoutingIfNeeded(c *gin.Context, originalModel string, shouldSelectChannel, tokenSpecifiesChannel bool) (*model.ModelSplitReservation, error) {
+	if !shouldSelectChannel && !tokenSpecifiesChannel {
+		return nil, nil
+	}
+	return service.ApplyModelSplitRouting(c, originalModel)
+}
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
@@ -78,108 +85,127 @@ func Distribute() func(c *gin.Context) {
 				}
 			}
 
-			if shouldSelectChannel {
-				if modelRequest.Model == "" {
-					abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorModelNameRequired))
+			if shouldSelectChannel && strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
+				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+				playgroundRequest := &dto.PlayGroundRequest{}
+				err = common.UnmarshalBodyReusable(c, playgroundRequest)
+				if err != nil {
+					abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidPlayground, map[string]any{"Error": err.Error()}))
 					return
 				}
-				isCodeProviderModel := model.IsCodeProviderModel(modelRequest.Model)
-				var selectGroup string
-				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
-				// check path is /pg/chat/completions
-				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
-					playgroundRequest := &dto.PlayGroundRequest{}
-					err = common.UnmarshalBodyReusable(c, playgroundRequest)
-					if err != nil {
-						abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidPlayground, map[string]any{"Error": err.Error()}))
+				if playgroundRequest.Group != "" {
+					if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
+						abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 						return
 					}
-					if playgroundRequest.Group != "" {
-						if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
-							abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
-							return
-						}
-						usingGroup = playgroundRequest.Group
-						common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
-					}
+					common.SetContextKey(c, constant.ContextKeyUsingGroup, playgroundRequest.Group)
 				}
+			}
+		}
 
-				if affinityChannel, affinityGroup, affinityFound := selectAffinityChannel(c, modelRequest.Model, usingGroup); affinityFound {
-					channel = affinityChannel
-					selectGroup = affinityGroup
+		routingModel := modelRequest.Model
+		// Fetch/notify/query must not occupy a split slot unless the token pins a channel.
+		reservation, splitErr := applyModelSplitRoutingIfNeeded(c, modelRequest.Model, shouldSelectChannel, ok)
+		if splitErr != nil {
+			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, splitErr.Error(), types.ErrorCodeGetChannelFailed)
+			return
+		}
+		if reservation != nil {
+			defer func() {
+				if reservation.Committed {
+					return
 				}
+				if c.Writer != nil && c.Writer.Written() && c.Writer.Status() < http.StatusBadRequest {
+					return
+				}
+				if refundErr := model.RefundModelSplitUsage(reservation); refundErr != nil {
+					common.SysError("model split refund failed: " + refundErr.Error())
+				}
+			}()
+			routingModel = reservation.TargetModel
+		}
+		// 选渠/亲和之前固定用户请求模型。分流目标只用于 routingModel，不能写入 original_model。
+		common.SetContextKey(c, constant.ContextKeyOriginalModel, modelRequest.Model)
 
-				if channel == nil {
-					protectedParam := &service.RetryParam{
-						Ctx:                 c,
-						TokenGroup:          usingGroup,
-						ModelName:           modelRequest.Model,
-						RequestPath:         c.Request.URL.Path,
-						Retry:               common.GetPointer(0),
-						AttemptedChannelIDs: make(map[int]struct{}),
-						OpencodePool:        isCodeProviderModel,
-					}
-					protected, protectedGroup, protectedErr := service.GetSpeedProtectedChannel(protectedParam)
+		if !ok && shouldSelectChannel {
+			if modelRequest.Model == "" {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorModelNameRequired))
+				return
+			}
+			isCodeProviderModel := model.IsCodeProviderModel(routingModel)
+			var selectGroup string
+			usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+
+			if affinityChannel, affinityGroup, affinityFound := selectAffinityChannel(c, routingModel, usingGroup); affinityFound {
+				channel = affinityChannel
+				selectGroup = affinityGroup
+			}
+
+			if channel == nil {
+				protectedParam := &service.RetryParam{
+					Ctx:                 c,
+					TokenGroup:          usingGroup,
+					ModelName:           routingModel,
+					RequestPath:         c.Request.URL.Path,
+					Retry:               common.GetPointer(0),
+					AttemptedChannelIDs: make(map[int]struct{}),
+					OpencodePool:        isCodeProviderModel,
+				}
+				protected, protectedGroup, protectedErr := service.GetSpeedProtectedChannel(protectedParam)
+				if protectedErr != nil {
+					abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
+					return
+				} else if protected != nil {
+					channel = protected
+					selectGroup = protectedGroup
+					common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
+				} else if isCodeProviderModel {
+					// A fixed Command/OpenCode model may also be configured on a
+					// normal OpenAI channel. Only fall back after the protected
+					// code-provider candidates are exhausted; code-provider routing
+					// and its queue remain unchanged while candidates exist.
+					protectedParam.OpencodePool = false
+					protected, protectedGroup, protectedErr = service.GetSpeedProtectedChannel(protectedParam)
 					if protectedErr != nil {
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
 						return
-					} else if protected != nil {
+					}
+					if protected != nil {
 						channel = protected
 						selectGroup = protectedGroup
 						common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
-					} else if isCodeProviderModel {
-						// A fixed Command/OpenCode model may also be configured on a
-						// normal OpenAI channel. Only fall back after the protected
-						// code-provider candidates are exhausted; code-provider routing
-						// and its queue remain unchanged while candidates exist.
-						protectedParam.OpencodePool = false
-						protected, protectedGroup, protectedErr = service.GetSpeedProtectedChannel(protectedParam)
-						if protectedErr != nil {
-							abortWithOpenAiMessage(c, http.StatusServiceUnavailable, protectedErr.Error(), types.ErrorCodeGetChannelFailed)
-							return
-						}
-						if protected != nil {
-							channel = protected
-							selectGroup = protectedGroup
-							common.SetContextKey(c, constant.ContextKeyAutoGroup, protectedGroup)
-						}
 					}
 				}
+			}
 
+			if channel == nil {
+				selectionParam := &service.RetryParam{
+					Ctx:                    c,
+					ModelName:              routingModel,
+					TokenGroup:             usingGroup,
+					RequestPath:            c.Request.URL.Path,
+					Retry:                  common.GetPointer(0),
+					OpencodePool:           isCodeProviderModel,
+					OpencodeIncludeRPMFull: isCodeProviderModel,
+					AttemptedChannelIDs:    make(map[int]struct{}),
+				}
+				channel, selectGroup, err = service.CacheGetRandomSatisfiedChannelWithCodeProviderFallback(selectionParam)
+				if err != nil {
+					showGroup := usingGroup
+					if usingGroup == "auto" {
+						showGroup = fmt.Sprintf("auto(%s)", selectGroup)
+					}
+					message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": showGroup, "Model": modelRequest.Model, "Error": err.Error()})
+					abortWithOpenAiMessage(c, http.StatusServiceUnavailable, message, types.ErrorCodeModelNotFound)
+					return
+				}
 				if channel == nil {
-					selectionParam := &service.RetryParam{
-						Ctx:                    c,
-						ModelName:              modelRequest.Model,
-						TokenGroup:             usingGroup,
-						RequestPath:            c.Request.URL.Path,
-						Retry:                  common.GetPointer(0),
-						OpencodePool:           isCodeProviderModel,
-						OpencodeIncludeRPMFull: isCodeProviderModel,
-						AttemptedChannelIDs:    make(map[int]struct{}),
-					}
-					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannelWithCodeProviderFallback(selectionParam)
-					if err != nil {
-						showGroup := usingGroup
-						if usingGroup == "auto" {
-							showGroup = fmt.Sprintf("auto(%s)", selectGroup)
-						}
-						message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": showGroup, "Model": modelRequest.Model, "Error": err.Error()})
-						// 如果错误，但是渠道不为空，说明是数据库一致性问题
-						//if channel != nil {
-						//	common.SysError(fmt.Sprintf("渠道不存在：%d", channel.Id))
-						//	message = "数据库一致性已被破坏，请联系管理员"
-						//}
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, message, types.ErrorCodeModelNotFound)
+					if isCodeProviderModel {
+						abortWithOpenAiMessage(c, http.StatusBadGateway, constant.OpencodeUpstreamExhaustedMessage, types.ErrorCodeDoRequestFailed)
 						return
 					}
-					if channel == nil {
-						if isCodeProviderModel {
-							abortWithOpenAiMessage(c, http.StatusBadGateway, constant.OpencodeUpstreamExhaustedMessage, types.ErrorCodeDoRequestFailed)
-							return
-						}
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
-						return
-					}
+					abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
+					return
 				}
 			}
 		}
@@ -187,6 +213,9 @@ func Distribute() func(c *gin.Context) {
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
+			if reservation != nil {
+				reservation.Committed = true
+			}
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
@@ -201,14 +230,18 @@ func selectAffinityChannel(c *gin.Context, modelName string, usingGroup string) 
 	preferred, err := model.CacheGetChannel(preferredChannelID)
 	keepAffinityCache := false
 	rateLimitedAffinity := false
+	routingModel := modelName
+	if service.RequestModelSplitTarget(c) == "" && usingGroup != "auto" {
+		routingModel = service.ResolveGroupMappedModel(usingGroup, modelName)
+	}
 	if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-		channelSupportsRequestPath(preferred, c.Request.URL.Path, modelName) {
+		channelSupportsRequestPath(preferred, c.Request.URL.Path, routingModel) {
 		if preferred.Type == constant.ChannelTypeOpencode || preferred.Type == constant.ChannelTypeCommand {
-			quotaAvailable, quotaErr := model.CodeProviderChannelHasCapacity(preferred, modelName, time.Now().Unix(), false)
+			quotaAvailable, quotaErr := model.CodeProviderChannelHasCapacity(preferred, routingModel, time.Now().Unix(), false)
 			if quotaErr != nil || !quotaAvailable {
 				preferred = nil
 			} else {
-				capacity, capacityErr := model.CodeProviderChannelHasCapacity(preferred, modelName, time.Now().Unix(), true)
+				capacity, capacityErr := model.CodeProviderChannelHasCapacity(preferred, routingModel, time.Now().Unix(), true)
 				if capacityErr != nil {
 					preferred = nil
 				} else if !capacity {
@@ -232,7 +265,7 @@ func selectAffinityChannel(c *gin.Context, modelName string, usingGroup string) 
 		preferred, err = model.CacheGetChannel(preferredChannelID)
 	}
 	if preferred == nil || preferred.Status != common.ChannelStatusEnabled ||
-		!channelSupportsRequestPath(preferred, c.Request.URL.Path, modelName) {
+		!channelSupportsRequestPath(preferred, c.Request.URL.Path, routingModel) {
 		if !keepAffinityCache && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
 			service.ClearCurrentChannelAffinityCache(c)
 		}
@@ -242,8 +275,12 @@ func selectAffinityChannel(c *gin.Context, modelName string, usingGroup string) 
 	if usingGroup == "auto" {
 		userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 		for _, group := range service.GetRequestAutoGroups(c, userGroup) {
+			lookupModel := modelName
+			if service.RequestModelSplitTarget(c) == "" {
+				lookupModel = service.ResolveGroupMappedModel(group, modelName)
+			}
 			kicked, kickErr := model.IsSpeedProtectionChannelKicked(preferred, group)
-			if kickErr != nil || kicked || !model.IsChannelEnabledForGroupModel(group, modelName, preferred.Id) {
+			if kickErr != nil || kicked || !model.IsChannelEnabledForGroupModel(group, lookupModel, preferred.Id) {
 				continue
 			}
 			common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
@@ -252,7 +289,7 @@ func selectAffinityChannel(c *gin.Context, modelName string, usingGroup string) 
 		}
 	} else {
 		kicked, kickErr := model.IsSpeedProtectionChannelKicked(preferred, usingGroup)
-		if kickErr == nil && !kicked && model.IsChannelEnabledForGroupModel(usingGroup, modelName, preferred.Id) {
+		if kickErr == nil && !kicked && model.IsChannelEnabledForGroupModel(usingGroup, routingModel, preferred.Id) {
 			service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 			return preferred, usingGroup, true
 		}
@@ -572,7 +609,11 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		common.SetContextKey(c, constant.ContextKeyChannelOrganization, *channel.OpenAIOrganization)
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelAutoBan, channel.GetAutoBan())
-	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
+	mappingJSON := service.MergeGroupMappingIntoChannelMapping(c, channel.GetModelMapping())
+	if splitTarget := service.RequestModelSplitTarget(c); splitTarget != "" {
+		mappingJSON = service.ApplyModelSplitMappingOverride(mappingJSON, modelName, splitTarget)
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, mappingJSON)
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
 	key, index, newAPIError := channel.GetNextEnabledKey()

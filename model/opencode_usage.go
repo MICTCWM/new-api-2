@@ -94,24 +94,20 @@ type OpencodeUsageWindow struct {
 }
 
 type OpencodeUsageSnapshot struct {
-	ChannelID                   int                         `json:"channel_id"`
-	FiveHour                    OpencodeUsageWindow         `json:"five_hour"`
-	Week                        OpencodeUsageWindow         `json:"week"`
-	Month                       OpencodeUsageWindow         `json:"month"`
-	Pool                        OpencodeUsageWindow         `json:"pool"`
-	PeakPool                    OpencodeUsageWindow         `json:"peak_pool"`     // deprecated: always empty; kept for API compatibility
-	OffPeakPool                 OpencodeUsageWindow         `json:"off_peak_pool"` // deprecated: always empty; kept for API compatibility
-	PricingPeriod               string                      `json:"pricing_period"`
-	RPMCount                    int                         `json:"rpm_count"`
-	RPMLimit                    int                         `json:"rpm_limit"`
-	RPMResetAt                  int64                       `json:"rpm_reset_at"`
-	AffinityReservedRPM         int                         `json:"affinity_reserved_rpm"`
-	AvailableRPM                int                         `json:"available_rpm"`
-	ConcurrencyCount            int                         `json:"concurrency_count"`
-	ConcurrencyLimit            int                         `json:"concurrency_limit"`
-	AffinityReservedConcurrency int                         `json:"affinity_reserved_concurrency"`
-	AvailableConcurrency        int                         `json:"available_concurrency"`
-	Calibration                 OpencodeCalibrationSnapshot `json:"calibration"`
+	ChannelID        int                         `json:"channel_id"`
+	FiveHour         OpencodeUsageWindow         `json:"five_hour"`
+	Week             OpencodeUsageWindow         `json:"week"`
+	Month            OpencodeUsageWindow         `json:"month"`
+	Pool             OpencodeUsageWindow         `json:"pool"`
+	PeakPool         OpencodeUsageWindow         `json:"peak_pool"`     // deprecated: always empty; kept for API compatibility
+	OffPeakPool      OpencodeUsageWindow         `json:"off_peak_pool"` // deprecated: always empty; kept for API compatibility
+	PricingPeriod    string                      `json:"pricing_period"`
+	RPMCount         int                         `json:"rpm_count"`
+	RPMLimit         int                         `json:"rpm_limit"`
+	RPMResetAt       int64                       `json:"rpm_reset_at"`
+	ConcurrencyCount int                         `json:"concurrency_count"`
+	ConcurrencyLimit int                         `json:"concurrency_limit"`
+	Calibration      OpencodeCalibrationSnapshot `json:"calibration"`
 }
 
 type OpencodeCalibrationSnapshot struct {
@@ -274,30 +270,6 @@ func GetCodeProviderConcurrencyUsage(channelType, channelID int, now int64) (int
 
 func GetCodeProviderRPMUsage(channelType, channelID int, now int64) (int, int, error) {
 	return GetCodeProviderConcurrencyUsage(channelType, channelID, now)
-}
-
-func CodeProviderChannelHasGeneralCapacity(channel *Channel, modelName string, now int64, reservedConcurrency int) (bool, error) {
-	if channel == nil {
-		return false, errors.New("code provider channel is missing")
-	}
-	quotaAvailable, err := CodeProviderChannelHasCapacity(channel, modelName, now, false)
-	if err != nil || !quotaAvailable {
-		return quotaAvailable, err
-	}
-	usedConcurrency, concurrencyLimit, err := GetCodeProviderConcurrencyUsage(channel.Type, channel.Id, now)
-	if err != nil {
-		return false, err
-	}
-	if concurrencyLimit <= 0 {
-		return true, nil
-	}
-	if reservedConcurrency < 0 {
-		reservedConcurrency = 0
-	}
-	if reservedConcurrency > concurrencyLimit {
-		reservedConcurrency = concurrencyLimit
-	}
-	return usedConcurrency < concurrencyLimit-reservedConcurrency, nil
 }
 
 func CalculateOpencodeCostMicroUSD(usage *dto.Usage, now time.Time) (int64, error) {

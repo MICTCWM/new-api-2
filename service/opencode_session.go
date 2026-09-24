@@ -178,7 +178,7 @@ func resetOpencodeSessionStateForTest() error {
 // 不会在渠道确定前创建一个无法迁移的 session。
 func ResolveOpencodeSession(c *gin.Context, info *relaycommon.RelayInfo) string {
 	channelID := opencodeChannelID(c, info)
-	conversationKey := resolveOpencodeConversationKey(c, info, "")
+	conversationKey := resolveOpencodeConversationKey(c, info, info.GetUpstreamModelName())
 	if channelID <= 0 {
 		// 无渠道上下文：返回确定性的会话 ID，保证同一会话稳定且非空。
 		return deterministicOpencodeSession(conversationKey)
@@ -203,6 +203,11 @@ func ResolveOpencodeSession(c *gin.Context, info *relaycommon.RelayInfo) string 
 		previousChannelID = binding.ChannelID
 	}
 	session := newOpencodeSessionID()
+	// 分流换目标时旧渠道可能无法服务新模型，需要把绑定迁到新渠道，但必须复用
+	// 已有 session。无分流时换渠道仍新建：旧 session 在新上游账号上无效。
+	if found && binding.Session != "" && RequestModelSplitTarget(c) != "" {
+		session = binding.Session
+	}
 	binding = opencodeSessionBinding{ChannelID: channelID, Session: session}
 	if err := setOpencodeSessionBinding(key, binding); err != nil {
 		common.SysError(fmt.Sprintf("opencode session cache set failed: key=%s, err=%v", key, err))
@@ -359,17 +364,38 @@ func opencodeConversationKeyForModel(c *gin.Context, modelName string) string {
 	return resolveOpencodeConversationKey(c, nil, modelName)
 }
 
+// requestSessionIdentityModel 是会话/亲和身份用的模型名，通用亲和与 OpenCode
+// 会话共用。匹配（regex、候选、配额）用调用方传入的模型（分流后是 target）；
+// IncludeModelName 的 cache key 与 conversation identity 用用户原模型，避免分流拆粘性。
+// 永不把 ContextKeyModelSplitTarget 当身份。优先级：
+// original_model → info.OriginModelName → fallback → info.UpstreamModelName。
+func requestSessionIdentityModel(c *gin.Context, info *relaycommon.RelayInfo, fallback string) string {
+	if c != nil {
+		if original := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyOriginalModel)); original != "" {
+			return original
+		}
+	}
+	if info != nil {
+		if original := strings.TrimSpace(info.OriginModelName); original != "" {
+			return original
+		}
+	}
+	if trimmed := strings.TrimSpace(fallback); trimmed != "" {
+		return trimmed
+	}
+	if info != nil {
+		if upstream := strings.TrimSpace(info.GetUpstreamModelName()); upstream != "" {
+			return upstream
+		}
+	}
+	return ""
+}
+
 func opencodeIdentityScope(c *gin.Context, info *relaycommon.RelayInfo, modelName string) (tokenID, userID int, model string) {
-	model = strings.TrimSpace(modelName)
+	model = requestSessionIdentityModel(c, info, modelName)
 	if info != nil {
 		tokenID = info.TokenId
 		userID = info.UserId
-		if model == "" {
-			model = strings.TrimSpace(info.OriginModelName)
-		}
-		if model == "" && info.ChannelMeta != nil {
-			model = strings.TrimSpace(info.UpstreamModelName)
-		}
 	}
 	if c != nil {
 		if tokenID == 0 {
@@ -645,19 +671,29 @@ func SelectOpencodeSessionChannel(c *gin.Context, group, modelName, requestPath 
 		return nil, false, nil
 	}
 
+	// 会话身份必须用原模型，候选/配额继续用入参 modelName（分流目标）。
+	identityModel := requestSessionIdentityModel(c, nil, modelName)
+	conversationKey := opencodeConversationKeyForModel(c, identityModel)
+	sessionKey := opencodeSessionKey(conversationKey)
+	c.Set("opencode_session_model", identityModel)
+	c.Set("opencode_session_group", group)
+
 	if selectedID := rememberedOpencodeSessionChannelID(c); selectedID > 0 && !isOpencodeChannelAttempted(attempted, selectedID) {
+		var remembered *model.Channel
 		if channel := findOpencodeCandidate(allCandidates, selectedID); channel != nil {
-			return channel, false, nil
+			remembered = channel
+		} else if channel, channelErr := model.CacheGetChannel(selectedID); channelErr == nil && channel != nil && channel.Status == common.ChannelStatusEnabled && model.IsChannelEnabledForGroupModel(group, modelName, channel.Id) && model.ChannelSupportsRequestPath(channel, requestPath, modelName) {
+			remembered = channel
 		}
-		if channel, channelErr := model.CacheGetChannel(selectedID); channelErr == nil && channel != nil && channel.Status == common.ChannelStatusEnabled && model.IsChannelEnabledForGroupModel(group, modelName, channel.Id) && model.ChannelSupportsRequestPath(channel, requestPath, modelName) {
-			return channel, false, nil
+		if remembered != nil {
+			if binding, found, bindErr := getOpencodeSessionBinding(sessionKey); bindErr == nil && found {
+				_ = setOpencodeSessionBinding(sessionKey, binding)
+				_, _ = touchOpencodeActiveSession(remembered.Id, sessionKey, time.Now().Unix())
+			}
+			return remembered, false, nil
 		}
 	}
 
-	conversationKey := opencodeConversationKeyForModel(c, modelName)
-	sessionKey := opencodeSessionKey(conversationKey)
-	c.Set("opencode_session_model", modelName)
-	c.Set("opencode_session_group", group)
 	binding, found, err := getOpencodeSessionBinding(sessionKey)
 	if err != nil {
 		return nil, false, err
@@ -678,7 +714,7 @@ func SelectOpencodeSessionChannel(c *gin.Context, group, modelName, requestPath 
 			}
 		}
 		if original == nil {
-			if attemptedOriginal {
+			if attemptedOriginal || RequestModelSplitTarget(c) != "" {
 				if channel, ok, capacityErr := chooseOpencodeSessionCapacity(c, allCandidates, binding.ChannelID, sessionKey, binding, group, modelName, assign); capacityErr != nil {
 					return nil, false, capacityErr
 				} else if ok {
@@ -690,6 +726,7 @@ func SelectOpencodeSessionChannel(c *gin.Context, group, modelName, requestPath 
 			} else {
 				_, _ = getOpencodeSessionCache().DeleteMany([]string{sessionKey})
 				found = false
+				binding = opencodeSessionBinding{}
 			}
 		} else {
 			active, activeErr := isOpencodeActiveSession(original.Id, sessionKey, time.Now().Unix())
@@ -814,10 +851,11 @@ func chooseOpencodeSessionCapacity(c *gin.Context, candidates []*model.Channel, 
 		return channel, false, nil
 	}
 
-	newBinding := binding
-	if newBinding.Session == "" || newBinding.ChannelID != channel.Id {
-		newBinding = opencodeSessionBinding{ChannelID: channel.Id, Session: newOpencodeSessionID()}
+	session := binding.Session
+	if session == "" || (binding.ChannelID != channel.Id && RequestModelSplitTarget(c) == "") {
+		session = newOpencodeSessionID()
 	}
+	newBinding := opencodeSessionBinding{ChannelID: channel.Id, Session: session}
 	if err := setOpencodeSessionBinding(sessionKey, newBinding); err != nil {
 		return nil, false, err
 	}
@@ -921,9 +959,15 @@ func waitForOpencodeSessionCapacity(param *RetryParam, group string) (*model.Cha
 	}
 	param.Ctx.Set(ginKeyOpencodeSessionWaitDone, true)
 
+	lookupParam := retryParamForGroup(param, group)
+	lookupModel := param.ModelName
+	if lookupParam != nil {
+		lookupModel = lookupParam.ModelName
+	}
+
 	entry := &opencodeSessionWaitEntry{
 		ctx: param.Ctx,
-		key: opencodeSessionWaitKey{group: group, model: param.ModelName},
+		key: opencodeSessionWaitKey{group: group, model: lookupModel},
 	}
 	opencodeSessionWaitMu.Lock()
 	opencodeSessionWaitQueue = append(opencodeSessionWaitQueue, entry)
@@ -965,7 +1009,7 @@ func waitForOpencodeSessionCapacity(param *RetryParam, group string) (*model.Cha
 		opencodeSessionWaitMu.Unlock()
 
 		if timedOut || turn {
-			channel, queueRequired, err := SelectOpencodeSessionChannel(param.Ctx, group, param.ModelName, param.RequestPath, nil, param.AttemptedChannelIDs)
+			channel, queueRequired, err := SelectOpencodeSessionChannel(param.Ctx, group, lookupModel, param.RequestPath, nil, param.AttemptedChannelIDs)
 			if err != nil {
 				finish()
 				return nil, group, err
@@ -977,13 +1021,13 @@ func waitForOpencodeSessionCapacity(param *RetryParam, group string) (*model.Cha
 					result = "timeout_hard_fallback"
 				}
 				if loggedWaiting || result == "timeout_hard_fallback" {
-					recordOpencodeSessionQueueLog(param.Ctx, group, param.ModelName, result, int(time.Since(start).Seconds()))
+					recordOpencodeSessionQueueLog(param.Ctx, group, lookupModel, result, int(time.Since(start).Seconds()))
 				}
 				setOpencodeSessionQueueRequired(param.Ctx, false)
 				return channel, group, nil
 			}
 			if !loggedWaiting {
-				recordOpencodeSessionQueueLog(param.Ctx, group, param.ModelName, "waiting", 0)
+				recordOpencodeSessionQueueLog(param.Ctx, group, lookupModel, "waiting", 0)
 				loggedWaiting = true
 			}
 		}
@@ -1022,7 +1066,7 @@ func recordOpencodeSessionQueueLog(c *gin.Context, group, modelName, result stri
 	if c == nil {
 		return
 	}
-	conversationKey := opencodeConversationKeyForModel(c, modelName)
+	conversationKey := opencodeConversationKeyForModel(c, requestSessionIdentityModel(c, nil, modelName))
 	sessionKey := opencodeSessionKey(conversationKey)
 	sessionID := ""
 	channelID := 0

@@ -273,7 +273,10 @@ export async function fetchLogsByCategory(
 
   if (logCategory === 'session') {
     if (!isAdmin) {
-      return { success: true, data: { items: [], total: 0, page, page_size: pageSize } }
+      return {
+        success: true,
+        data: { items: [], total: 0, page, page_size: pageSize },
+      }
     }
     const params = buildApiParams({
       page,

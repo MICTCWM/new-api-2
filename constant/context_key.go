@@ -10,6 +10,9 @@ const (
 	ContextKeyOriginalModel    ContextKey = "original_model"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
 
+	ContextKeyModelSplitTarget      ContextKey = "model_split_target"
+	ContextKeyModelSplitReservation ContextKey = "model_split_reservation"
+
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"
 	ContextKeyTokenKey               ContextKey = "token_key"
