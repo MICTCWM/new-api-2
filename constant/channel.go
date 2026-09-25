@@ -64,7 +64,7 @@ const (
 
 )
 
-const OpencodeUpstreamExhaustedMessage = "上游已超额"
+const OpencodeUpstreamExhaustedMessage = "上游错误"
 
 // streamSupportedChannelTypes lists channel types whose relay path can
 // measure a streaming first response. Keep this capability in constant so
