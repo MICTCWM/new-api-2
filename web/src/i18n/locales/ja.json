@@ -2544,6 +2544,8 @@
     "Invalid status code rules: {{tokens}}": "無効なステータスコードルール：{{tokens}}",
     "Invalidate": "無効化",
     "Invalidated": "無効化済み",
+    "Invalidated session": "セッションを無効化しました",
+    "Invalidated session {{session_id}}": "セッションを無効化しました {{session_id}}",
     "Invert match": "一致を反転",
     "Invitation Code": "招待コード",
     "Invitation Quota": "招待クォータ",

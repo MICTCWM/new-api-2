@@ -131,6 +131,7 @@ export const SESSION_LOG_EVENT_FILTERS = [
   { value: 'move', label: 'Moved session' },
   { value: 'queue', label: 'Queued session' },
   { value: 'expire', label: 'Session expired' },
+  { value: 'invalidate', label: 'Invalidated session' },
 ] as const
 
 export const SESSION_EVENT_MAPPINGS: Record<string, StatusMapping> = {
@@ -139,6 +140,7 @@ export const SESSION_EVENT_MAPPINGS: Record<string, StatusMapping> = {
   move: { label: 'Moved session', variant: 'amber' },
   queue: { label: 'Queued session', variant: 'violet' },
   expire: { label: 'Session expired', variant: 'grey' },
+  invalidate: { label: 'Invalidated session', variant: 'red' },
 }
 
 /** Session log rows: 3px left stripe + subtle gradient wash (no solid row fill). */
@@ -151,6 +153,8 @@ export const SESSION_EVENT_ROW_TINTS: Record<string, string> = {
     'border-l-[3px] border-l-violet-600 dark:border-l-violet-400 bg-gradient-to-r from-violet-500/12 via-violet-500/5 to-transparent dark:from-violet-400/14 dark:via-violet-400/6 dark:to-transparent',
   expire:
     'border-l-[3px] border-l-slate-500 dark:border-l-slate-400 bg-gradient-to-r from-slate-500/10 via-slate-500/4 to-transparent dark:from-slate-400/12 dark:via-slate-400/5 dark:to-transparent',
+  invalidate:
+    'border-l-[3px] border-l-red-600 dark:border-l-red-400 bg-gradient-to-r from-red-500/12 via-red-500/5 to-transparent dark:from-red-400/14 dark:via-red-400/6 dark:to-transparent',
 }
 
 // ============================================================================

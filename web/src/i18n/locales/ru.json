@@ -2544,6 +2544,8 @@
     "Invalid status code rules: {{tokens}}": "Недопустимые правила кодов состояния: {{tokens}}",
     "Invalidate": "Аннулировать",
     "Invalidated": "Аннулирована",
+    "Invalidated session": "Сессия аннулирована",
+    "Invalidated session {{session_id}}": "Сессия аннулирована {{session_id}}",
     "Invert match": "Инвертировать совпадение",
     "Invitation Code": "Код приглашения",
     "Invitation Quota": "Квота приглашений",

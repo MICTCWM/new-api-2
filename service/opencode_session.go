@@ -45,11 +45,12 @@ var opencodeActiveWindowSeconds = 15
 var opencodeSessionQueueTimeout = opencodeSessionQueueTimeoutDefault
 
 const (
-	opencodeSessionEventCreate = "create"
-	opencodeSessionEventHit    = "hit"
-	opencodeSessionEventMove   = "move"
-	opencodeSessionEventQueue  = "queue"
-	opencodeSessionEventExpire = "expire"
+	opencodeSessionEventCreate     = "create"
+	opencodeSessionEventHit        = "hit"
+	opencodeSessionEventMove       = "move"
+	opencodeSessionEventQueue      = "queue"
+	opencodeSessionEventExpire     = "expire"
+	opencodeSessionEventInvalidate = "invalidate"
 )
 
 type opencodeSessionBinding struct {
@@ -222,6 +223,58 @@ func ResolveOpencodeSession(c *gin.Context, info *relaycommon.RelayInfo) string 
 	}
 	markOpencodeSessionAffinity(c, channelID, session, false, event)
 	return session
+}
+
+// InvalidateOpencodeSessionBinding 作废当前会话在失败渠道上的绑定。
+// code provider 上游出错要转移到别的渠道时调用：清掉绑定后，下一轮
+// ResolveOpencodeSession 找不到旧绑定，会为新渠道新建会话 ID，避免把失败渠道的
+// 旧 session 带到新渠道造成冲突。幂等：无绑定或身份不可用时直接返回。
+//
+// 只作废「当前请求渠道」持有的绑定：当本轮请求未走到 ResolveOpencodeSession
+// （例如 adaptor 早失败）时，缓存里的绑定可能属于其它健康渠道，误删会破坏其会话粘性。
+// 若当前渠道 ID 取不到（<=0），无法判定归属，采取更保守的策略：直接返回、不作废，
+// 宁可不清理也不误伤其它渠道的绑定。
+func InvalidateOpencodeSessionBinding(c *gin.Context, info *relaycommon.RelayInfo) {
+	if c == nil {
+		return
+	}
+	currentChannelID := opencodeChannelID(c, info)
+	if currentChannelID <= 0 {
+		return
+	}
+	conversationKey := resolveOpencodeConversationKey(c, info, info.GetUpstreamModelName())
+	if conversationKey == "" {
+		return
+	}
+	key := opencodeSessionKey(conversationKey)
+	binding, found, err := getOpencodeSessionBinding(key)
+	if err != nil {
+		common.SysError(fmt.Sprintf("opencode session cache get failed: key=%s, err=%v", key, err))
+	}
+	if !found {
+		return
+	}
+	// 绑定归属其它渠道：不受本次失败影响，保持原样返回。
+	if binding.ChannelID != currentChannelID {
+		return
+	}
+	if _, err := getOpencodeSessionCache().DeleteMany([]string{key}); err != nil {
+		common.SysError(fmt.Sprintf("opencode session cache delete failed: key=%s, err=%v", key, err))
+	}
+	opencodeKnownMu.Lock()
+	delete(opencodeKnownSessions, key)
+	opencodeKnownMu.Unlock()
+	if _, err := releaseOpencodeActiveSession(binding.ChannelID, key, time.Now().Unix()); err != nil {
+		common.SysError(fmt.Sprintf("opencode session release failed: key=%s, err=%v", key, err))
+	}
+	markOpencodeSessionAffinity(c, binding.ChannelID, binding.Session, false, opencodeSessionEventInvalidate)
+	model.RecordOpencodeSessionLog(model.OpencodeSessionLogParams{
+		UserID:          common.GetContextKeyInt(c, constant.ContextKeyUserId),
+		Event:           opencodeSessionEventInvalidate,
+		SessionID:       binding.Session,
+		ConversationKey: key,
+		ChannelID:       binding.ChannelID,
+	})
 }
 
 func opencodeSessionKey(conversationKey string) string {

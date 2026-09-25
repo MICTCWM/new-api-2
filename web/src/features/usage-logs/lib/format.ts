@@ -429,6 +429,7 @@ const AUDIT_TEMPLATES: Record<string, string> = {
     'Moved session from channel {{from_channel_id}} to {{to_channel_id}}',
   'opencode.session.queue': 'Queued session ({{result}})',
   'opencode.session.expire': 'Session expired',
+  'opencode.session.invalidate': 'Invalidated session {{session_id}}',
   // User management
   'user.create': 'Created user {{username}} (role {{role}})',
   'user.update': 'Updated user {{username}} (ID: {{id}})',

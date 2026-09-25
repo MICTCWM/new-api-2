@@ -2544,6 +2544,8 @@
     "Invalid status code rules: {{tokens}}": "Quy tắc mã trạng thái không hợp lệ: {{tokens}}",
     "Invalidate": "Vô hiệu hóa",
     "Invalidated": "Đã vô hiệu",
+    "Invalidated session": "Đã vô hiệu hóa phiên",
+    "Invalidated session {{session_id}}": "Đã vô hiệu hóa phiên {{session_id}}",
     "Invert match": "Đảo điều kiện khớp",
     "Invitation Code": "Mã mời",
     "Invitation Quota": "Hạn mức lời mời",

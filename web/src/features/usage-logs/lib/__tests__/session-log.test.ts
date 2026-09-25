@@ -94,6 +94,20 @@ describe('opencode session usage log rendering', () => {
     expect(rendered).toBe('Session expired')
   })
 
+  test('localizes an invalidate event with its session id', () => {
+    const rendered = renderAuditContent(
+      {
+        op: {
+          action: 'opencode.session.invalidate',
+          params: { session_id: 'invalidated-session', channel_id: 5 },
+        },
+      },
+      interpolate
+    )
+
+    expect(rendered).toBe('Invalidated session invalidated-session')
+  })
+
   test('keeps Session logs on the dedicated page instead of common type filters', () => {
     expect(LOG_TYPE_FILTERS.map((type) => type.value)).not.toContain(
       String(LOG_TYPE_ENUM.SESSION)
@@ -132,6 +146,7 @@ describe('opencode session usage log rendering', () => {
     expect(sessionEventMapper.getVariant('move')).toBe('amber')
     expect(sessionEventMapper.getVariant('queue')).toBe('violet')
     expect(sessionEventMapper.getVariant('expire')).toBe('grey')
+    expect(sessionEventMapper.getVariant('invalidate')).toBe('red')
   })
 
   test('tints session rows with gradient wash and left stripe per event', () => {
@@ -160,6 +175,11 @@ describe('opencode session usage log rendering', () => {
         op: { action: 'opencode.session.expire' },
       })
     ).toContain('border-l-slate-500')
+    expect(
+      getSessionEventRowClass({
+        op: { action: 'opencode.session.invalidate' },
+      })
+    ).toContain('border-l-red-600')
     expect(getSessionEventRowClass(null)).toBe('')
   })
 })

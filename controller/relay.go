@@ -363,18 +363,25 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		isCodeProviderChannel := channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand
 		if retryParam.OpencodePool && service.GetCurrentChannelAffinitySelection(c) == channel.Id {
 			// A failed code-provider affinity must not be reused on the next
 			// attempt. Keep the existing attempted-channel filter so retrying
 			// still follows the normal multi-channel chain.
 			service.ClearCurrentChannelAffinityCache(c)
 		}
+		if isCodeProviderChannel {
+			// code provider 的任何上游错误都会触发转移；这里作废失败渠道的会话绑定，
+			// 使下一轮为新渠道新建会话 ID，而不是把失败渠道的旧 session 带过去造成冲突。
+			// 权衡：瞬时错误（如一次超时）也会丢弃会话粘性，但换渠道后不复用失败会话、
+			// 且下次不会再命中该失败渠道，优先级高于粘性收益，故保持「失败即作废」。
+			service.InvalidateOpencodeSessionBinding(c, relayInfo)
+		}
 
 		// ── 兜底序列（Fallback Sequence）失败路由 ──
 		// 仅当尚未启动兜底、且当前失败渠道非 Opencode/Command（不干扰 code-provider 流程）
 		// 并配置了兜底序列时，记录主渠道首个错误并启动兜底。FallbackStarted 启动后即置位，
 		// 兜底渠道自身失败不会再递归触发其自身兜底序列（防无限套娃）。
-		isCodeProviderChannel := channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand
 		if !retryParam.FallbackStarted && !isCodeProviderChannel {
 			fallbackIDs := channel.GetFallbackSequenceIDs()
 			if len(fallbackIDs) > 0 {
@@ -601,6 +608,22 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	isCodeProviderChannel := channelType == constant.ChannelTypeOpencode || channelType == constant.ChannelTypeCommand
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) && !isCodeProviderChannel {
 		return false
+	}
+	// code provider（Opencode / Command）上游返回任何错误都要转移，不再按错误码或
+	// 错误类型过滤；仅保留重试次数与 specific_channel_id 护栏。失败渠道的会话绑定
+	// 由失败分支作废，下一轮会为新渠道新建会话 ID，避免复用失败渠道的 session 造成冲突。
+	if isCodeProviderChannel {
+		if retryTimes <= 0 {
+			return false
+		}
+		if _, ok := c.Get("specific_channel_id"); ok {
+			return false
+		}
+		// 客户端已取消或上下文结束时再换渠道毫无意义，只会白试到重试上限。
+		if c.Request != nil && c.Request.Context().Err() != nil {
+			return false
+		}
+		return true
 	}
 	if types.IsChannelError(openaiErr) {
 		return true

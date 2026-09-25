@@ -2544,6 +2544,8 @@
     "Invalid status code rules: {{tokens}}": "Invalid status code rules: {{tokens}}",
     "Invalidate": "Invalidate",
     "Invalidated": "Invalidated",
+    "Invalidated session": "Invalidated session",
+    "Invalidated session {{session_id}}": "Invalidated session {{session_id}}",
     "Invert match": "Invert match",
     "Invitation Code": "Invitation Code",
     "Invitation Quota": "Invitation Quota",

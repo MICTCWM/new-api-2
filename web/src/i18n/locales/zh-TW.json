@@ -2544,6 +2544,8 @@
     "Invalid status code rules: {{tokens}}": "無效的狀態碼規則：{{tokens}}",
     "Invalidate": "作廢",
     "Invalidated": "已作廢",
+    "Invalidated session": "已作廢會話",
+    "Invalidated session {{session_id}}": "已作廢會話 {{session_id}}",
     "Invert match": "反向匹配",
     "Invitation Code": "邀請碼",
     "Invitation Quota": "邀請額度",
