@@ -92,6 +92,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
+			// 最终返回给下游的错误必须落使用日志，不依赖 ERROR_LOG_ENABLED。
+			recordFinalRelayErrorLog(c, newAPIError)
 			if newAPIError.Error() == constant.OpencodeUpstreamExhaustedMessage {
 				// Keep the public exhaustion message exact; request IDs remain in logs.
 				newAPIError.SetMessage(constant.OpencodeUpstreamExhaustedMessage)
@@ -217,7 +219,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			retryParam.IncreaseRetry()
 		}
 		if retryParam.OpencodePool && opencodeAttempts >= 4 {
-			newAPIError = types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			// 耗尽仍掩盖为「上游错误」，但 400 保留真实原因（如 context length）。
+			newAPIError = maskOpencodeExhaustedError(relayInfo.LastError)
 			break
 		}
 		relayInfo.RetryIndex = retryParam.GetRetry()
@@ -234,7 +237,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				break
 			}
 			if retryParam.OpencodePool {
-				newAPIError = types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+				newAPIError = maskOpencodeExhaustedError(relayInfo.LastError)
 			} else {
 				logger.LogError(c, channelErr.Error())
 				newAPIError = channelErr
@@ -398,7 +401,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if retryParam.OpencodePool && opencodeAttempts >= 4 {
-			newAPIError = types.NewErrorWithStatusCode(errors.New(constant.OpencodeUpstreamExhaustedMessage), types.ErrorCodeDoRequestFailed, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			newAPIError = maskOpencodeExhaustedError(newAPIError)
 			break
 		}
 		if !shouldRetry(c, newAPIError, maxAttempts-attempt-1) {
@@ -609,9 +612,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) && !isCodeProviderChannel {
 		return false
 	}
-	// code provider（Opencode / Command）上游返回任何错误都要转移，不再按错误码或
-	// 错误类型过滤；仅保留重试次数与 specific_channel_id 护栏。失败渠道的会话绑定
-	// 由失败分支作废，下一轮会为新渠道新建会话 ID，避免复用失败渠道的 session 造成冲突。
+	// code provider（Opencode / Command）上游错误默认转移；400 是客户端请求问题
+	// （如 context length），换渠道无法修复，立即停止并原样返回。其它护栏：重试次数、
+	// specific_channel_id、客户端已取消。失败渠道的会话绑定由失败分支作废。
 	if isCodeProviderChannel {
 		if retryTimes <= 0 {
 			return false
@@ -619,8 +622,10 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		if _, ok := c.Get("specific_channel_id"); ok {
 			return false
 		}
-		// 客户端已取消或上下文结束时再换渠道毫无意义，只会白试到重试上限。
 		if c.Request != nil && c.Request.Context().Err() != nil {
+			return false
+		}
+		if openaiErr.StatusCode == http.StatusBadRequest {
 			return false
 		}
 		return true
@@ -650,6 +655,70 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
+// maskOpencodeExhaustedError 在 code-provider 重试耗尽时掩盖为「上游错误」。
+// 400 是客户端请求错误（如 context length），原样返回，不掩盖。
+func maskOpencodeExhaustedError(last *types.NewAPIError) *types.NewAPIError {
+	if last != nil && last.StatusCode == http.StatusBadRequest {
+		return last
+	}
+	return types.NewErrorWithStatusCode(
+		errors.New(constant.OpencodeUpstreamExhaustedMessage),
+		types.ErrorCodeDoRequestFailed,
+		http.StatusBadGateway,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
+const relayFinalErrorLogWrittenKey = "relay_final_error_log_written"
+
+// recordFinalRelayErrorLog 将最终返回给下游的错误写入使用日志（type=5），
+// 不依赖 ERROR_LOG_ENABLED，避免下游已收到错误但后台排查不到。
+func recordFinalRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
+	if c == nil || err == nil || !types.IsRecordErrorLog(err) {
+		return
+	}
+	if c.GetBool(relayFinalErrorLogWrittenKey) {
+		return
+	}
+	c.Set(relayFinalErrorLogWrittenKey, true)
+	writeRelayErrorLog(c, err)
+}
+
+func writeRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
+	userId := c.GetInt("id")
+	tokenName := c.GetString("token_name")
+	modelName := c.GetString("original_model")
+	tokenId := c.GetInt("token_id")
+	userGroup := c.GetString("group")
+	channelId := c.GetInt("channel_id")
+	other := make(map[string]interface{})
+	if c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	other["error_type"] = err.GetErrorType()
+	other["error_code"] = err.GetErrorCode()
+	other["status_code"] = err.StatusCode
+	other["channel_id"] = channelId
+	other["channel_name"] = c.GetString("channel_name")
+	other["channel_type"] = c.GetInt("channel_type")
+	adminInfo := make(map[string]interface{})
+	adminInfo["use_channel"] = c.GetStringSlice("use_channel")
+	isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
+	if isMultiKey {
+		adminInfo["is_multi_key"] = true
+		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+	}
+	service.AppendChannelRetryAdminInfo(c, adminInfo)
+	service.AppendChannelAffinityAdminInfo(c, adminInfo)
+	other["admin_info"] = adminInfo
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	useTimeSeconds := int(time.Since(startTime).Seconds())
+	model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+}
+
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	service.RecordChannelRetryFailure(c, channelError.ChannelId, channelError.ChannelName, channelError.ChannelType, err)
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
@@ -662,39 +731,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	}
 
 	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
-		// 保存错误日志到mysql中
-		userId := c.GetInt("id")
-		tokenName := c.GetString("token_name")
-		modelName := c.GetString("original_model")
-		tokenId := c.GetInt("token_id")
-		userGroup := c.GetString("group")
-		channelId := c.GetInt("channel_id")
-		other := make(map[string]interface{})
-		if c.Request != nil && c.Request.URL != nil {
-			other["request_path"] = c.Request.URL.Path
-		}
-		other["error_type"] = err.GetErrorType()
-		other["error_code"] = err.GetErrorCode()
-		other["status_code"] = err.StatusCode
-		other["channel_id"] = channelId
-		other["channel_name"] = c.GetString("channel_name")
-		other["channel_type"] = c.GetInt("channel_type")
-		adminInfo := make(map[string]interface{})
-		adminInfo["use_channel"] = c.GetStringSlice("use_channel")
-		isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
-		if isMultiKey {
-			adminInfo["is_multi_key"] = true
-			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
-		}
-		service.AppendChannelRetryAdminInfo(c, adminInfo)
-		service.AppendChannelAffinityAdminInfo(c, adminInfo)
-		other["admin_info"] = adminInfo
-		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
-		if startTime.IsZero() {
-			startTime = time.Now()
-		}
-		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+		writeRelayErrorLog(c, err)
 	}
 
 }

@@ -22,6 +22,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func stripUnsupportedMessageNames(request *dto.GeneralOpenAIRequest) {
+	if request == nil {
+		return
+	}
+	for i := range request.Messages {
+		// Some Chat Completions endpoints reject the optional message name
+		// field altogether. Tool calls keep their names in function.name.
+		request.Messages[i].Name = nil
+	}
+}
+
 func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 
@@ -111,6 +122,10 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
+
+		if request, ok := convertedRequest.(*dto.GeneralOpenAIRequest); ok {
+			stripUnsupportedMessageNames(request)
+		}
 
 		if info.ChannelSetting.SystemPrompt != "" {
 			// 如果有系统提示，则将其添加到请求中

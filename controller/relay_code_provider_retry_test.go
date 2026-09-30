@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -33,8 +34,8 @@ func newUpstreamRetryError(code types.ErrorCode, status int, ops ...types.NewAPI
 	return types.NewErrorWithStatusCode(errors.New("upstream failure"), code, status, ops...)
 }
 
-// code provider（Opencode / Command）对上游的任何错误都要转移，不再按错误码过滤，
-// 只保留重试次数、specific_channel_id 与客户端已取消三个护栏。
+// code provider（Opencode / Command）上游错误默认转移；400 是客户端请求问题不转移。
+// 护栏：重试次数、specific_channel_id、客户端已取消。
 func TestShouldRetry_CodeProviderTransfersEveryError(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -45,11 +46,11 @@ func TestShouldRetry_CodeProviderTransfersEveryError(t *testing.T) {
 		want            bool
 	}{
 		{
-			name:        "command 400 transfers",
+			name:        "command 400 does not transfer",
 			channelType: constant.ChannelTypeCommand,
 			err:         newUpstreamRetryError(types.ErrorCodeDoRequestFailed, 400),
 			retryTimes:  1,
-			want:        true,
+			want:        false,
 		},
 		{
 			name:        "opencode 408 transfers",
@@ -138,6 +139,30 @@ func TestShouldRetry_CodeProviderTransfersEveryError(t *testing.T) {
 			assert.Equal(t, tt.want, shouldRetry(ctx, tt.err, tt.retryTimes))
 		})
 	}
+}
+
+func TestMaskOpencodeExhaustedError(t *testing.T) {
+	t.Run("keeps 400 real error", func(t *testing.T) {
+		last := newUpstreamRetryError(types.ErrorCodeDoRequestFailed, 400)
+		last.SetMessage("context length exceeded")
+		got := maskOpencodeExhaustedError(last)
+		require.Same(t, last, got)
+		assert.Equal(t, 400, got.StatusCode)
+		assert.Contains(t, got.Error(), "context length exceeded")
+	})
+	t.Run("masks non-400 as upstream exhausted", func(t *testing.T) {
+		last := newUpstreamRetryError(types.ErrorCodeDoRequestFailed, 500)
+		got := maskOpencodeExhaustedError(last)
+		require.NotNil(t, got)
+		assert.NotSame(t, last, got)
+		assert.Equal(t, http.StatusBadGateway, got.StatusCode)
+		assert.Equal(t, constant.OpencodeUpstreamExhaustedMessage, got.Error())
+	})
+	t.Run("nil last becomes upstream exhausted", func(t *testing.T) {
+		got := maskOpencodeExhaustedError(nil)
+		require.NotNil(t, got)
+		assert.Equal(t, constant.OpencodeUpstreamExhaustedMessage, got.Error())
+	})
 }
 
 // 客户端已取消或上下文结束时换渠道毫无意义，code provider 也必须停止重试。

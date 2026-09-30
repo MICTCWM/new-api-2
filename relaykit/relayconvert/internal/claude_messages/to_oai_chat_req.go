@@ -174,13 +174,8 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 					}
 					toolCalls = append(toolCalls, toolCall)
 				case "tool_result":
-					toolName := mediaMsg.Name
-					if toolName == "" {
-						toolName = claudeRequest.SearchToolNameByToolCallId(mediaMsg.ToolUseId)
-					}
 					oaiToolMessage := dto.Message{
 						Role:       "tool",
-						Name:       &toolName,
 						ToolCallId: mediaMsg.ToolUseId,
 					}
 					if mediaMsg.IsStringContent() {
