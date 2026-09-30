@@ -225,57 +225,39 @@ func TestValidateCommandChannelAllowsModelMappingSources(t *testing.T) {
 	assert.Equal(t, "deepseek/deepseek-v4-flash,client-model", channel.Models)
 }
 
-func TestValidateCommandChannelAllowsOptionalProModel(t *testing.T) {
-	channel := &model.Channel{
-		Type:   constant.ChannelTypeCommand,
-		Key:    "command-key",
-		Models: command.Model + "," + command.ProModel,
+func TestValidateCommandChannelModelCombinations(t *testing.T) {
+	tests := []struct {
+		name    string
+		models  string
+		wantErr string
+	}{
+		{name: "v4 flash only", models: command.Model},
+		{name: "v41 flash only", models: command.V41Model},
+		{name: "v4 flash with pro", models: command.Model + "," + command.ProModel},
+		{name: "v41 flash with v4 flash", models: command.V41Model + "," + command.Model},
+		{name: "v41 flash with pro", models: command.V41Model + "," + command.ProModel},
+		{name: "v4 flash with pro and v41 flash", models: command.Model + "," + command.ProModel + "," + command.V41Model},
+		{name: "pro only", models: command.ProModel, wantErr: "must include the fixed model"},
+		{name: "unknown model only", models: "unknown-model", wantErr: "only supports Flash, Pro, V4.1 Flash"},
 	}
 
-	require.NoError(t, validateChannel(channel, true))
-	assert.Equal(t, command.Model+","+command.ProModel, channel.Models)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := &model.Channel{
+				Type:   constant.ChannelTypeCommand,
+				Key:    "command-key",
+				Models: tt.models,
+			}
 
-func TestValidateCommandChannelRejectsProOnlyConfiguration(t *testing.T) {
-	channel := &model.Channel{
-		Type:   constant.ChannelTypeCommand,
-		Key:    "command-key",
-		Models: command.ProModel,
+			err := validateChannel(channel, true)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.models, channel.Models)
+		})
 	}
-
-	require.ErrorContains(t, validateChannel(channel, true), "must include the fixed model")
-}
-
-func TestValidateCommandChannelAllowsV41WithPro(t *testing.T) {
-	channel := &model.Channel{
-		Type:   constant.ChannelTypeCommand,
-		Key:    "command-key",
-		Models: command.V41Model + "," + command.ProModel,
-	}
-
-	require.NoError(t, validateChannel(channel, true))
-	assert.Equal(t, command.V41Model+","+command.ProModel, channel.Models)
-}
-
-func TestValidateCommandChannelAllowsV41WithProAndFlash(t *testing.T) {
-	channel := &model.Channel{
-		Type:   constant.ChannelTypeCommand,
-		Key:    "command-key",
-		Models: command.Model + "," + command.ProModel + "," + command.V41Model,
-	}
-
-	require.NoError(t, validateChannel(channel, true))
-	assert.Equal(t, command.Model+","+command.ProModel+","+command.V41Model, channel.Models)
-}
-
-func TestValidateCommandChannelRequiresProWithV41(t *testing.T) {
-	channel := &model.Channel{
-		Type:   constant.ChannelTypeCommand,
-		Key:    "command-key",
-		Models: command.V41Model,
-	}
-
-	require.ErrorContains(t, validateChannel(channel, true), command.ProModel)
 }
 
 func TestValidateCommandChannelRequiresFixedModelWithMappingSources(t *testing.T) {

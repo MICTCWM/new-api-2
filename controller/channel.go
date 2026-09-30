@@ -865,27 +865,21 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			}
 			return fmt.Errorf("%s must include deepseek-v4-flash or glm-5.3-flash", keyName)
 		}
-		// Command 需要至少一个固定基础模型（Flash 或 V4.1 Flash）；
-		// V4.1 Flash 与 Pro 绑定启用，二者共同覆盖原 Flash 主模型要求。
+		// Command 需要至少一个固定基础模型（Flash 或 V4.1 Flash），
+		// Pro 为可选附加模型，不再与 V4.1 Flash 强制绑定。
 		if channel.Type == constant.ChannelTypeCommand {
 			hasFlash := false
 			hasV41 := false
-			hasPro := false
 			for _, configuredModel := range validModels {
 				switch configuredModel {
 				case modelName:
 					hasFlash = true
 				case command.V41Model:
 					hasV41 = true
-				case command.ProModel:
-					hasPro = true
 				}
 			}
 			if !hasFlash && !hasV41 {
 				return fmt.Errorf("%s must include the fixed model %s or %s", keyName, modelName, command.V41Model)
-			}
-			if hasV41 && !hasPro {
-				return fmt.Errorf("%s requires %s when %s is enabled", keyName, command.ProModel, command.V41Model)
 			}
 		}
 		channel.Models = strings.Join(validModels, ",")

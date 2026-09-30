@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { CHANNEL_TYPE_COMMAND, CHANNEL_TYPE_OPENCODE } from '../../constants'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
+  channelFormSchema,
   transformChannelToFormDefaults,
   transformFormDataToUpdatePayload,
 } from '../channel-form'
@@ -202,5 +203,68 @@ describe('transformFormDataToUpdatePayload', () => {
     const formData = transformChannelToFormDefaults(channel)
 
     expect(formData.station_cache_enabled).toBe(true)
+  })
+})
+
+describe('Command model combinations', () => {
+  const commandModels = {
+    v4Flash: 'deepseek/deepseek-v4-flash',
+    v4Pro: 'deepseek/deepseek-v4-pro',
+    v41Flash: 'deepseek/deepseek-v4.1-flash',
+  }
+
+  it.each([
+    {
+      name: 'v4.1 flash with v4 flash',
+      models: `${commandModels.v4Flash},${commandModels.v41Flash}`,
+    },
+    {
+      name: 'v4 flash with pro',
+      models: `${commandModels.v4Flash},${commandModels.v4Pro}`,
+    },
+    { name: 'v4 flash only', models: commandModels.v4Flash },
+    { name: 'v4.1 flash only', models: commandModels.v41Flash },
+    {
+      name: 'v4.1 flash with pro',
+      models: `${commandModels.v41Flash},${commandModels.v4Pro}`,
+    },
+  ])('accepts $name and keeps it unchanged', ({ models }) => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      type: CHANNEL_TYPE_COMMAND,
+      models,
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+
+    expect(payload.models).toBe(models)
+  })
+
+  it('rejects a pro-only Command channel', () => {
+    const result = channelFormSchema.safeParse({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'command',
+      type: CHANNEL_TYPE_COMMAND,
+      models: commandModels.v4Pro,
+    })
+
+    expect(result.success).toBe(false)
+    const modelsIssue = result.success
+      ? undefined
+      : result.error.issues.find((issue) => issue.path[0] === 'models')
+    expect(modelsIssue?.message).toBe(
+      'Command must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash'
+    )
+  })
+
+  it('accepts v4.1 flash on its own without forcing pro', () => {
+    const result = channelFormSchema.safeParse({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'command',
+      type: CHANNEL_TYPE_COMMAND,
+      models: commandModels.v41Flash,
+    })
+
+    expect(result.success).toBe(true)
   })
 })

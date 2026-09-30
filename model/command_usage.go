@@ -155,7 +155,7 @@ func commandChannelServesModel(channel *Channel, targetModel string) bool {
 }
 
 // commandChannelUsesSplitPools 报告渠道是否启用模型分池：渠道可以服务
-// v4-pro 或 v4.1-flash（两者绑定出现）时，按模型拆分额度池。
+// v4-pro 或 v4.1-flash（可独立启用，也可与 v4-flash 组合）时，按模型拆分额度池。
 func commandChannelUsesSplitPools(channel *Channel) bool {
 	if channel == nil || channel.Type != constant.ChannelTypeCommand {
 		return false

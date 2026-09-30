@@ -22,7 +22,6 @@ import {
   CHANNEL_TYPE_COMMAND,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_STATUS,
-  COMMAND_MODEL_BINDING,
   getFixedCodeChannelModels,
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   ERROR_MESSAGES,
@@ -78,16 +77,9 @@ function fixedCodeChannelModels(
     allowedModels.has(model)
   )
   if (type === CHANNEL_TYPE_COMMAND) {
-    // v4.1-flash 与 v4-pro 绑定启用；v4-flash 可自由保留或移除，
+    // v4-pro 为可选附加模型；v4-flash 与 v4.1-flash 均可自由保留或移除，
     // 只要渠道至少包含 Flash 或 V4.1 Flash 之一。
     const result = [...selectedModels]
-    for (const model of result) {
-      for (const required of COMMAND_MODEL_BINDING[model] ?? []) {
-        if (!result.includes(required)) {
-          result.push(required)
-        }
-      }
-    }
     const hasPrimary =
       result.includes(fixedModel) ||
       result.includes('deepseek/deepseek-v4.1-flash')
@@ -421,32 +413,29 @@ export const channelFormSchema = z
       if (invalidModels.length > 0) {
         addRequiredIssue(ctx, 'models', fixedModelError)
       }
-      const hasNativeModel = configuredModels.some((model) =>
-        (getFixedCodeChannelModels(data.type) as readonly string[]).includes(
-          model
-        )
-      )
-      if (!hasNativeModel) {
-        addRequiredIssue(
-          ctx,
-          'models',
-          data.type === CHANNEL_TYPE_COMMAND
-            ? 'Command must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash'
-            : 'Opencode must include deepseek-v4-flash or glm-5.3-flash'
-        )
-      }
       if (data.type === CHANNEL_TYPE_COMMAND) {
-        // v4.1-flash 与 v4-pro 绑定：选中 4.1 必须同时启用 Pro。
-        const missingBinding = configuredModels.some((model) =>
-          (COMMAND_MODEL_BINDING[model] ?? []).some(
-            (required) => !configuredModels.includes(required)
-          )
-        )
-        if (missingBinding) {
+        // Command 必须包含 Flash 或 V4.1 Flash 之一；Pro 为可选附加模型。
+        const hasPrimaryModel =
+          configuredModels.includes(getFixedCodeChannelModel(data.type)) ||
+          configuredModels.includes('deepseek/deepseek-v4.1-flash')
+        if (!hasPrimaryModel) {
           addRequiredIssue(
             ctx,
             'models',
-            'deepseek/deepseek-v4.1-flash requires deepseek/deepseek-v4-pro to be enabled'
+            'Command must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash'
+          )
+        }
+      } else {
+        const hasNativeModel = configuredModels.some((model) =>
+          (getFixedCodeChannelModels(data.type) as readonly string[]).includes(
+            model
+          )
+        )
+        if (!hasNativeModel) {
+          addRequiredIssue(
+            ctx,
+            'models',
+            'Opencode must include deepseek-v4-flash or glm-5.3-flash'
           )
         }
       }

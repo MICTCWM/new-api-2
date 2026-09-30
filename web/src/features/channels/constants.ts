@@ -50,12 +50,6 @@ export const COMMAND_NATIVE_MODELS = [
   'deepseek/deepseek-v4.1-flash',
 ] as const
 
-// Command 渠道模型绑定：选择 deepseek/deepseek-v4.1-flash 时必须同时
-// 启用 deepseek/deepseek-v4-pro（4.1 池与 4p 池成对出现）。
-export const COMMAND_MODEL_BINDING: Record<string, readonly string[]> = {
-  'deepseek/deepseek-v4.1-flash': ['deepseek/deepseek-v4-pro'],
-}
-
 export function getFixedCodeChannelModel(type: number): string {
   return (
     FIXED_CODE_CHANNEL_MODELS[type] ||
@@ -489,7 +483,7 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {
   61: 'Opencode uses a fixed endpoint and supports deepseek-v4-flash and glm-5.3-flash. Batch mode creates one channel per API key.',
-  62: 'Command uses a fixed endpoint and supports deepseek/deepseek-v4-flash, deepseek/deepseek-v4-pro, and deepseek/deepseek-v4.1-flash. Selecting v4.1-flash also enables v4-pro. Batch mode creates one channel per API key.',
+  62: 'Command uses a fixed endpoint and supports deepseek/deepseek-v4-flash, deepseek/deepseek-v4.1-flash, and the optional deepseek/deepseek-v4-pro. The channel must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash. Batch mode creates one channel per API key.',
   3: 'For channels added after May 10, 2025, no need to remove "." from model names during deployment',
   8: 'If connecting to upstream One API or New API relay projects, use OpenAI type instead unless you know what you are doing',
   37: 'Dify channels only support chatflow and agent, and agent does not support images',
