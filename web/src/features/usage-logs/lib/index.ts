@@ -26,7 +26,6 @@ export {
   getSessionEventToken,
   getSessionEventRowClass,
   getTimeColor,
-  formatModelName,
   formatDuration,
   getParamOverrideActionLabel,
   parseAuditLine,

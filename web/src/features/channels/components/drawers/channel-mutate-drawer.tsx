@@ -831,6 +831,12 @@ export function ChannelMutateDrawer({
     'disable_task_polling_sleep'
   )
   const currentStationCacheEnabled = form.watch('station_cache_enabled')
+  const currentVideoFrameExtractionEnabled = form.watch(
+    'video_frame_extraction_enabled'
+  )
+  const currentDisableProtocolConversion = form.watch(
+    'disable_protocol_conversion'
+  )
   const currentSpeedProtectionEnabled = form.watch('speed_protection_enabled')
   const currentSpeedProtectionGroups = form.watch('speed_protection_groups')
   const currentChannelConcurrencyLimit = form.watch('channel_concurrency_limit')
@@ -1121,6 +1127,8 @@ export function ChannelMutateDrawer({
     currentPassThroughBodyEnabled ||
     currentDisableTaskPollingSleep ||
     currentStationCacheEnabled ||
+    currentVideoFrameExtractionEnabled ||
+    currentDisableProtocolConversion ||
     currentSpeedProtectionEnabled ||
     (currentSpeedProtectionGroups?.length ?? 0) > 0 ||
     (currentChannelConcurrencyLimit ?? 0) > 0 ||
@@ -1650,8 +1658,8 @@ export function ChannelMutateDrawer({
       toast.info(
         t(
           currentType === CHANNEL_TYPE_COMMAND
-            ? 'This channel supports Flash, Pro, V4.1 Flash, and model mapping source models'
-            : 'Opencode supports the fixed model and model mapping source models'
+            ? 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
+            : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
         )
       )
       return
@@ -1671,8 +1679,8 @@ export function ChannelMutateDrawer({
       toast.info(
         t(
           currentType === CHANNEL_TYPE_COMMAND
-            ? 'This channel supports Flash, Pro, V4.1 Flash, and model mapping source models'
-            : 'Opencode supports the fixed model and model mapping source models'
+            ? 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
+            : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
         )
       )
       return
@@ -1693,8 +1701,8 @@ export function ChannelMutateDrawer({
       toast.info(
         t(
           currentType === CHANNEL_TYPE_COMMAND
-            ? 'This channel supports Flash, Pro, V4.1 Flash, and model mapping source models'
-            : 'Opencode supports the fixed model and model mapping source models'
+            ? 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
+            : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
         )
       )
       return
@@ -3010,7 +3018,7 @@ export function ChannelMutateDrawer({
                                   {t(
                                     currentType === CHANNEL_TYPE_COMMAND
                                       ? 'Fixed endpoint: https://api.commandcode.ai/provider/v1. Supports deepseek/deepseek-v4-flash, deepseek/deepseek-v4-pro, and deepseek/deepseek-v4.1-flash.'
-                                      : 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and glm-5.3-flash.'
+                                      : 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, and deepseek-v4-pro.'
                                   )}
                                 </AlertDescription>
                               </Alert>
@@ -4698,6 +4706,56 @@ export function ChannelMutateDrawer({
                                       <FormDescription>
                                         {t(
                                           'Apply the gateway station cache billing discount to text requests on this channel'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='video_frame_extraction_enabled'
+                                render={({ field }) => (
+                                  <FormItem className='flex items-center justify-between px-4 py-3'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>
+                                        {t('Enable video frame extraction')}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'Convert Chat or Responses video input into up to 120 image frames for upstream models'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='disable_protocol_conversion'
+                                render={({ field }) => (
+                                  <FormItem className='flex items-center justify-between px-4 py-3'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>
+                                        {t('Disable protocol conversion')}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'Forward Responses and Chat requests in their original protocol without automatic conversion.'
                                         )}
                                       </FormDescription>
                                     </div>

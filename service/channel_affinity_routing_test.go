@@ -605,6 +605,43 @@ func TestCommandNativeModelGetsChannelAffinityFromDefaultRule(t *testing.T) {
 	require.Equal(t, 4321, preferredID)
 }
 
+// 默认亲规则 "opencode session trace" 必须匹配 OpenCode 渠道新增的两个原生模型名
+// （无 deepseek/ 前缀），否则以这两个模型发起的请求无法建立渠道亲和、会跨渠道漂移。
+func TestOpencodeNewNativeModelGetsChannelAffinityFromDefaultRule(t *testing.T) {
+	for _, modelName := range []string{"deepseek-v4.1-flash", "deepseek-v4-pro"} {
+		t.Run(modelName, func(t *testing.T) {
+			useChannelAffinityRoutingDB(t)
+			affinityValue := "opencode-affinity-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+
+			newRequest := func() *gin.Context {
+				recorder := httptest.NewRecorder()
+				ctx, _ := gin.CreateTestContext(recorder)
+				ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(
+					`{"model":"`+modelName+`","prompt_cache_key":"`+affinityValue+`","stream":true}`,
+				))
+				ctx.Request.Header.Set("Content-Type", "application/json")
+				return ctx
+			}
+
+			// 首次请求：规则应匹配并构建亲和上下文，但缓存尚无记录。
+			firstCtx := newRequest()
+			preferredID, found := GetPreferredChannelByAffinity(firstCtx, modelName, "default")
+			require.False(t, found)
+			require.Zero(t, preferredID)
+
+			// 记录该亲和值绑定到某渠道，模拟一次成功请求后的缓存写入。
+			firstCtx.Set("channel_id", 4321)
+			RecordChannelAffinity(firstCtx, 4321)
+
+			// 后续同亲和值的请求必须命中并返回已记录渠道。
+			secondCtx := newRequest()
+			preferredID, found = GetPreferredChannelByAffinity(secondCtx, modelName, "default")
+			require.True(t, found)
+			require.Equal(t, 4321, preferredID)
+		})
+	}
+}
+
 func TestCommandSplitTargetsShareAffinityCacheKeyOnOriginalModel(t *testing.T) {
 	useChannelAffinityRoutingDB(t)
 	const original = "nn"

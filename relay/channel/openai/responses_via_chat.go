@@ -38,6 +38,17 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
+	// Command 渠道请求 reasoning_effort=none 时上游被改写为 high，客户端要求隐藏
+	// 思维链。出站剥离（service.RewriteResponseBody）只识别 chat 形态，这里在
+	// chat→Responses 转换前先清空 reasoning，避免转换器把它变成 Responses 的
+	// reasoning output item 而绕过剥离、泄漏思维链。
+	if service.ShouldHideCommandThinking(c) {
+		for i := range chatResp.Choices {
+			chatResp.Choices[i].Message.ReasoningContent = nil
+			chatResp.Choices[i].Message.Reasoning = nil
+		}
+	}
+
 	if responseID := helper.GetResponseID(c); responseID != "" {
 		chatResp.Id = responseID
 	}
@@ -116,6 +127,12 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			logger.LogError(c, "failed to unmarshal chat stream response: "+err.Error())
 			sr.Error(err)
 			return
+		}
+
+		// Command 渠道 hide 生效时，在 chat→Responses 转换前剥离思考链，避免转换器
+		// 产出 Responses 形态的 reasoning 事件绕过出站剥离而泄漏。
+		if service.ShouldHideCommandThinking(c) {
+			stripChatChunkReasoning(&chunk)
 		}
 
 		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, &chunk)
@@ -273,6 +290,11 @@ func OaiChatToResponsesBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			break
 		}
+		// Command 渠道 hide 生效时，在 chat→Responses 转换前剥离思考链，避免转换器
+		// 产出 Responses 形态的 reasoning 事件绕过出站剥离而泄漏。
+		if service.ShouldHideCommandThinking(c) {
+			stripChatChunkReasoning(&chunk)
+		}
 
 		var errorResp dto.OpenAITextResponse
 		if err := common.UnmarshalJsonStr(data, &errorResp); err == nil {
@@ -341,4 +363,19 @@ func OaiChatToResponsesBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 	}
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return usage, nil
+}
+
+// stripChatChunkReasoning 清空 chat 流式分片的 reasoning 字段，使 chat→Responses
+// 转换器不会产出任何 reasoning 事件（response.reasoning_summary_text.delta 与
+// reasoning output item）。只在 Command 渠道 hide 生效时调用：出站剥离
+// （service.RewriteStreamChunk）只识别 chat 形态，reasoning 必须在转换前丢弃，
+// 否则会被转换成 Responses 事件绕过剥离而泄漏思维链。
+func stripChatChunkReasoning(chunk *dto.ChatCompletionsStreamResponse) {
+	if chunk == nil {
+		return
+	}
+	for i := range chunk.Choices {
+		chunk.Choices[i].Delta.ReasoningContent = nil
+		chunk.Choices[i].Delta.Reasoning = nil
+	}
 }

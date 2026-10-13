@@ -28,11 +28,7 @@ import { formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import type { UsageLog } from '../../data/schema'
-import {
-  formatModelName,
-  parseLogOther,
-  renderAuditContent,
-} from '../../lib/format'
+import { parseLogOther, renderAuditContent } from '../../lib/format'
 import { sessionEventMapper } from '../../lib/mappers'
 import { DetailsDialog } from '../dialogs/details-dialog'
 import { ModelBadge } from '../model-badge'
@@ -200,13 +196,7 @@ export function useSessionLogsColumns(): ColumnDef<UsageLog>[] {
       cell: ({ row }) => {
         const log = row.original
         if (!log.model_name) return null
-        const modelInfo = formatModelName(log)
-        return (
-          <ModelBadge
-            modelName={modelInfo.name}
-            actualModel={modelInfo.actualModel}
-          />
-        )
+        return <ModelBadge modelName={log.model_name} />
       },
       size: 160,
     },

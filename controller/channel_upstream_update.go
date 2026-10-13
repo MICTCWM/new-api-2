@@ -367,7 +367,7 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 		if channel.Type == constant.ChannelTypeCommand {
 			return []string{command.Model, command.ProModel, command.V41Model}, nil
 		}
-		return []string{opencode.Model, opencode.GlmModel}, nil
+		return []string{opencode.Model, opencode.GlmModel, opencode.V41Model, opencode.ProModel}, nil
 	}
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() != "" {

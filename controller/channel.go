@@ -203,6 +203,7 @@ type codeProviderUsageOverrideRequest struct {
 	PeakPoolUsedUSD    *float64 `json:"peak_pool_used_usd"`
 	OffPeakPoolUsedUSD *float64 `json:"off_peak_pool_used_usd"`
 	FlashPoolUsedUSD   *float64 `json:"flash_pool_used_usd"`
+	GlmPoolUsedUSD     *float64 `json:"glm_pool_used_usd"`
 	V41PoolUsedUSD     *float64 `json:"v41_pool_used_usd"`
 	ProPoolUsedUSD     *float64 `json:"pro_pool_used_usd"`
 }
@@ -271,22 +272,48 @@ func SetOpencodeChannelUsageOverride(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	poolUsed, err := usageOverrideMicroUSD(req.PoolUsedUSD, "pool_used_usd", model.OpencodePoolLimitMicroUSD)
+	// OpenCode 始终分池：总池限额为四个模型池之和。
+	limits := model.OpencodeFlashPoolLimitMicroUSD + model.OpencodeGlmPoolLimitMicroUSD + model.OpencodeV41PoolLimitMicroUSD + model.OpencodeProPoolLimitMicroUSD
+	poolUsed, err := usageOverrideMicroUSD(req.PoolUsedUSD, "pool_used_usd", limits)
 	if err != nil {
-		// Backward-compatible: accept legacy peak + off-peak override payloads.
-		peakPoolUsed, peakErr := usageOverrideMicroUSD(req.PeakPoolUsedUSD, "peak_pool_used_usd", model.OpencodePoolLimitMicroUSD)
-		offPeakPoolUsed, offPeakErr := usageOverrideMicroUSD(req.OffPeakPoolUsedUSD, "off_peak_pool_used_usd", model.OpencodePoolLimitMicroUSD)
-		if peakErr != nil || offPeakErr != nil {
-			common.ApiError(c, err)
-			return
-		}
-		poolUsed = peakPoolUsed + offPeakPoolUsed
-		if poolUsed > model.OpencodePoolLimitMicroUSD {
-			common.ApiError(c, fmt.Errorf("pool_used_usd exceeds the limit of $%.2f", float64(model.OpencodePoolLimitMicroUSD)/1_000_000))
-			return
-		}
+		common.ApiError(c, err)
+		return
 	}
 	override.PoolUsedMicroUSD = poolUsed
+	// 各池的"启用必填 / 总和一致"校验由 SetOpencodeUsageOverride 按渠道当前
+	// 模型列表统一裁决，这里只做数值与限额转换。
+	if req.FlashPoolUsedUSD != nil {
+		flashPoolUsed, poolErr := usageOverrideMicroUSD(req.FlashPoolUsedUSD, "flash_pool_used_usd", model.OpencodeFlashPoolLimitMicroUSD)
+		if poolErr != nil {
+			common.ApiError(c, poolErr)
+			return
+		}
+		override.FlashPoolUsedMicroUSD = &flashPoolUsed
+	}
+	if req.GlmPoolUsedUSD != nil {
+		glmPoolUsed, poolErr := usageOverrideMicroUSD(req.GlmPoolUsedUSD, "glm_pool_used_usd", model.OpencodeGlmPoolLimitMicroUSD)
+		if poolErr != nil {
+			common.ApiError(c, poolErr)
+			return
+		}
+		override.GlmPoolUsedMicroUSD = &glmPoolUsed
+	}
+	if req.V41PoolUsedUSD != nil {
+		v41PoolUsed, poolErr := usageOverrideMicroUSD(req.V41PoolUsedUSD, "v41_pool_used_usd", model.OpencodeV41PoolLimitMicroUSD)
+		if poolErr != nil {
+			common.ApiError(c, poolErr)
+			return
+		}
+		override.V41PoolUsedMicroUSD = &v41PoolUsed
+	}
+	if req.ProPoolUsedUSD != nil {
+		proPoolUsed, poolErr := usageOverrideMicroUSD(req.ProPoolUsedUSD, "pro_pool_used_usd", model.OpencodeProPoolLimitMicroUSD)
+		if poolErr != nil {
+			common.ApiError(c, poolErr)
+			return
+		}
+		override.ProPoolUsedMicroUSD = &proPoolUsed
+	}
 	if err := model.SetOpencodeUsageOverride(id, override, common.GetTimestamp()); err != nil {
 		common.ApiError(c, err)
 		return
@@ -829,6 +856,8 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		nativeModels := map[string]struct{}{modelName: {}}
 		if channel.Type == constant.ChannelTypeOpencode {
 			nativeModels[opencode.GlmModel] = struct{}{}
+			nativeModels[opencode.V41Model] = struct{}{}
+			nativeModels[opencode.ProModel] = struct{}{}
 		}
 		if channel.Type == constant.ChannelTypeCommand {
 			nativeModels[command.ProModel] = struct{}{}
@@ -848,7 +877,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 				if channel.Type == constant.ChannelTypeCommand {
 					return fmt.Errorf("%s only supports Flash, Pro, V4.1 Flash, or model mapping source models", keyName)
 				}
-				return fmt.Errorf("%s only supports deepseek-v4-flash, glm-5.3-flash, or model mapping source models", keyName)
+				return fmt.Errorf("%s only supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, or model mapping source models", keyName)
 			}
 			if _, ok := seenModels[configuredModel]; ok {
 				continue
@@ -863,7 +892,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			if channel.Type == constant.ChannelTypeCommand {
 				return fmt.Errorf("%s must include the fixed model %s", keyName, modelName)
 			}
-			return fmt.Errorf("%s must include deepseek-v4-flash or glm-5.3-flash", keyName)
+			return fmt.Errorf("%s must include deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, or deepseek-v4-pro", keyName)
 		}
 		// Command 需要至少一个固定基础模型（Flash 或 V4.1 Flash），
 		// Pro 为可选附加模型，不再与 V4.1 Flash 强制绑定。

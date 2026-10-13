@@ -481,13 +481,13 @@ func CodeProviderChannelHasCapacity(channel *Channel, modelName string, now int6
 	}
 	if channel.Type == constant.ChannelTypeOpencode {
 		if checkRPM {
-			available, err := OpencodeChannelHasCapacity(channel.Id, now)
+			available, err := OpencodeChannelHasCapacityForModel(channel, modelName, now)
 			if !available && err == nil {
 				err = ReconcileCodeProviderQuotaChannel(channel.Id, now)
 			}
 			return available, err
 		}
-		available, err := OpencodeChannelHasQuotaCapacity(channel.Id, now)
+		available, err := OpencodeChannelHasQuotaCapacityForModel(channel, modelName, now)
 		if !available && err == nil {
 			err = ReconcileCodeProviderQuotaChannel(channel.Id, now)
 		}

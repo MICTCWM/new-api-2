@@ -121,6 +121,30 @@ describe('transformFormDataToUpdatePayload', () => {
     expect(payload.models).toBe('deepseek-v4-flash,glm-5.3-flash')
   })
 
+  it('allows OpenCode deepseek-v4.1-flash without forcing deepseek-v4-flash', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      type: CHANNEL_TYPE_OPENCODE,
+      models: 'deepseek-v4.1-flash',
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+
+    expect(payload.models).toBe('deepseek-v4.1-flash')
+  })
+
+  it('allows OpenCode deepseek-v4-pro without forcing deepseek-v4-flash', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      type: CHANNEL_TYPE_OPENCODE,
+      models: 'deepseek-v4-pro',
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+
+    expect(payload.models).toBe('deepseek-v4-pro')
+  })
+
   it('serializes a custom concurrency limit for ordinary channels', () => {
     const formData = {
       ...CHANNEL_FORM_DEFAULT_VALUES,
@@ -167,6 +191,21 @@ describe('transformFormDataToUpdatePayload', () => {
     expect(settings.station_cache_enabled).toBe(true)
   })
 
+  it('persists the video frame extraction toggle into the settings JSON', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      video_frame_extraction_enabled: true,
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+    const settings = JSON.parse(payload.settings as string) as Record<
+      string,
+      unknown
+    >
+
+    expect(settings.video_frame_extraction_enabled).toBe(true)
+  })
+
   it('defaults the station cache toggle to off when the setting is absent', () => {
     const channel = {
       ...CHANNEL_FORM_DEFAULT_VALUES,
@@ -203,6 +242,25 @@ describe('transformFormDataToUpdatePayload', () => {
     const formData = transformChannelToFormDefaults(channel)
 
     expect(formData.station_cache_enabled).toBe(true)
+  })
+
+  it('round-trips an enabled video frame extraction toggle from the settings JSON', () => {
+    const channel = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      id: 1,
+      type: 1,
+      status: 1,
+      created_time: 0,
+      test_time: 0,
+      response_time: 0,
+      settings: JSON.stringify({ video_frame_extraction_enabled: true }),
+      group: 'default',
+      channel_info: {} as Channel['channel_info'],
+    } as unknown as Channel
+
+    const formData = transformChannelToFormDefaults(channel)
+
+    expect(formData.video_frame_extraction_enabled).toBe(true)
   })
 })
 

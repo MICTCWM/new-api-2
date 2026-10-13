@@ -42,6 +42,12 @@ const (
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"
 	ContextKeyChannelKey               ContextKey = "channel_key"
 
+	// ContextKeyCommandHideThinking marks a Command-channel request whose
+	// reasoning_effort was rewritten from "none" to "high" for the upstream
+	// call; the outbound response must strip thinking fields so the client
+	// never sees the reasoning content that was requested to stay hidden.
+	ContextKeyCommandHideThinking ContextKey = "command_hide_thinking"
+
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
 	ContextKeyAutoGroupRetryIndex ContextKey = "auto_group_retry_index"

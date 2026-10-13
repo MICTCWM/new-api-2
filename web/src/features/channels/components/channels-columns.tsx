@@ -95,6 +95,7 @@ import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type {
   Channel,
   CommandUsageSnapshot,
+  OpencodeUsageSnapshot,
   OpencodeUsageWindow,
 } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
@@ -460,11 +461,44 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
       ][]
     }
   } else {
-    poolWindows = [[t('Total pool'), usage.pool, 'combined']] as [
-      string,
-      OpencodeUsageWindow,
-      string,
-    ][]
+    // OpenCode always uses split model pools; only show the enabled ones.
+    const opencodeUsage = usage as OpencodeUsageSnapshot
+    poolWindows = [] as [string, OpencodeUsageWindow, string][]
+    if (opencodeUsage.flash_pool_active === true) {
+      poolWindows.push([
+        t('Flash pool'),
+        opencodeUsage.flash_pool ?? usage.pool,
+        'flash',
+      ])
+    }
+    if (opencodeUsage.glm_pool_active === true) {
+      poolWindows.push([
+        t('GLM pool'),
+        opencodeUsage.glm_pool ?? usage.pool,
+        'glm',
+      ])
+    }
+    if (opencodeUsage.v41_pool_active === true) {
+      poolWindows.push([
+        t('4.1 pool'),
+        opencodeUsage.v41_pool ?? usage.pool,
+        'v41',
+      ])
+    }
+    if (opencodeUsage.pro_pool_active === true) {
+      poolWindows.push([
+        t('Pro pool'),
+        opencodeUsage.pro_pool ?? usage.pool,
+        'pro',
+      ])
+    }
+    if (poolWindows.length === 0) {
+      poolWindows = [[t('Total pool'), usage.pool, 'combined']] as [
+        string,
+        OpencodeUsageWindow,
+        string,
+      ][]
+    }
   }
   const occupancy = sessionUsageResponse?.data?.find(
     (item) => item.channel_id === channel.id

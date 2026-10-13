@@ -116,6 +116,8 @@ export interface ChannelOtherSettings {
   claude_beta_query?: boolean
   disable_task_polling_sleep?: boolean
   station_cache_enabled?: boolean
+  video_frame_extraction_enabled?: boolean
+  disable_protocol_conversion?: boolean
   upstream_model_update_check_enabled?: boolean
   upstream_model_update_auto_sync_enabled?: boolean
   upstream_model_update_ignored_models?: string[]
@@ -175,6 +177,15 @@ export interface OpencodeUsageSnapshot {
   week: OpencodeUsageWindow
   month: OpencodeUsageWindow
   pool: OpencodeUsageWindow
+  flash_pool?: OpencodeUsageWindow
+  glm_pool?: OpencodeUsageWindow
+  v41_pool?: OpencodeUsageWindow
+  pro_pool?: OpencodeUsageWindow
+  flash_pool_active?: boolean
+  glm_pool_active?: boolean
+  v41_pool_active?: boolean
+  pro_pool_active?: boolean
+  split_pools?: boolean
   peak_pool?: OpencodeUsageWindow
   off_peak_pool?: OpencodeUsageWindow
   pricing_period: 'peak' | 'off_peak' | '' | ''
@@ -266,6 +277,7 @@ export interface CodeProviderUsageOverrideRequest {
   peak_pool_used_usd?: number
   off_peak_pool_used_usd?: number
   flash_pool_used_usd?: number
+  glm_pool_used_usd?: number
   v41_pool_used_usd?: number
   pro_pool_used_usd?: number
 }

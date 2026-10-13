@@ -42,6 +42,8 @@ export const FIXED_CODE_CHANNEL_MODELS: Record<number, string> = {
 export const OPENCODE_NATIVE_MODELS = [
   'deepseek-v4-flash',
   'glm-5.3-flash',
+  'deepseek-v4.1-flash',
+  'deepseek-v4-pro',
 ] as const
 
 export const COMMAND_NATIVE_MODELS = [
@@ -482,7 +484,7 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
 }
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {
-  61: 'Opencode uses a fixed endpoint and supports deepseek-v4-flash and glm-5.3-flash. Batch mode creates one channel per API key.',
+  61: 'Opencode uses a fixed endpoint and supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, and deepseek-v4-pro. Batch mode creates one channel per API key.',
   62: 'Command uses a fixed endpoint and supports deepseek/deepseek-v4-flash, deepseek/deepseek-v4.1-flash, and the optional deepseek/deepseek-v4-pro. The channel must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash. Batch mode creates one channel per API key.',
   3: 'For channels added after May 10, 2025, no need to remove "." from model names during deployment',
   8: 'If connecting to upstream One API or New API relay projects, use OpenAI type instead unless you know what you are doing',

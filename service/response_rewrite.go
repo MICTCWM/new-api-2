@@ -152,13 +152,34 @@ func getResponseRewriter(c *gin.Context) *ResponseRewriter {
 }
 
 // RewriteStreamChunk rewrites one already-converted streaming chunk. handled
-// reports whether the rewriter owns this protocol: when true the caller must
-// write exactly the returned frames (which may include a flushed tail emitted
-// before the current chunk, or be empty); when false the caller writes the
-// original payload untouched.
+// reports whether the outbound payload is owned by this hook: when true the
+// caller must write exactly the returned frames (which may include a flushed
+// tail emitted before the current chunk, or be empty); when false the caller
+// writes the original payload untouched.
+//
+// The hook also performs the Command-channel thinking strip here (see
+// ShouldHideCommandThinking): it removes reasoning_content / reasoning from a
+// chat-shaped chunk even when no response rewriter is installed. When both the
+// rewriter and the strip apply, the rewriter runs on the stripped payload.
 func RewriteStreamChunk(c *gin.Context, data string) ([]ResponseRewriteFrame, bool) {
+	if data == "" || !gjson.Valid(data) {
+		return nil, false
+	}
+	hideThinking := ShouldHideCommandThinking(c)
 	rewriter := getResponseRewriter(c)
-	if rewriter == nil || data == "" || !gjson.Valid(data) {
+	if hideThinking {
+		stripped, changed := stripChatThinkingFields(data)
+		if changed {
+			data = stripped
+		} else if rewriter == nil {
+			// Nothing was hidden and no rewriter owns the protocol: pass through.
+			return nil, false
+		}
+	}
+	if rewriter == nil {
+		if hideThinking {
+			return []ResponseRewriteFrame{{JSON: data}}, true
+		}
 		return nil, false
 	}
 	switch rewriter.protocol {
@@ -171,6 +192,12 @@ func RewriteStreamChunk(c *gin.Context, data string) ([]ResponseRewriteFrame, bo
 	case types.RelayFormatGemini:
 		return rewriter.rewriteGeminiChunk(data), true
 	default:
+		// The rewriter does not own this protocol, but the thinking strip still
+		// changed the payload: emit the stripped frame so the caller never writes
+		// the original reasoning-bearing bytes back to the client.
+		if hideThinking {
+			return []ResponseRewriteFrame{{JSON: data}}, true
+		}
 		return nil, false
 	}
 }
@@ -186,13 +213,84 @@ func FlushResponseRewrite(c *gin.Context) []ResponseRewriteFrame {
 }
 
 // RewriteResponseBody rewrites a non-streaming response body that is already in
-// the client protocol.
+// the client protocol. It also performs the Command-channel thinking strip (see
+// ShouldHideCommandThinking) for a chat-shaped body.
 func RewriteResponseBody(c *gin.Context, data []byte) []byte {
+	if len(data) == 0 || !gjson.ValidBytes(data) {
+		return data
+	}
 	rewriter := getResponseRewriter(c)
-	if rewriter == nil || len(data) == 0 || !gjson.ValidBytes(data) {
+	if ShouldHideCommandThinking(c) {
+		stripped, changed := stripChatThinkingFields(string(data))
+		if changed {
+			data = common.StringToByteSlice(stripped)
+		} else if rewriter == nil {
+			return data
+		}
+	}
+	if rewriter == nil {
 		return data
 	}
 	return rewriter.rewriteFullBody(data)
+}
+
+// ShouldHideCommandThinking reports whether the current outbound response must
+// hide thinking content. It only applies to the Command channel and only when
+// the request side saw reasoning_effort=none (which was rewritten to high
+// upstream). Checking the live channel type here means a cross-channel retry to
+// a non-Command channel automatically disables the hiding.
+//
+// It is exported so the streaming relay path can skip any upstream-side
+// reasoning-to-content folding while hiding is active, leaving the reasoning
+// fields intact for the outbound hook (here) to strip.
+func ShouldHideCommandThinking(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	if common.GetContextKeyInt(c, constant.ContextKeyChannelType) != constant.ChannelTypeCommand {
+		return false
+	}
+	return common.GetContextKeyBool(c, constant.ContextKeyCommandHideThinking)
+}
+
+// stripChatThinkingFields removes the thinking fields from an OpenAI chat-shaped
+// JSON payload (choices[].delta.reasoning_content / delta.reasoning /
+// message.reasoning_content / message.reasoning). Only the reasoning fields
+// themselves are removed. A channel configured with ThinkingToContent would fold
+// the reasoning into the body as <think> text upstream; the streaming relay
+// path skips that folding while hiding is active (see
+// relay/channel/openai.sendStreamData), so the reasoning stays in its own field
+// here and this strip is sufficient. It returns the (possibly updated) payload
+// plus whether a field was actually deleted; payloads without a choices array
+// are returned untouched.
+func stripChatThinkingFields(data string) (string, bool) {
+	choices := gjson.Get(data, "choices")
+	if !choices.IsArray() {
+		return data, false
+	}
+	changed := false
+	index := -1
+	choices.ForEach(func(_, choice gjson.Result) bool {
+		index++
+		for _, path := range []string{
+			fmt.Sprintf("choices.%d.delta.reasoning_content", index),
+			fmt.Sprintf("choices.%d.delta.reasoning", index),
+			fmt.Sprintf("choices.%d.message.reasoning_content", index),
+			fmt.Sprintf("choices.%d.message.reasoning", index),
+		} {
+			if !gjson.Get(data, path).Exists() {
+				continue
+			}
+			updated, err := sjson.Delete(data, path)
+			if err != nil {
+				continue
+			}
+			data = updated
+			changed = true
+		}
+		return true
+	})
+	return data, changed
 }
 
 func (rw *ResponseRewriter) flushFrames() []ResponseRewriteFrame {

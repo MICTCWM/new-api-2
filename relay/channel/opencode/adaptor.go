@@ -22,6 +22,8 @@ const (
 	CanonicalURL = "https://opencode.ai/zen/go/v1/chat/completions"
 	Model        = "deepseek-v4-flash"
 	GlmModel     = "glm-5.3-flash"
+	V41Model     = "deepseek-v4.1-flash"
+	ProModel     = "deepseek-v4-pro"
 
 	// SessionHeader is required by OpenCode Go for routing and prompt caching.
 	SessionHeader = "x-opencode-session"
@@ -30,13 +32,13 @@ const (
 	UserAgent = "ByteIQ-API"
 )
 
-var ModelList = []string{Model, GlmModel}
+var ModelList = []string{Model, GlmModel, V41Model, ProModel}
 
 var ChannelName = "opencode"
 
 func IsNativeModel(modelName string) bool {
 	switch strings.TrimSpace(modelName) {
-	case Model, GlmModel:
+	case Model, GlmModel, V41Model, ProModel:
 		return true
 	default:
 		return false

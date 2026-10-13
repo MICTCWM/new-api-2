@@ -88,7 +88,7 @@ function fixedCodeChannelModels(
     }
     return formatModelsArray(result)
   }
-  // OpenCode allows either deepseek-v4-flash or glm-5.3-flash (or both).
+  // OpenCode allows any of its native models (flash, glm, v4.1, pro).
   const hasNative = selectedModels.some((model) =>
     (nativeModels as readonly string[]).includes(model)
   )
@@ -333,6 +333,8 @@ export const channelFormSchema = z
     claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
     disable_task_polling_sleep: z.boolean().optional(),
     station_cache_enabled: z.boolean().optional(), // Gateway station cache billing discount
+    video_frame_extraction_enabled: z.boolean().optional(), // Extract Chat/Responses video input into image frames
+    disable_protocol_conversion: z.boolean().optional(), // Keep Chat/Responses requests in their original protocol
     // Upstream model update settings (stored in settings JSON)
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
@@ -409,7 +411,7 @@ export const channelFormSchema = z
       const fixedModelError =
         data.type === CHANNEL_TYPE_COMMAND
           ? 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
-          : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, and model mapping source models'
+          : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
       if (invalidModels.length > 0) {
         addRequiredIssue(ctx, 'models', fixedModelError)
       }
@@ -435,7 +437,7 @@ export const channelFormSchema = z
           addRequiredIssue(
             ctx,
             'models',
-            'Opencode must include deepseek-v4-flash or glm-5.3-flash'
+            'Opencode must include deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, or deepseek-v4-pro'
           )
         }
       }
@@ -588,6 +590,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   claude_beta_query: false,
   disable_task_polling_sleep: false,
   station_cache_enabled: false,
+  video_frame_extraction_enabled: false,
+  disable_protocol_conversion: false,
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
@@ -656,6 +660,8 @@ export function transformChannelToFormDefaults(
   let claudeBetaQuery = false
   let disableTaskPollingSleep = false
   let stationCacheEnabled = false
+  let videoFrameExtractionEnabled = false
+  let disableProtocolConversion = false
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
@@ -688,6 +694,9 @@ export function transformChannelToFormDefaults(
       claudeBetaQuery = parsed.claude_beta_query === true
       disableTaskPollingSleep = parsed.disable_task_polling_sleep === true
       stationCacheEnabled = parsed.station_cache_enabled === true
+      videoFrameExtractionEnabled =
+        parsed.video_frame_extraction_enabled === true
+      disableProtocolConversion = parsed.disable_protocol_conversion === true
       upstreamModelUpdateCheckEnabled =
         parsed.upstream_model_update_check_enabled === true
       upstreamModelUpdateAutoSyncEnabled =
@@ -763,6 +772,8 @@ export function transformChannelToFormDefaults(
     claude_beta_query: claudeBetaQuery,
     disable_task_polling_sleep: disableTaskPollingSleep,
     station_cache_enabled: stationCacheEnabled,
+    video_frame_extraction_enabled: videoFrameExtractionEnabled,
+    disable_protocol_conversion: disableProtocolConversion,
     allow_safety_identifier: allowSafetyIdentifier,
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
@@ -900,6 +911,10 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     formData.disable_task_polling_sleep === true
 
   settingsObj.station_cache_enabled = formData.station_cache_enabled === true
+  settingsObj.video_frame_extraction_enabled =
+    formData.video_frame_extraction_enabled === true
+  settingsObj.disable_protocol_conversion =
+    formData.disable_protocol_conversion === true
 
   settingsObj.speed_protection_enabled =
     formData.speed_protection_enabled === true

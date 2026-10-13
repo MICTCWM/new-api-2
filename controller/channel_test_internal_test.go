@@ -162,7 +162,7 @@ func TestValidateOpencodeChannelRequiresFixedModelWithMappingSources(t *testing.
 		ModelMapping: &mapping,
 	}
 
-	require.ErrorContains(t, validateChannel(channel, true), "must include deepseek-v4-flash or glm-5.3-flash")
+	require.ErrorContains(t, validateChannel(channel, true), "must include deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, or deepseek-v4-pro")
 }
 
 func TestValidateOpencodeChannelAllowsGlmModel(t *testing.T) {
@@ -185,6 +185,17 @@ func TestValidateOpencodeChannelAllowsBothNativeModels(t *testing.T) {
 
 	require.NoError(t, validateChannel(channel, true))
 	assert.Equal(t, "deepseek-v4-flash,glm-5.3-flash", channel.Models)
+}
+
+func TestValidateOpencodeChannelAllowsNewNativeModels(t *testing.T) {
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeOpencode,
+		Key:    "opencode-key",
+		Models: "deepseek-v4.1-flash,deepseek-v4-pro",
+	}
+
+	require.NoError(t, validateChannel(channel, true))
+	assert.Equal(t, "deepseek-v4.1-flash,deepseek-v4-pro", channel.Models)
 }
 
 func TestValidateOpencodeChannelRejectsUnmappedModels(t *testing.T) {

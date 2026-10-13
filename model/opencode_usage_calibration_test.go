@@ -92,10 +92,73 @@ func TestCalibrateOpencodeChannelReplacesWindowsAndPreservesPricingPools(t *test
 	require.Equal(t, int64(2_880_000), snapshot.FiveHour.UsedMicroUSD)
 	require.Equal(t, int64(2_700_000), snapshot.Week.UsedMicroUSD)
 	require.Equal(t, int64(2_400_000), snapshot.Month.UsedMicroUSD)
-	require.Equal(t, int64(321), snapshot.Pool.UsedMicroUSD)
+	// 遗留合并池用量（321）先迁入 flash 池，再按 r = 月权威值(2.4M) / Σ池(321) 缩放。
+	require.Equal(t, int64(2_400_000), snapshot.FlashPool.UsedMicroUSD)
+	require.Equal(t, int64(2_400_000), snapshot.Pool.UsedMicroUSD)
 	require.Equal(t, now, snapshot.Calibration.LastSuccessAt)
 	require.Greater(t, snapshot.Calibration.NextAt, now)
 	require.Equal(t, int64(1787392722), snapshot.FiveHour.ResetAt)
+}
+
+func TestApplyOpencodePoolCalibrationScalesAndClampsServedPools(t *testing.T) {
+	useOpencodeCalibrationDB(t)
+	now := int64(7_000)
+	channel := &Channel{
+		Type:   constant.ChannelTypeOpencode,
+		Status: common.ChannelStatusEnabled,
+		Key:    "test-key",
+		Models: OpencodeModel + "," + OpencodeV41FlashModel + "," + OpencodeProModel,
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	for key, used := range map[string]int64{
+		OpencodeFlashPoolKey(channel.Id): 10_000_000,
+		OpencodeV41PoolKey(channel.Id):   5_000_000,
+		OpencodeProPoolKey(channel.Id):   10_000_000,
+	} {
+		require.NoError(t, DB.Create(&OpencodePoolUsage{PoolKey: key, Used: used, ResetTime: now}).Error)
+	}
+
+	// 月权威值 60M（100%），oldMonth 20M → 非滚动；ratio = 60M / 25M = 2.4。
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return applyOpencodePoolCalibration(tx, channel.Id, 60_000_000, now, 20_000_000)
+	}))
+
+	flash, _, err := findOpencodePoolUsageTx(DB, OpencodeFlashPoolKey(channel.Id), now)
+	require.NoError(t, err)
+	v41, _, err := findOpencodePoolUsageTx(DB, OpencodeV41PoolKey(channel.Id), now)
+	require.NoError(t, err)
+	pro, _, err := findOpencodePoolUsageTx(DB, OpencodeProPoolKey(channel.Id), now)
+	require.NoError(t, err)
+	require.Equal(t, int64(24_000_000), flash.Used)
+	require.Equal(t, int64(12_000_000), v41.Used)
+	// 24M 超过 pro 池限额 15M，clamp 到限额。
+	require.Equal(t, int64(15_000_000), pro.Used)
+}
+
+func TestApplyOpencodePoolCalibrationClearsPoolsOnRolloverAndReset(t *testing.T) {
+	useOpencodeCalibrationDB(t)
+	now := int64(8_000)
+	channel := &Channel{Type: constant.ChannelTypeOpencode, Status: common.ChannelStatusEnabled, Key: "test-key", Models: OpencodeModel}
+	require.NoError(t, DB.Create(channel).Error)
+	flashKey := OpencodeFlashPoolKey(channel.Id)
+	require.NoError(t, DB.Create(&OpencodePoolUsage{PoolKey: flashKey, Used: 40_000_000, ResetTime: now}).Error)
+
+	// 月滚动：oldMonth 40M，远端月值 3M（< 20M）→ 启用池清零。
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return applyOpencodePoolCalibration(tx, channel.Id, 3_000_000, now, 40_000_000)
+	}))
+	flash, _, err := findOpencodePoolUsageTx(DB, flashKey, now)
+	require.NoError(t, err)
+	require.Zero(t, flash.Used)
+
+	// 上游清零：远端月值为 0 → 启用池清零。
+	require.NoError(t, DB.Model(&OpencodePoolUsage{}).Where("pool_key = ?", flashKey).Update("used", 40_000_000).Error)
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return applyOpencodePoolCalibration(tx, channel.Id, 0, now, 40_000_000)
+	}))
+	flash, _, err = findOpencodePoolUsageTx(DB, flashKey, now)
+	require.NoError(t, err)
+	require.Zero(t, flash.Used)
 }
 
 func TestFailedOpencodeCalibrationKeepsLocalUsage(t *testing.T) {

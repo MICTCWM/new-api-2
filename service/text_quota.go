@@ -465,7 +465,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 				logger.LogError(ctx, "failed to calculate opencode provider usage: "+err.Error())
 			} else {
 				opencodeCost = calculatedCost
-				if err := model.SettleOpencodeCost(relayInfo.ChannelId, opencodeCost, settleAt); err != nil {
+				if err := model.SettleOpencodeCostForModel(relayInfo.ChannelId, opencodeModel, opencodeCost, settleAt); err != nil {
 					logger.LogError(ctx, "failed to settle opencode provider usage: "+err.Error())
 				}
 			}

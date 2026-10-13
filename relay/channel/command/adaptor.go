@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -68,6 +70,12 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 	} else if strings.TrimSpace(request.Model) == "" {
 		return nil, types.NewError(errors.New("command channel: mapped model is empty"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	// 上游不支持 reasoning_effort=none：改写为 high 以拿到思维链，同时在响应侧
+	// 标记隐藏，避免思维链回传给下游用户。
+	if strings.EqualFold(strings.TrimSpace(request.ReasoningEffort), "none") {
+		request.ReasoningEffort = "high"
+		common.SetContextKey(c, constant.ContextKeyCommandHideThinking, true)
 	}
 	return a.Adaptor.ConvertOpenAIRequest(c, info, request)
 }

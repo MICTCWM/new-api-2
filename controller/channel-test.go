@@ -522,7 +522,7 @@ func testChannelWithGroup(ctx context.Context, channel *model.Channel, testUserI
 				common.SysError(fmt.Sprintf("failed to calculate OpenCode channel test usage: channel_id=%d model=%s err=%v", channel.Id, opencodeModel, costErr))
 			} else {
 				cost = calculatedCost
-				if err := model.SettleOpencodeCost(channel.Id, cost, settleAt); err != nil {
+				if err := model.SettleOpencodeCostForModel(channel.Id, opencodeModel, cost, settleAt); err != nil {
 					common.SysError(fmt.Sprintf("failed to settle OpenCode channel test usage: channel_id=%d err=%v", channel.Id, err))
 				}
 			}

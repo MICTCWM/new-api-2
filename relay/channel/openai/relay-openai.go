@@ -25,6 +25,16 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 		return nil
 	}
 
+	// When the Command channel hides thinking, the reasoning must stay in its own
+	// delta field so the outbound hook (service.RewriteStreamChunk) can strip it.
+	// Folding it into content as <think> text here would leak the chain of
+	// thought as plain content that the strip cannot remove, so skip the
+	// conversion and leave ThinkingContentInfo untouched, exactly as when
+	// thinkToContent is false.
+	if thinkToContent && service.ShouldHideCommandThinking(c) {
+		thinkToContent = false
+	}
+
 	if !forceFormat && !thinkToContent {
 		return helper.StringData(c, data)
 	}

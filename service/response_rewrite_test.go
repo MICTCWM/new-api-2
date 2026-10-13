@@ -443,3 +443,128 @@ func TestResponseRewriterPrefersClientRequestedModel(t *testing.T) {
 	body := RewriteResponseBody(c, []byte(`{"modelVersion":"gemini-2.5-flash-nothinking"}`))
 	require.Equal(t, "gemini-2.5-flash", gjson.GetBytes(body, "modelVersion").String())
 }
+
+// commandHideThinkingContext builds a bare context (no rewriter installed) that
+// carries the channel type and, when hide is true, the Command hide-thinking
+// marker set by the request-side rewrite.
+func commandHideThinkingContext(t *testing.T, channelType int, hide bool) *gin.Context {
+	t.Helper()
+	c := ginJSONContext(t, "/v1/chat/completions", "{}")
+	common.SetContextKey(c, constant.ContextKeyChannelType, channelType)
+	if hide {
+		common.SetContextKey(c, constant.ContextKeyCommandHideThinking, true)
+	}
+	return c
+}
+
+func TestCommandHideThinkingStripsStreamReasoningFields(t *testing.T) {
+	c := commandHideThinkingContext(t, constant.ChannelTypeCommand, true)
+	chunk := `{"id":"c1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"hi","reasoning_content":"secret","reasoning":"alt"}}]}`
+	frames, handled := RewriteStreamChunk(c, chunk)
+	require.True(t, handled)
+	require.Len(t, frames, 1)
+	require.False(t, gjson.Get(frames[0].JSON, "choices.0.delta.reasoning_content").Exists())
+	require.False(t, gjson.Get(frames[0].JSON, "choices.0.delta.reasoning").Exists())
+	require.Equal(t, "hi", gjson.Get(frames[0].JSON, "choices.0.delta.content").String())
+}
+
+func TestCommandHideThinkingStreamWithoutContentKeepsFrame(t *testing.T) {
+	c := commandHideThinkingContext(t, constant.ChannelTypeCommand, true)
+	frames, handled := RewriteStreamChunk(c, `{"choices":[{"index":0,"delta":{"reasoning_content":"secret"}}]}`)
+	require.True(t, handled)
+	require.Len(t, frames, 1)
+	require.False(t, gjson.Get(frames[0].JSON, "choices.0.delta.reasoning_content").Exists())
+	// The delta object may be left empty; it must still be present so clients do
+	// not choke on a missing delta.
+	require.True(t, gjson.Get(frames[0].JSON, "choices.0.delta").IsObject())
+}
+
+func TestCommandHideThinkingStreamWithoutThinkingPassesThrough(t *testing.T) {
+	c := commandHideThinkingContext(t, constant.ChannelTypeCommand, true)
+	frames, handled := RewriteStreamChunk(c, openAIChatChunk("m", "hi"))
+	require.False(t, handled)
+	require.Nil(t, frames)
+}
+
+func TestCommandHideThinkingStripsNonStreamBody(t *testing.T) {
+	c := commandHideThinkingContext(t, constant.ChannelTypeCommand, true)
+	body := RewriteResponseBody(c, []byte(`{"choices":[{"message":{"content":"hi","reasoning_content":"secret","reasoning":"alt"}}]}`))
+	require.Equal(t, "hi", gjson.GetBytes(body, "choices.0.message.content").String())
+	require.False(t, gjson.GetBytes(body, "choices.0.message.reasoning_content").Exists())
+	require.False(t, gjson.GetBytes(body, "choices.0.message.reasoning").Exists())
+}
+
+func TestCommandHideThinkingWithoutMarkerPassesThrough(t *testing.T) {
+	c := commandHideThinkingContext(t, constant.ChannelTypeCommand, false)
+	chunk := `{"choices":[{"index":0,"delta":{"content":"hi","reasoning_content":"secret"}}]}`
+	frames, handled := RewriteStreamChunk(c, chunk)
+	require.False(t, handled)
+	require.Nil(t, frames)
+
+	body := []byte(`{"choices":[{"message":{"content":"hi","reasoning_content":"secret"}}]}`)
+	require.Equal(t, body, RewriteResponseBody(c, body))
+}
+
+func TestCommandHideThinkingMarkerOnOtherChannelPassesThrough(t *testing.T) {
+	c := commandHideThinkingContext(t, constant.ChannelTypeOpenAI, true)
+	chunk := `{"choices":[{"index":0,"delta":{"content":"hi","reasoning_content":"secret"}}]}`
+	frames, handled := RewriteStreamChunk(c, chunk)
+	require.False(t, handled)
+	require.Nil(t, frames)
+
+	body := []byte(`{"choices":[{"message":{"content":"hi","reasoning_content":"secret"}}]}`)
+	require.Equal(t, body, RewriteResponseBody(c, body))
+}
+
+func TestCommandHideThinkingCombinesWithResponseRewriter(t *testing.T) {
+	withResponseRewriteSetting(t, false, nil, true, []operation_setting.ResponseRewriteRule{rewriteRule("r1", nil, "SECRET", "[x]")})
+	c := newResponseRewriteContext(t, types.RelayFormatOpenAI, "alias", "upstream-real", func(c *gin.Context) {
+		common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeCommand)
+		common.SetContextKey(c, constant.ContextKeyCommandHideThinking, true)
+	})
+
+	chunk := `{"model":"upstream-real","choices":[{"index":0,"delta":{"content":"SECRET","reasoning_content":"SECRET plan"}}]}`
+	frames, handled := RewriteStreamChunk(c, chunk)
+	require.True(t, handled)
+	require.Len(t, frames, 1)
+	// The thinking field is dropped before the rewriter runs.
+	require.False(t, gjson.Get(frames[0].JSON, "choices.0.delta.reasoning_content").Exists())
+	// The content is held back by the rewrite rules and flushed on terminal.
+	require.Equal(t, "", gjson.Get(frames[0].JSON, "choices.0.delta.content").String())
+	flushed := FlushResponseRewrite(c)
+	require.Len(t, flushed, 1)
+	require.Equal(t, "[x]", gjson.Get(flushed[0].JSON, "choices.0.delta.content").String())
+}
+
+// When hiding is active but the installed rewriter does not own the chunk
+// protocol (e.g. Embedding), the stripped payload must still be emitted instead
+// of falling back to the untouched original, which would leak the reasoning.
+func TestCommandHideThinkingEmitsStrippedFrameForUnownedProtocol(t *testing.T) {
+	withResponseRewriteSetting(t, true, []string{"vip"}, false, nil)
+	c := newResponseRewriteContext(t, types.RelayFormatEmbedding, "alias", "upstream-real", func(c *gin.Context) {
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "vip")
+		common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeCommand)
+		common.SetContextKey(c, constant.ContextKeyCommandHideThinking, true)
+	})
+
+	chunk := `{"model":"upstream-real","choices":[{"index":0,"delta":{"content":"hi","reasoning_content":"secret"}}]}`
+	frames, handled := RewriteStreamChunk(c, chunk)
+	require.True(t, handled)
+	require.Len(t, frames, 1)
+	require.False(t, gjson.Get(frames[0].JSON, "choices.0.delta.reasoning_content").Exists())
+	require.Equal(t, "hi", gjson.Get(frames[0].JSON, "choices.0.delta.content").String())
+}
+
+// Without the hide marker the unowned-protocol path stays a no-op, so a plain
+// Embedding rewriter never claims ownership of a chunk it cannot rewrite.
+func TestEmbeddingStreamChunkWithoutHideIsPassThrough(t *testing.T) {
+	withResponseRewriteSetting(t, true, []string{"vip"}, false, nil)
+	c := newResponseRewriteContext(t, types.RelayFormatEmbedding, "alias", "upstream-real", func(c *gin.Context) {
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "vip")
+	})
+
+	chunk := `{"model":"upstream-real","choices":[{"index":0,"delta":{"reasoning_content":"secret"}}]}`
+	frames, handled := RewriteStreamChunk(c, chunk)
+	require.False(t, handled)
+	require.Nil(t, frames)
+}

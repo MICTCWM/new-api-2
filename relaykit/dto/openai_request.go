@@ -656,11 +656,21 @@ func (m *Message) ParseContent() []MediaContent {
 				}
 			}
 		case ContentTypeVideoUrl:
-			if videoUrl, ok := contentItem["video_url"].(string); ok {
+			videoURL := ""
+			switch videoValue := contentItem["video_url"].(type) {
+			case string:
+				videoURL = videoValue
+			case map[string]any:
+				videoURL, _ = videoValue["url"].(string)
+				if videoURL == "" {
+					videoURL, _ = videoValue["file_url"].(string)
+				}
+			}
+			if videoURL != "" {
 				contentList = append(contentList, MediaContent{
 					Type: ContentTypeVideoUrl,
 					VideoUrl: &MessageVideoUrl{
-						Url: videoUrl,
+						Url: videoURL,
 					},
 				})
 			}
@@ -859,14 +869,14 @@ type OpenAIResponsesRequest struct {
 	Include json.RawMessage `json:"include,omitempty"`
 	// 在后台运行推理，暂时还不支持依赖的接口
 	// Background         json.RawMessage `json:"background,omitempty"`
-	Conversation       json.RawMessage `json:"conversation,omitempty"`
-	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
-	Instructions       json.RawMessage `json:"instructions,omitempty"`
-	MaxOutputTokens    *uint           `json:"max_output_tokens,omitempty"`
-	TopLogProbs        *int            `json:"top_logprobs,omitempty"`
-	Metadata           json.RawMessage `json:"metadata,omitempty"`
-	Moderation         json.RawMessage `json:"moderation,omitempty"`
-	ParallelToolCalls  json.RawMessage `json:"parallel_tool_calls,omitempty"`
+	Conversation      json.RawMessage `json:"conversation,omitempty"`
+	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+	Instructions      json.RawMessage `json:"instructions,omitempty"`
+	MaxOutputTokens   *uint           `json:"max_output_tokens,omitempty"`
+	TopLogProbs       *int            `json:"top_logprobs,omitempty"`
+	Metadata          json.RawMessage `json:"metadata,omitempty"`
+	Moderation        json.RawMessage `json:"moderation,omitempty"`
+	ParallelToolCalls json.RawMessage `json:"parallel_tool_calls,omitempty"`
 	// FrequencyPenalty/PresencePenalty are not part of the official OpenAI
 	// Responses API; they are forwarded verbatim for OpenAI-compatible upstreams
 	// (e.g. vLLM) that accept them.
@@ -935,6 +945,13 @@ func (r *OpenAIResponsesRequest) GetTokenCountMeta() *types.TokenCountMeta {
 					fileMeta = append(fileMeta, &types.FileMeta{
 						FileType: types.FileTypeFile,
 						Source:   types.NewFileSourceFromData(input.FileUrl, ""),
+					})
+				}
+			} else if input.Type == "input_video" || input.Type == "video_url" || input.Type == "video" {
+				if input.VideoUrl != "" {
+					fileMeta = append(fileMeta, &types.FileMeta{
+						FileType: types.FileTypeVideo,
+						Source:   types.NewFileSourceFromData(input.VideoUrl, "video/mp4"),
 					})
 				}
 			} else {
@@ -1010,6 +1027,7 @@ type MediaInput struct {
 	Text     string `json:"text,omitempty"`
 	FileUrl  string `json:"file_url,omitempty"`
 	ImageUrl string `json:"image_url,omitempty"`
+	VideoUrl string `json:"video_url,omitempty"`
 	Detail   string `json:"detail,omitempty"` // 仅 input_image 有效
 }
 
@@ -1017,7 +1035,7 @@ type MediaInput struct {
 // Reference implementation mirrors Message.ParseContent:
 //   - input can be a string, treated as an input_text item
 //   - input can be an array of objects with a `type` field
-//     supported types: input_text, input_image, input_file
+//     supported types: input_text, input_image, input_file, input_video
 func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 	if r.Input == nil {
 		return nil
@@ -1096,6 +1114,12 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 							}
 						}
 						mediaInputs = append(mediaInputs, MediaInput{Type: "input_file", FileUrl: fileUrl})
+					case "input_video", "video_url", "video":
+						videoUrl := responsesMediaURL(item, "video_url")
+						if videoUrl == "" {
+							videoUrl = responsesMediaURL(item, "url")
+						}
+						mediaInputs = append(mediaInputs, MediaInput{Type: typeVal, VideoUrl: videoUrl})
 					}
 				}
 			}
@@ -1103,4 +1127,16 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 	}
 
 	return mediaInputs
+}
+
+func responsesMediaURL(item map[string]any, key string) string {
+	switch value := item[key].(type) {
+	case string:
+		return value
+	case map[string]any:
+		if url, ok := value["url"].(string); ok {
+			return url
+		}
+	}
+	return ""
 }
