@@ -18,8 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { Checkbox } from '@/components/ui/checkbox'
+import { useEffect, useMemo } from 'react'
+import { useForm } from 'react-hook-form'
+import { useTranslation } from 'react-i18next'
+
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Drawer,
   DrawerContent,
@@ -37,24 +41,15 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import {
-  RadioGroup,
-  RadioGroupItem,
-} from '@/components/ui/radio-group'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { getChannels } from '@/features/channels/api'
-import type {
-  CreateProxyRuleParams,
-  ProxyNode,
-  ProxyRule,
-} from '../types'
+
 import {
   formatNodeAddress,
   PROXY_RULE_FORM_SCHEMA,
   type ProxyRuleFormValues,
 } from '../lib'
-import { useForm } from 'react-hook-form'
-import { useEffect, useMemo } from 'react'
-import { useTranslation } from 'react-i18next'
+import type { CreateProxyRuleParams, ProxyNode, ProxyRule } from '../types'
 
 type RuleMutateDrawerProps = {
   open: boolean
@@ -163,7 +158,11 @@ export function RuleMutateDrawer(props: RuleMutateDrawerProps) {
   }
 
   return (
-    <Drawer open={props.open} onOpenChange={props.onOpenChange} direction='right'>
+    <Drawer
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      direction='right'
+    >
       <DrawerContent className='w-full max-w-md sm:max-w-md'>
         <DrawerHeader>
           <DrawerTitle>
@@ -270,7 +269,9 @@ export function RuleMutateDrawer(props: RuleMutateDrawerProps) {
                           <label
                             key={`${node.name}-${index}`}
                             className={`flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm ${
-                              unsupported ? 'cursor-not-allowed opacity-60' : 'hover:bg-muted/50'
+                              unsupported
+                                ? 'cursor-not-allowed opacity-60'
+                                : 'hover:bg-muted/50'
                             }`}
                           >
                             <RadioGroupItem

@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest'
 
 import { CHANNEL_TYPE_COMMAND, CHANNEL_TYPE_OPENCODE } from '../../constants'
+import type { Channel } from '../../types'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   channelFormSchema,
   transformChannelToFormDefaults,
   transformFormDataToUpdatePayload,
 } from '../channel-form'
-import type { Channel } from '../../types'
 
 describe('transformFormDataToUpdatePayload', () => {
   it('keeps group, priority and weight in the update payload', () => {

@@ -1,0 +1,42 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "ZEBRA-4291",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1791901844,
+  "id": "267b6d4bcbbd9c31e623739f7e7bdab3",
+  "model": "glm-5.3",
+  "object": "chat.completion",
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cached_tokens": 0,
+    "completion_thinking_tokens": 0,
+    "completion_tokens": 9,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
+    },
+    "credit": 12.97,
+    "prompt_cache_hit_tokens": 0,
+    "prompt_cache_miss_tokens": 81049,
+    "prompt_cache_write_tokens": 0,
+    "prompt_tokens": 81049,
+    "prompt_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 81058
+  }
+}

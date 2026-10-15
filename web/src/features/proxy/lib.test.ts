@@ -18,11 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
-import {
-  formatNodeAddress,
-  isHttpUrl,
-  makeProxyRulePayload,
-} from './lib'
+import { formatNodeAddress, isHttpUrl, makeProxyRulePayload } from './lib'
 import type { ProxyNode } from './types'
 
 const makeNode = (overrides: Partial<ProxyNode> = {}): ProxyNode => ({

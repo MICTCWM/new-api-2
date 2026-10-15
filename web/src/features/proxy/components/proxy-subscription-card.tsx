@@ -20,14 +20,10 @@ import { RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+
 import { isHttpUrl } from '../lib'
 
 type ProxySubscriptionCardProps = {
@@ -104,7 +100,7 @@ export function ProxySubscriptionCard(props: ProxySubscriptionCardProps) {
             <dt className='text-muted-foreground text-xs'>
               {t('Subscription URL')}
             </dt>
-            <dd className='min-w-0 break-all font-medium'>
+            <dd className='min-w-0 font-medium break-all'>
               {props.subscriptionUrl}
             </dd>
           </div>
@@ -127,7 +123,9 @@ export function ProxySubscriptionCard(props: ProxySubscriptionCardProps) {
                 props.refreshPending ? 'animate-spin' : ''
               }`}
             />
-            {props.refreshPending ? t('Refreshing...') : t('Refresh subscription')}
+            {props.refreshPending
+              ? t('Refreshing...')
+              : t('Refresh subscription')}
           </Button>
           <Button
             variant='destructive'

@@ -35,5 +35,19 @@ export default defineConfig({
     clearMocks: true,
     restoreMocks: true,
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    server: {
+      deps: {
+        // @lobehub/icons pulls in @lobehub/ui's emoji picker, whose emoji-mart
+        // bundle imports JSON files that Node ESM rejects without an import
+        // attribute, so let Vite transform the whole chain instead.
+        inline: [
+          '@lobehub/icons',
+          '@lobehub/ui',
+          '@emoji-mart/react',
+          'emoji-mart',
+          '@emoji-mart/data',
+        ],
+      },
+    },
   },
 })

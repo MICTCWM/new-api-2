@@ -157,27 +157,33 @@ func getResponseRewriter(c *gin.Context) *ResponseRewriter {
 // tail emitted before the current chunk, or be empty); when false the caller
 // writes the original payload untouched.
 //
-// The hook also performs the Command-channel thinking strip here (see
-// ShouldHideCommandThinking): it removes reasoning_content / reasoning from a
-// chat-shaped chunk even when no response rewriter is installed. When both the
-// rewriter and the strip apply, the rewriter runs on the stripped payload.
+// The hook also performs the outbound internal-field strip (see
+// sanitizeInternalResponseFields) and the Command-channel thinking strip (see
+// ShouldHideCommandThinking): it removes gateway-only keys, and reasoning_content
+// / reasoning from a chat-shaped chunk, even when no response rewriter is
+// installed. When both a strip and the rewriter apply, the rewriter runs on the
+// stripped payload.
 func RewriteStreamChunk(c *gin.Context, data string) ([]ResponseRewriteFrame, bool) {
 	if data == "" || !gjson.Valid(data) {
 		return nil, false
 	}
+	owned := false
+	if sanitized, changed := sanitizeInternalResponseFields(data); changed {
+		data = sanitized
+		owned = true
+	}
 	hideThinking := ShouldHideCommandThinking(c)
-	rewriter := getResponseRewriter(c)
 	if hideThinking {
 		stripped, changed := stripChatThinkingFields(data)
 		if changed {
 			data = stripped
-		} else if rewriter == nil {
-			// Nothing was hidden and no rewriter owns the protocol: pass through.
-			return nil, false
+		} else {
+			hideThinking = false
 		}
 	}
+	rewriter := getResponseRewriter(c)
 	if rewriter == nil {
-		if hideThinking {
+		if owned || hideThinking {
 			return []ResponseRewriteFrame{{JSON: data}}, true
 		}
 		return nil, false
@@ -192,10 +198,10 @@ func RewriteStreamChunk(c *gin.Context, data string) ([]ResponseRewriteFrame, bo
 	case types.RelayFormatGemini:
 		return rewriter.rewriteGeminiChunk(data), true
 	default:
-		// The rewriter does not own this protocol, but the thinking strip still
-		// changed the payload: emit the stripped frame so the caller never writes
-		// the original reasoning-bearing bytes back to the client.
-		if hideThinking {
+		// The rewriter does not own this protocol, but a strip still changed the
+		// payload: emit the stripped frame so the caller never writes the original
+		// internal-field or reasoning-bearing bytes back to the client.
+		if owned || hideThinking {
 			return []ResponseRewriteFrame{{JSON: data}}, true
 		}
 		return nil, false
@@ -213,11 +219,15 @@ func FlushResponseRewrite(c *gin.Context) []ResponseRewriteFrame {
 }
 
 // RewriteResponseBody rewrites a non-streaming response body that is already in
-// the client protocol. It also performs the Command-channel thinking strip (see
-// ShouldHideCommandThinking) for a chat-shaped body.
+// the client protocol. It also strips gateway-only internal fields, and performs
+// the Command-channel thinking strip (see ShouldHideCommandThinking) for a
+// chat-shaped body.
 func RewriteResponseBody(c *gin.Context, data []byte) []byte {
 	if len(data) == 0 || !gjson.ValidBytes(data) {
 		return data
+	}
+	if sanitized, changed := sanitizeInternalResponseBytes(data); changed {
+		data = sanitized
 	}
 	rewriter := getResponseRewriter(c)
 	if ShouldHideCommandThinking(c) {

@@ -1,0 +1,8 @@
+{
+  "name": "openai-response-sanitizer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

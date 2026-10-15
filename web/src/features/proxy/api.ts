@@ -47,7 +47,11 @@ export async function getProxyStatus(): Promise<ProxyStatusResult> {
 export async function saveProxySubscription(
   params: SaveSubscriptionParams
 ): Promise<ProxyFetchResult> {
-  const res = await api.post('/api/proxy/subscription', params, businessErrorConfig)
+  const res = await api.post(
+    '/api/proxy/subscription',
+    params,
+    businessErrorConfig
+  )
   return res.data
 }
 
@@ -85,7 +89,11 @@ export async function updateProxyRule(
   id: string,
   params: UpdateProxyRuleParams
 ): Promise<ProxyCreateRuleResult> {
-  const res = await api.put(`/api/proxy/rules/${id}`, params, businessErrorConfig)
+  const res = await api.put(
+    `/api/proxy/rules/${id}`,
+    params,
+    businessErrorConfig
+  )
   return res.data
 }
 

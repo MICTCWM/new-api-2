@@ -16,26 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { SectionPageLayout } from '@/components/layout'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StaticDataTable } from '@/components/data-table'
+import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Empty,
-  EmptyDescription,
-  EmptyTitle,
-} from '@/components/ui/empty'
+import { Empty, EmptyDescription, EmptyTitle } from '@/components/ui/empty'
+
 import {
   clearProxySubscription,
   createProxyRule,
@@ -49,10 +42,7 @@ import { ProxyNodeList } from './components/proxy-node-list'
 import { ProxySubscriptionCard } from './components/proxy-subscription-card'
 import { RuleMutateDrawer } from './components/rule-mutate-drawer'
 import { formatNodeAddress } from './lib'
-import type {
-  CreateProxyRuleParams,
-  ProxyRule,
-} from './types'
+import type { CreateProxyRuleParams, ProxyRule } from './types'
 
 /**
  * Admin page for managing the proxy gateway: subscription URL, parsed nodes
@@ -76,7 +66,9 @@ export function ProxyPage() {
     staleTime: 30 * 1000,
   })
 
-  const statusData = statusQuery.data?.success ? statusQuery.data.data : undefined
+  const statusData = statusQuery.data?.success
+    ? statusQuery.data.data
+    : undefined
   const subscriptionConfigured = Boolean(statusData?.subscription_url)
   const nodes = statusData?.nodes ?? []
   const rules = statusData?.rules ?? []
@@ -187,113 +179,113 @@ export function ProxyPage() {
 
   return (
     <>
-    <SectionPageLayout>
-      <SectionPageLayout.Title>{t('Proxy')}</SectionPageLayout.Title>
-      <SectionPageLayout.Actions>
-        <Button size='sm' onClick={() => setDrawerOpen(true)}>
-          <Plus className='mr-1 h-3 w-3' />
-          {t('New Rule')}
-        </Button>
-      </SectionPageLayout.Actions>
-      <SectionPageLayout.Content>
-        {statusQuery.isError ? (
-          <Empty>
-            <EmptyTitle>{t('Failed to load proxy status')}</EmptyTitle>
-            <EmptyDescription>
-              {t('Refresh the list and try again.')}
-            </EmptyDescription>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              onClick={() => statusQuery.refetch()}
-            >
-              <RefreshCw className='mr-1 h-3 w-3' />
-              {t('Retry')}
-            </Button>
-          </Empty>
-        ) : (
-        <div className='grid gap-4'>
-          <ProxySubscriptionCard
-            configured={subscriptionConfigured}
-            subscriptionUrl={statusData?.subscription_url ?? ''}
-            fetchedAt={statusData?.subscription_fetched_at ?? 0}
-            draftUrl={draftUrl}
-            onDraftUrlChange={setDraftUrl}
-            savePending={saveMutation.isPending}
-            refreshPending={refreshMutation.isPending}
-            clearPending={clearMutation.isPending}
-            onSave={() => saveMutation.mutate()}
-            onRefresh={() => refreshMutation.mutate()}
-            onClear={() => setClearOpen(true)}
-          />
+      <SectionPageLayout>
+        <SectionPageLayout.Title>{t('Proxy')}</SectionPageLayout.Title>
+        <SectionPageLayout.Actions>
+          <Button size='sm' onClick={() => setDrawerOpen(true)}>
+            <Plus className='mr-1 h-3 w-3' />
+            {t('New Rule')}
+          </Button>
+        </SectionPageLayout.Actions>
+        <SectionPageLayout.Content>
+          {statusQuery.isError ? (
+            <Empty>
+              <EmptyTitle>{t('Failed to load proxy status')}</EmptyTitle>
+              <EmptyDescription>
+                {t('Refresh the list and try again.')}
+              </EmptyDescription>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={() => statusQuery.refetch()}
+              >
+                <RefreshCw className='mr-1 h-3 w-3' />
+                {t('Retry')}
+              </Button>
+            </Empty>
+          ) : (
+            <div className='grid gap-4'>
+              <ProxySubscriptionCard
+                configured={subscriptionConfigured}
+                subscriptionUrl={statusData?.subscription_url ?? ''}
+                fetchedAt={statusData?.subscription_fetched_at ?? 0}
+                draftUrl={draftUrl}
+                onDraftUrlChange={setDraftUrl}
+                savePending={saveMutation.isPending}
+                refreshPending={refreshMutation.isPending}
+                clearPending={clearMutation.isPending}
+                onSave={() => saveMutation.mutate()}
+                onRefresh={() => refreshMutation.mutate()}
+                onClear={() => setClearOpen(true)}
+              />
 
-          <div className='grid grid-cols-1 gap-4 lg:grid-cols-2'>
-            <ProxyNodeList nodes={nodes} loading={statusQuery.isLoading} />
-            <RuleTable
-              rules={rules}
-              loading={statusQuery.isLoading}
-              onEdit={(rule) => {
-                setEditTarget(rule)
-                setDrawerOpen(true)
-              }}
-              onDelete={setDeleteTarget}
-            />
-          </div>
-        </div>
+              <div className='grid grid-cols-1 gap-4 lg:grid-cols-2'>
+                <ProxyNodeList nodes={nodes} loading={statusQuery.isLoading} />
+                <RuleTable
+                  rules={rules}
+                  loading={statusQuery.isLoading}
+                  onEdit={(rule) => {
+                    setEditTarget(rule)
+                    setDrawerOpen(true)
+                  }}
+                  onDelete={setDeleteTarget}
+                />
+              </div>
+            </div>
+          )}
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
+
+      <RuleMutateDrawer
+        open={drawerOpen}
+        onOpenChange={(open) => {
+          setDrawerOpen(open)
+          if (!open) setEditTarget(null)
+        }}
+        nodes={nodes}
+        editing={editTarget}
+        isPending={createRuleMutation.isPending || updateRuleMutation.isPending}
+        onSubmit={(params) => {
+          if (editTarget) {
+            updateRuleMutation.mutate({ id: editTarget.id, ...params })
+            return
+          }
+          createRuleMutation.mutate(params)
+        }}
+      />
+
+      <ConfirmDialog
+        open={clearOpen}
+        onOpenChange={setClearOpen}
+        title={t('Clear subscription')}
+        desc={t(
+          'This will remove the configured subscription URL, all parsed nodes and routing rules.'
         )}
-      </SectionPageLayout.Content>
-    </SectionPageLayout>
+        destructive
+        confirmText={t('Clear')}
+        isLoading={clearMutation.isPending}
+        handleConfirm={() => clearMutation.mutate()}
+      />
 
-    <RuleMutateDrawer
-      open={drawerOpen}
-      onOpenChange={(open) => {
-        setDrawerOpen(open)
-        if (!open) setEditTarget(null)
-      }}
-      nodes={nodes}
-      editing={editTarget}
-      isPending={createRuleMutation.isPending || updateRuleMutation.isPending}
-      onSubmit={(params) => {
-        if (editTarget) {
-          updateRuleMutation.mutate({ id: editTarget.id, ...params })
-          return
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t('Delete rule')}
+        desc={
+          <span>
+            {t('This will permanently delete rule')}{' '}
+            <span className='font-semibold'>{deleteTarget?.name}</span>
+            {t('. This action cannot be undone.')}
+          </span>
         }
-        createRuleMutation.mutate(params)
-      }}
-    />
-
-    <ConfirmDialog
-      open={clearOpen}
-      onOpenChange={setClearOpen}
-      title={t('Clear subscription')}
-      desc={t(
-        'This will remove the configured subscription URL, all parsed nodes and routing rules.'
-      )}
-      destructive
-      confirmText={t('Clear')}
-      isLoading={clearMutation.isPending}
-      handleConfirm={() => clearMutation.mutate()}
-    />
-
-    <ConfirmDialog
-      open={deleteTarget !== null}
-      onOpenChange={(open) => !open && setDeleteTarget(null)}
-      title={t('Delete rule')}
-      desc={
-        <span>
-          {t('This will permanently delete rule')}{' '}
-          <span className='font-semibold'>{deleteTarget?.name}</span>
-          {t('. This action cannot be undone.')}
-        </span>
-      }
-      destructive
-      confirmText={t('Delete')}
-      isLoading={deleteRuleMutation.isPending}
-      handleConfirm={() => {
-        if (deleteTarget) deleteRuleMutation.mutate(deleteTarget.id)
-      }}
-    />
+        destructive
+        confirmText={t('Delete')}
+        isLoading={deleteRuleMutation.isPending}
+        handleConfirm={() => {
+          if (deleteTarget) deleteRuleMutation.mutate(deleteTarget.id)
+        }}
+      />
     </>
   )
 }

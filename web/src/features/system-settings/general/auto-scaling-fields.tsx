@@ -18,16 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
-import {
-  useFormContext,
-  useWatch,
-  type Control,
-} from 'react-hook-form'
+import { useFormContext, useWatch, type Control } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { getChannels } from '@/features/channels/api'
-import type { Channel } from '@/features/channels/types'
 import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -41,6 +35,8 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { getChannels } from '@/features/channels/api'
+import type { Channel } from '@/features/channels/types'
 
 import {
   SettingsControlChildren,
@@ -144,7 +140,8 @@ export function AutoScalingFields(props: AutoScalingFieldsProps) {
   }
 
   const instancesLoadFailed =
-    instancesQuery.isError || (instancesResult != null && !instancesResult.success)
+    instancesQuery.isError ||
+    (instancesResult != null && !instancesResult.success)
 
   const testConnectionMutation = useMutation({
     mutationFn: () =>
@@ -216,10 +213,7 @@ export function AutoScalingFields(props: AutoScalingFieldsProps) {
               </FormDescription>
             </SettingsSwitchContent>
             <FormControl>
-              <Switch
-                checked={field.value}
-                onCheckedChange={field.onChange}
-              />
+              <Switch checked={field.value} onCheckedChange={field.onChange} />
             </FormControl>
           </SettingsSwitchItem>
         )}
@@ -346,7 +340,8 @@ export function AutoScalingFields(props: AutoScalingFieldsProps) {
                         disabled={instancesQuery.isLoading}
                       />
                       <span className='min-w-0 flex-1 truncate'>
-                        {instance.name?.trim() || instance.instance_uuid.slice(0, 12)}
+                        {instance.name?.trim() ||
+                          instance.instance_uuid.slice(0, 12)}
                       </span>
                       <span className='text-muted-foreground flex-shrink-0 text-xs'>
                         {instance.status}

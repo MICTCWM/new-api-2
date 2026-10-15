@@ -1,0 +1,29 @@
+{
+  "id": "b7cd6f2e-f765-41a5-8a25-2f82102daf1e",
+  "object": "chat.completion",
+  "created": 1791902236,
+  "model": "glm-5.3",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "ZEBRA-4291",
+        "reasoning_content": "The user wants me to find and reply with the secret code word..."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "completion_tokens": 53,
+    "completion_tokens_details": {
+      "reasoning_tokens": 45
+    },
+    "prompt_tokens": 81056,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "total_tokens": 81109
+  },
+  "provider": "nvi************"
+}
