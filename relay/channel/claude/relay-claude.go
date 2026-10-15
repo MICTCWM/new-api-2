@@ -204,7 +204,9 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
 		if err != nil {
 			sr.Stop(err)
+			return
 		}
+		service.UpdateConnectionOutputText(info.RequestId, claudeInfo.ResponseText.String(), info.UpstreamModelName, 0)
 	})
 	if err != nil {
 		return nil, err

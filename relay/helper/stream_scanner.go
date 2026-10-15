@@ -263,14 +263,21 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				continue
 			}
 			if !strings.HasPrefix(data, "[DONE]") {
-				if info.SetFirstResponseTime() && info.IsStream && info.GetChannelID() > 0 {
-					group := info.UsingGroup
-					if group == "" {
-						group = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+				if info.SetFirstResponseTime() {
+					if info.IsStream {
+						// 连接日志：首 token 到达，状态从「等待首 token」切到「正在流式输出」。
+						service.MarkConnectionFirstToken(info.RequestId)
 					}
-					_ = service.ObserveSpeedProtectionRequest(info.GetChannelID(), group, time.Since(info.StartTime).Milliseconds())
+					if info.IsStream && info.GetChannelID() > 0 {
+						group := info.UsingGroup
+						if group == "" {
+							group = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+						}
+						_ = service.ObserveSpeedProtectionRequest(info.GetChannelID(), group, time.Since(info.StartTime).Milliseconds())
+					}
 				}
 				info.ReceivedResponseCount++
+				service.AddConnectionChunk(info.RequestId)
 
 				select {
 				case dataChan <- data:

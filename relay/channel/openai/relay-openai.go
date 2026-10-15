@@ -153,6 +153,8 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
+			} else {
+				service.UpdateConnectionOutputText(info.RequestId, responseTextBuilder.String(), info.UpstreamModelName, toolCount*7)
 			}
 		}
 	})

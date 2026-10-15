@@ -570,6 +570,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	attachQuotaSaturation(ctx, relayInfo, other)
 
+	// 连接日志：到这里才对外展示输出 token，并用量替换请求前的估算输入。
+	SettleConnectionTokens(relayInfo.RequestId, summary.PromptTokens, summary.CompletionTokens)
+
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     summary.PromptTokens,

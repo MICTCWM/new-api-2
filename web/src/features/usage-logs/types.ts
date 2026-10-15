@@ -479,3 +479,69 @@ export interface UserInfo {
   aff_quota?: number
   remark?: string
 }
+
+// ============================================================================
+// Live Connection Logs (admin-only)
+// ============================================================================
+
+/**
+ * 正在连接 sub-states plus the terminal 完成连接 state.
+ * Non-stream connections never leave `waiting_response` until they complete.
+ */
+export type ConnectionState =
+  | 'waiting_first_token'
+  | 'streaming'
+  | 'waiting_response'
+  | 'completed'
+
+export interface ConnectionLogItem {
+  request_id: string
+  username: string
+  user_id: number
+  group: string
+  model: string
+  stream: boolean
+  channel_id: number
+  state: ConnectionState
+  /** Unix ms on the node clock. */
+  started_at: number
+  first_token_at: number | null
+  finished_at: number | null
+  /** Null before the first token arrives; absent for non-stream connections. */
+  ttft_ms: number | null
+  duration_ms: number
+  input_tokens: number
+  /** Streamed estimates while active; final upstream usage after settlement. */
+  output_tokens: number | null
+  stream_chunks: number
+  active: boolean
+}
+
+export interface ConnectionLogSnapshot {
+  concurrent: number
+  total_input_tokens: number
+  /** Node clock, used to align client-side timers with server timestamps. */
+  server_time: number
+  node_name: string
+  items: ConnectionLogItem[]
+}
+
+export type ConnectionLogProgressItem = Pick<
+  ConnectionLogItem,
+  | 'request_id'
+  | 'state'
+  | 'first_token_at'
+  | 'finished_at'
+  | 'ttft_ms'
+  | 'duration_ms'
+  | 'input_tokens'
+  | 'output_tokens'
+  | 'active'
+>
+
+export interface ConnectionLogProgressSnapshot {
+  concurrent: number
+  total_input_tokens: number
+  server_time: number
+  items: ConnectionLogProgressItem[]
+}

@@ -60,7 +60,7 @@ export const Route = createFileRoute('/_authenticated/usage-logs/$section')({
         params: { section: USAGE_LOGS_DEFAULT_SECTION },
       })
     }
-    if (params.section === 'session') {
+    if (params.section === 'session' || params.section === 'connection') {
       const { auth } = useAuthStore.getState()
       if (!auth.user || auth.user.role < ROLE.ADMIN) {
         throw redirect({ to: '/403' })

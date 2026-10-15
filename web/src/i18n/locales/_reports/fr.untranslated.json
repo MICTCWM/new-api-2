@@ -2,16 +2,10 @@
   "Apply the gateway station cache billing discount to text requests on this channel": "Apply the gateway station cache billing discount to text requests on this channel",
   "Click to view Command quota": "Click to view Command quota",
   "Command must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash": "Command must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash",
-  "Command supports Flash, Pro, V4.1 Flash, and model mapping source models": "Command supports Flash, Pro, V4.1 Flash, and model mapping source models",
   "Display and default models": "Display and default models",
   "Failed to update proxy rule": "Failed to update proxy rule",
-  "Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and glm-5.3-flash.": "Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash and glm-5.3-flash.",
   "Hidden models stay usable by mapping rules, but they are removed from the model square and user model pickers.": "Hidden models stay usable by mapping rules, but they are removed from the model square and user model pickers.",
-  "Opencode must include deepseek-v4-flash or glm-5.3-flash": "Opencode must include deepseek-v4-flash or glm-5.3-flash",
-  "Opencode supports deepseek-v4-flash, glm-5.3-flash, and model mapping source models": "Opencode supports deepseek-v4-flash, glm-5.3-flash, and model mapping source models",
-  "Opencode uses a fixed endpoint and supports deepseek-v4-flash and glm-5.3-flash. Batch mode creates one channel per API key.": "Opencode uses a fixed endpoint and supports deepseek-v4-flash and glm-5.3-flash. Batch mode creates one channel per API key.",
   "Original and replacement models are required": "Original and replacement models are required",
   "Select models to hide": "Select models to hide",
-  "This subscription will not renew after the current period ends.": "This subscription will not renew after the current period ends.",
-  "Total pool must equal the enabled model pool usage": "Total pool must equal the enabled model pool usage"
+  "This subscription will not renew after the current period ends.": "This subscription will not renew after the current period ends."
 }

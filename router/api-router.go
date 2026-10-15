@@ -26,6 +26,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/models", middleware.UserAuth(), controller.DashboardListModels)
 		apiRouter.GET("/status/test", middleware.AdminAuth(), controller.TestStatus)
 		apiRouter.GET("/opencode/queue", middleware.AdminAuth(), controller.GetOpencodeQueue)
+		apiRouter.GET("/connection/logs", middleware.AdminAuth(), controller.GetConnectionLogs)
 		apiRouter.GET("/notice", controller.GetNotice)
 		apiRouter.GET("/user-agreement", controller.GetUserAgreement)
 		apiRouter.GET("/privacy-policy", controller.GetPrivacyPolicy)

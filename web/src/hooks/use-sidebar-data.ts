@@ -35,6 +35,7 @@ import {
   User,
   Users,
   Wallet,
+  Waypoints,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -104,6 +105,12 @@ export function useSidebarData(): SidebarData {
             activeUrls: ['/usage-logs/drawing'],
             configUrls: ['/usage-logs/drawing', '/usage-logs/task'],
             icon: ListTodo,
+          },
+          {
+            title: t('Connection Logs'),
+            url: '/usage-logs/connection',
+            requiredRole: ROLE.ADMIN,
+            icon: Waypoints,
           },
         ],
       },

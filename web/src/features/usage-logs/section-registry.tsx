@@ -42,6 +42,11 @@ const USAGE_LOGS_SECTIONS = [
     titleKey: 'Session ID Logs',
     build: () => null, // Admin-only; content is rendered directly in the page component
   },
+  {
+    id: 'connection',
+    titleKey: 'Connection Logs',
+    build: () => null, // Admin-only; live connections render their own panel
+  },
 ] as const
 
 export type UsageLogsSectionId = (typeof USAGE_LOGS_SECTIONS)[number]['id']

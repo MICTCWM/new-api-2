@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
-import { buildQueryParams } from './lib/utils'
+import { buildQueryParams } from './lib/query-params'
 import type {
   GetLogsParams,
   GetLogsResponse,
@@ -26,6 +26,8 @@ import type {
   GetLogStatsResponse,
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
+  ConnectionLogProgressSnapshot,
+  ConnectionLogSnapshot,
   UserInfo,
 } from './types'
 
@@ -110,3 +112,32 @@ export const getAllTaskLogs = (params: GetTaskLogsParams) =>
 
 export const getUserTaskLogs = (params: GetTaskLogsParams) =>
   fetchLogs('/api/task', params, false)
+
+// ============================================================================
+// Live Connection Logs API
+// ============================================================================
+
+export async function getConnectionLogs(): Promise<{
+  success: boolean
+  data: ConnectionLogSnapshot
+}>
+export async function getConnectionLogs(progress: true): Promise<{
+  success: boolean
+  data: ConnectionLogProgressSnapshot
+}>
+export async function getConnectionLogs(progress = false): Promise<{
+  success: boolean
+  data: ConnectionLogSnapshot | ConnectionLogProgressSnapshot
+}> {
+  if (progress) {
+    const res = await api.get<{
+      success: boolean
+      data: ConnectionLogProgressSnapshot
+    }>('/api/connection/logs?progress=true')
+    return res.data
+  }
+  const res = await api.get<{ success: boolean; data: ConnectionLogSnapshot }>(
+    '/api/connection/logs'
+  )
+  return res.data
+}

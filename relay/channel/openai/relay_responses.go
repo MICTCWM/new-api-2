@@ -156,6 +156,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				}
 			}
 		}
+		service.UpdateConnectionOutputText(info.RequestId, responseTextBuilder.String(), info.UpstreamModelName, 0)
 	})
 
 	if usage.CompletionTokens == 0 {

@@ -174,6 +174,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 				}
 			}
 		}
+		service.UpdateConnectionOutputText(info.RequestId, responseText.String(), info.UpstreamModelName, 0)
 
 		// 更新使用量统计
 		if metadata := geminiResponse.GetUsageMetadata(); dto.HasGeminiUsageMetadataTokens(metadata) {

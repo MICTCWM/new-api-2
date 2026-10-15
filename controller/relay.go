@@ -160,6 +160,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	relayInfo.SetEstimatePromptTokens(tokens)
+	// 连接日志：请求一进入就登记并发数与输入 token，结束时只关闭连接、不删除记录。
+	service.RegisterConnection(relayInfo, c.GetString("username"), tokens)
+	defer service.FinishConnection(relayInfo.RequestId)
 
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
@@ -303,6 +306,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			channelConcurrencyReserved = true
 		}
 		addUsedChannel(c, channel.Id)
+		service.SetConnectionChannel(relayInfo.RequestId, channel.Id)
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			if concurrencyReserved {
 				releaseOpencodeConcurrency(c, channel.Type, channel.Id)
