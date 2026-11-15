@@ -5,8 +5,12 @@ import { formatNumber } from '@/lib/format'
 import { CONNECTION_EMPTY_VALUE } from '../lib/connection-log-display'
 import type { ConnectionLogItem } from '../types'
 
-/** Time constant of the output-token catch-up: smaller = snappier counting. */
-const OUTPUT_COUNT_CATCHUP_MS = 220
+/**
+ * Short catch-up: a poll's real delta lands almost immediately and then holds,
+ * so bursts and pauses stay visible instead of being smeared across the whole
+ * poll interval.
+ */
+const OUTPUT_COUNT_CATCHUP_MS = 90
 /** Guards the easing against long frame gaps (background tab, heavy render). */
 const OUTPUT_COUNT_MAX_FRAME_MS = 250
 

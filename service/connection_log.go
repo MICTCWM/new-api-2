@@ -19,6 +19,11 @@ const (
 	connectionLogPruneEach = 256
 	// How often an open stream republishes its estimated output tokens.
 	connectionOutputCountInterval = 100 * time.Millisecond
+	// The live cadence keeps a short history of real 100ms token deltas for the
+	// status animation, so the bars follow upstream bursts instead of a synthetic
+	// evenly-spread rate.
+	connectionOutputCadenceBuckets  = 12
+	connectionOutputCadenceBucketMS = 100
 )
 
 // Connection states. 正在连接 covers waiting_first_token / streaming (stream)
@@ -31,23 +36,25 @@ const (
 )
 
 type connectionRecord struct {
-	requestID            string
-	username             string
-	userID               int
-	group                string
-	model                string
-	stream               bool
-	startedAt            int64 // unix ms, node clock
-	channelID            atomic.Int64
-	firstToken           atomic.Int64 // unix ms, 0 until the first token
-	chunks               atomic.Int64
-	input                atomic.Int64
-	output               atomic.Int64
-	outputVisible        atomic.Bool
-	outputCountMu        sync.Mutex
-	lastOutputCountAt    time.Time
-	lastOutputTextLength int
-	lastOutputExtraCount int
+	requestID         string
+	username          string
+	userID            int
+	group             string
+	model             string
+	stream            bool
+	startedAt         int64 // unix ms, node clock
+	channelID         atomic.Int64
+	firstToken        atomic.Int64 // unix ms, 0 until the first token
+	chunks            atomic.Int64
+	input             atomic.Int64
+	output            atomic.Int64
+	outputVisible     atomic.Bool
+	outputCountMu     sync.Mutex
+	lastOutputCountAt time.Time
+	lastOutputTotal   int
+	cadenceMu         sync.Mutex
+	cadenceBucket     int64
+	outputCadence     [connectionOutputCadenceBuckets]int64
 	// settled marks that upstream usage arrived; it replaces the live estimate.
 	settled    atomic.Bool
 	finishedAt atomic.Int64 // unix ms, 0 while the connection is open
@@ -73,9 +80,12 @@ type ConnectionLogItem struct {
 	DurationMS   int64  `json:"duration_ms"`
 	InputTokens  int64  `json:"input_tokens"`
 	OutputTokens *int64 `json:"output_tokens"` // nil until stream text or settled usage exists
-	StreamChunks int64  `json:"stream_chunks"`
-	Active       bool   `json:"active"`
-	RetryCount   int    `json:"retry_count"`
+	// OutputCadence is the real output-token delta per 100ms bucket, oldest first,
+	// for the live status animation. It is omitted for non-stream requests.
+	OutputCadence []int64 `json:"output_cadence,omitempty"`
+	StreamChunks  int64   `json:"stream_chunks"`
+	Active        bool    `json:"active"`
+	RetryCount    int     `json:"retry_count"`
 	// RetryWaitMS is the remaining backoff before the next attempt, zero when
 	// the connection is not waiting to retry.
 	RetryWaitMS int64 `json:"retry_wait_ms"`
@@ -90,17 +100,18 @@ type ConnectionLogSnapshot struct {
 }
 
 type ConnectionLogProgressItem struct {
-	RequestID    string `json:"request_id"`
-	State        string `json:"state"`
-	FirstTokenAt *int64 `json:"first_token_at"`
-	FinishedAt   *int64 `json:"finished_at"`
-	TTFTMS       *int64 `json:"ttft_ms"`
-	DurationMS   int64  `json:"duration_ms"`
-	InputTokens  int64  `json:"input_tokens"`
-	OutputTokens *int64 `json:"output_tokens"`
-	Active       bool   `json:"active"`
-	RetryCount   int    `json:"retry_count"`
-	RetryWaitMS  int64  `json:"retry_wait_ms"`
+	RequestID     string  `json:"request_id"`
+	State         string  `json:"state"`
+	FirstTokenAt  *int64  `json:"first_token_at"`
+	FinishedAt    *int64  `json:"finished_at"`
+	TTFTMS        *int64  `json:"ttft_ms"`
+	DurationMS    int64   `json:"duration_ms"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  *int64  `json:"output_tokens"`
+	OutputCadence []int64 `json:"output_cadence,omitempty"`
+	Active        bool    `json:"active"`
+	RetryCount    int     `json:"retry_count"`
+	RetryWaitMS   int64   `json:"retry_wait_ms"`
 }
 
 type ConnectionLogProgressSnapshot struct {
@@ -190,8 +201,12 @@ func SettleConnectionTokens(requestID string, inputTokens, outputTokens int) {
 	if inputTokens > 0 {
 		record.input.Store(int64(inputTokens))
 	}
+	// Serialize with the live estimator: once settled, a late stream update must
+	// not overwrite the upstream usage with an estimate.
+	record.outputCountMu.Lock()
 	record.output.Store(int64(outputTokens))
 	record.settled.Store(true)
+	record.outputCountMu.Unlock()
 }
 
 // UpdateConnectionOutputText publishes an estimated output-token count while a
@@ -201,33 +216,81 @@ func UpdateConnectionOutputText(requestID, text, model string, extraTokens int) 
 		return
 	}
 	record := lookupConnection(requestID)
-	if record == nil {
+	if record == nil || record.settled.Load() {
 		return
 	}
 
 	record.outputCountMu.Lock()
 	defer record.outputCountMu.Unlock()
+	if record.settled.Load() {
+		return
+	}
 	// A short window keeps the estimate cheap while still feeding the panel
 	// often enough for the counter to grow continuously.
 	if time.Since(record.lastOutputCountAt) < connectionOutputCountInterval {
 		return
 	}
 	record.lastOutputCountAt = time.Now()
-	if len(text) < record.lastOutputTextLength {
-		record.lastOutputTextLength = 0
-	}
-	newText := text[record.lastOutputTextLength:]
-	record.lastOutputTextLength = len(text)
 	record.outputVisible.Store(true)
-	newTokens := CountTextToken(newText, model)
-	if newTokens < 0 {
-		newTokens = 0
+	// Recount the whole text instead of only the new suffix. A suffix loses the BPE
+	// merges at its left boundary, so live estimates could drift away from the
+	// upstream usage and then jump when the request settled.
+	totalTokens := CountTextToken(text, model) + extraTokens
+	if totalTokens < 0 {
+		totalTokens = 0
 	}
-	newTokens += extraTokens - record.lastOutputExtraCount
-	record.lastOutputExtraCount = extraTokens
-	if newTokens > 0 {
-		record.output.Add(int64(newTokens))
+	delta := int64(totalTokens - record.lastOutputTotal)
+	record.lastOutputTotal = totalTokens
+	record.output.Store(int64(totalTokens))
+	if delta > 0 {
+		record.recordOutputCadence(delta, connectionLogNowMS())
 	}
+}
+
+// recordOutputCadence appends a real token delta to the 100ms cadence history.
+func (record *connectionRecord) recordOutputCadence(delta, nowMS int64) {
+	if delta <= 0 {
+		return
+	}
+	record.cadenceMu.Lock()
+	defer record.cadenceMu.Unlock()
+	record.advanceOutputCadence(nowMS / connectionOutputCadenceBucketMS)
+	record.outputCadence[len(record.outputCadence)-1] += delta
+}
+
+// outputCadenceAt returns the last 12 real 100ms token buckets, oldest first.
+// Buckets with no output stay zero, so a pause is visible instead of stretched.
+func (record *connectionRecord) outputCadenceAt(nowMS int64) []int64 {
+	record.cadenceMu.Lock()
+	defer record.cadenceMu.Unlock()
+	record.advanceOutputCadence(nowMS / connectionOutputCadenceBucketMS)
+	out := make([]int64, len(record.outputCadence))
+	copy(out, record.outputCadence[:])
+	return out
+}
+
+// advanceOutputCadence shifts the ring forward to the given bucket. Caller
+// holds cadenceMu.
+func (record *connectionRecord) advanceOutputCadence(bucket int64) {
+	if record.cadenceBucket == 0 {
+		record.cadenceBucket = bucket
+		return
+	}
+	if bucket <= record.cadenceBucket {
+		return
+	}
+	shift := bucket - record.cadenceBucket
+	if shift >= int64(len(record.outputCadence)) {
+		for index := range record.outputCadence {
+			record.outputCadence[index] = 0
+		}
+	} else {
+		copy(record.outputCadence[:], record.outputCadence[shift:])
+		for index := len(record.outputCadence) - int(shift); index < len(record.outputCadence); index++ {
+			record.outputCadence[index] = 0
+		}
+	}
+	record.cadenceBucket = bucket
 }
 
 // FinishConnection closes the record; it stays visible for the retention window
@@ -313,6 +376,9 @@ func (record *connectionRecord) toItem(nowMS int64) ConnectionLogItem {
 	if record.outputVisible.Load() || (record.finishedAt.Load() != 0 && record.settled.Load()) {
 		output := record.output.Load()
 		item.OutputTokens = &output
+	}
+	if active && record.stream {
+		item.OutputCadence = record.outputCadenceAt(nowMS)
 	}
 	return item
 }
@@ -437,17 +503,18 @@ func GetConnectionLogProgressSnapshot() *ConnectionLogProgressSnapshot {
 	}
 	for _, item := range snapshot.Items {
 		progress.Items = append(progress.Items, ConnectionLogProgressItem{
-			RequestID:    item.RequestID,
-			State:        item.State,
-			FirstTokenAt: item.FirstTokenAt,
-			FinishedAt:   item.FinishedAt,
-			TTFTMS:       item.TTFTMS,
-			DurationMS:   item.DurationMS,
-			InputTokens:  item.InputTokens,
-			OutputTokens: item.OutputTokens,
-			Active:       item.Active,
-			RetryCount:   item.RetryCount,
-			RetryWaitMS:  item.RetryWaitMS,
+			RequestID:     item.RequestID,
+			State:         item.State,
+			FirstTokenAt:  item.FirstTokenAt,
+			FinishedAt:    item.FinishedAt,
+			TTFTMS:        item.TTFTMS,
+			DurationMS:    item.DurationMS,
+			InputTokens:   item.InputTokens,
+			OutputTokens:  item.OutputTokens,
+			OutputCadence: item.OutputCadence,
+			Active:        item.Active,
+			RetryCount:    item.RetryCount,
+			RetryWaitMS:   item.RetryWaitMS,
 		})
 	}
 	return progress

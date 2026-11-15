@@ -497,6 +497,11 @@ export interface ConnectionLogItem {
   input_tokens: number
   /** Streamed estimates while active; final upstream usage after settlement. */
   output_tokens: number | null
+  /**
+   * Real output-token delta per 100ms bucket, oldest first (12 buckets).
+   * Present for active streams only; drives the live cadence bars.
+   */
+  output_cadence?: number[]
   stream_chunks: number
   active: boolean
   /** Same-channel retries spent on this request. */
@@ -524,6 +529,7 @@ export type ConnectionLogProgressItem = Pick<
   | 'duration_ms'
   | 'input_tokens'
   | 'output_tokens'
+  | 'output_cadence'
   | 'active'
   | 'retry_count'
   | 'retry_wait_ms'

@@ -40,6 +40,10 @@ import { ModelBadge } from './model-badge'
 
 const TICK_INTERVAL_MS = 50
 const COLUMN_COUNT = 8
+// The service keeps finished records for 60 seconds. Mirror the cutoff on the
+// server-aligned clock so a completed row leaves on time instead of waiting for
+// the next five-second snapshot.
+const COMPLETED_RETENTION_MS = 60_000
 
 /** Mobile density: two-line cards, one-line rows, or the request matrix. */
 export type ConnectionViewMode = 'list' | 'compact' | 'grid'
@@ -144,7 +148,18 @@ export function ConnectionLogsTable(props: {
     return () => window.clearInterval(timer)
   }, [])
 
-  const rows = useMemo(() => [...props.items].reverse(), [props.items])
+  const now =
+    props.clockOffset == null ? clientNow : clientNow + props.clockOffset
+  const retentionNow = Math.floor(now / 1000) * 1000
+  const rows = useMemo(() => {
+    const cutoff = retentionNow - COMPLETED_RETENTION_MS
+    return [...props.items]
+      .filter(
+        (item) =>
+          item.active || item.finished_at == null || item.finished_at >= cutoff
+      )
+      .reverse()
+  }, [props.items, retentionNow])
   const table = useReactTable({
     data: rows,
     columns: [],
@@ -248,9 +263,6 @@ export function ConnectionLogsTable(props: {
       window.clearTimeout(cleanupTimer)
     }
   }, [layoutKey, pageKey, visibleRowKey])
-
-  const now =
-    props.clockOffset == null ? clientNow : clientNow + props.clockOffset
 
   if (isMobile) {
     if (viewMode === 'grid') {

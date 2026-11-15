@@ -22,6 +22,7 @@ function meterProps(
     state: ConnectionState
     active: boolean
     tokens: number | null
+    cadence: number[] | null
     tone: StatusVariant
   }> = {}
 ) {
@@ -29,6 +30,7 @@ function meterProps(
     state: (overrides.state ?? 'streaming') as ConnectionState,
     active: overrides.active ?? true,
     tokens: overrides.tokens === undefined ? 0 : overrides.tokens,
+    cadence: overrides.cadence,
     tone: (overrides.tone ?? 'info') as StatusVariant,
   }
 }
@@ -163,6 +165,63 @@ describe('connection beat meter', () => {
     })
 
     expect(bars(container)[LAST_BAR].style.height).toBe('2px')
+  })
+
+  test('draws real 100ms cadence buckets instead of a synthetic even rate', () => {
+    const cadence = [0, 0, 1, 3, 0, 2, 0, 4, 0, 1, 0, 2]
+    const { container } = render(
+      <ConnectionBeatMeter {...meterProps({ tokens: 100, cadence })} />
+    )
+
+    expect(bars(container).map((bar) => bar.style.height)).toEqual([
+      '2px',
+      '2px',
+      '6px',
+      '9px',
+      '2px',
+      '8px',
+      '2px',
+      '10px',
+      '2px',
+      '6px',
+      '2px',
+      '8px',
+    ])
+    expect(
+      container.querySelector(METER_SELECTOR)?.getAttribute('data-scan')
+    ).toBe('0')
+  })
+
+  test('keeps the bars idle when real cadence reports a pause', () => {
+    const { container } = render(
+      <ConnectionBeatMeter
+        {...meterProps({ tokens: 100, cadence: Array(BAR_COUNT).fill(0) })}
+      />
+    )
+
+    for (const bar of bars(container)) {
+      expect(bar.style.height).toBe('2px')
+    }
+  })
+
+  test('repaints when a new real cadence window arrives', () => {
+    const idle = Array(BAR_COUNT).fill(0)
+    const { container, rerender } = render(
+      <ConnectionBeatMeter {...meterProps({ tokens: 100, cadence: idle })} />
+    )
+
+    expect(bars(container)[LAST_BAR].style.height).toBe('2px')
+
+    rerender(
+      <ConnectionBeatMeter
+        {...meterProps({
+          tokens: 102,
+          cadence: [...idle.slice(1), 2],
+        })}
+      />
+    )
+
+    expect(bars(container)[LAST_BAR].style.height).toBe('8px')
   })
 
   test('hands the cell back once the connection closes', () => {

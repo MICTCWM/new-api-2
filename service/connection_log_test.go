@@ -95,6 +95,60 @@ func TestConnectionStateTransitions(t *testing.T) {
 	require.Zero(t, snapshot.TotalInputTokens)
 }
 
+func TestUpdateConnectionOutputTextRecountsWholeTextForCadence(t *testing.T) {
+	requestID := "conn-output-cadence"
+	cleanupConnection(t, requestID)
+
+	RegisterConnection(newTestRelayInfo(requestID, true), "alice", 100)
+	MarkConnectionFirstToken(requestID)
+
+	record := lookupConnection(requestID)
+	require.NotNil(t, record)
+	record.lastOutputCountAt = time.Now().Add(-time.Second)
+	UpdateConnectionOutputText(requestID, "The quick brown fox", "gpt-4o", 0)
+
+	// Force the next update past the 100ms throttle without sleeping.
+	record.lastOutputCountAt = time.Now().Add(-time.Second)
+	UpdateConnectionOutputText(requestID, "The quick brown fox jumps over the lazy dog", "gpt-4o", 0)
+
+	item := findItem(GetConnectionLogSnapshot().Items, requestID)
+	require.NotNil(t, item)
+	require.NotNil(t, item.OutputTokens)
+	// The whole-text recount must match the tokenizer, not a suffix delta that
+	// loses the merge at the slice boundary.
+	require.EqualValues(t, CountTextToken("The quick brown fox jumps over the lazy dog", "gpt-4o"), *item.OutputTokens)
+	require.Len(t, item.OutputCadence, connectionOutputCadenceBuckets)
+	var cadenceTotal int64
+	for _, tokens := range item.OutputCadence {
+		cadenceTotal += tokens
+	}
+	require.EqualValues(t, *item.OutputTokens, cadenceTotal)
+}
+
+func TestSettledUsageWinsOverLateOutputEstimate(t *testing.T) {
+	requestID := "conn-settled-wins"
+	cleanupConnection(t, requestID)
+
+	RegisterConnection(newTestRelayInfo(requestID, true), "alice", 100)
+	MarkConnectionFirstToken(requestID)
+	record := lookupConnection(requestID)
+	require.NotNil(t, record)
+	record.lastOutputCountAt = time.Now().Add(-time.Second)
+	UpdateConnectionOutputText(requestID, "a short estimate", "gpt-4o", 0)
+
+	SettleConnectionTokens(requestID, 100, 320)
+
+	// A late stream update must not replace the real upstream usage.
+	record.lastOutputCountAt = time.Now().Add(-time.Second)
+	UpdateConnectionOutputText(requestID, "a much longer late estimate", "gpt-4o", 0)
+	FinishConnection(requestID)
+
+	item := findItem(GetConnectionLogSnapshot().Items, requestID)
+	require.NotNil(t, item)
+	require.NotNil(t, item.OutputTokens)
+	require.EqualValues(t, 320, *item.OutputTokens)
+}
+
 func TestNonStreamConnectionHasNoTTFT(t *testing.T) {
 	requestID := "conn-non-stream"
 	cleanupConnection(t, requestID)

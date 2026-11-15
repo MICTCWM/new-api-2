@@ -18,10 +18,10 @@ import {
 } from './connection-logs-table'
 import { ConnectionLogsViewToggle } from './connection-logs-view-toggle'
 
-// Token counts must keep moving smoothly, so progress polls well below the
-// five-second log refresh.
+// Token counts and the real cadence strip need frequent, small refreshes, so
+// progress polls well below the five-second log refresh.
 const REFRESH_INTERVAL_MS = 5000
-const LIVE_PROGRESS_INTERVAL_MS = 500
+const LIVE_PROGRESS_INTERVAL_MS = 250
 const EMPTY_ITEMS: ConnectionLogItem[] = []
 const VIEW_MODE_STORAGE_KEY = 'connection_logs_view_mode'
 

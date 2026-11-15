@@ -243,6 +243,41 @@ describe('connection logs panel', () => {
     expect(screen.queryByText('--')).not.toBeInTheDocument()
   })
 
+  test('drops completed connections after the 60s retention window', async () => {
+    mockGetConnectionLogs.mockResolvedValue({
+      success: true,
+      data: snapshot([
+        {
+          ...BASE_ITEM,
+          request_id: 'recent',
+          username: 'recent-user',
+          state: 'completed',
+          active: false,
+          started_at: BASE_ITEM.started_at - 30_000,
+          finished_at: BASE_ITEM.started_at + 4_000,
+          duration_ms: 34_000,
+          output_tokens: 512,
+        },
+        {
+          ...BASE_ITEM,
+          request_id: 'expired',
+          username: 'expired-user',
+          state: 'completed',
+          active: false,
+          started_at: BASE_ITEM.started_at - 90_000,
+          finished_at: BASE_ITEM.started_at - 61_000,
+          duration_ms: 29_000,
+          output_tokens: 512,
+        },
+      ]),
+    })
+
+    renderPanel()
+
+    expect(await screen.findByText('recent-user')).toBeInTheDocument()
+    expect(screen.queryByText('expired-user')).not.toBeInTheDocument()
+  })
+
   test('shows the retry count and countdown while a connection is retried', async () => {
     mockGetConnectionLogs.mockResolvedValue({
       success: true,

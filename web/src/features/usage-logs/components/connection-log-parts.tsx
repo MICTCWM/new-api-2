@@ -80,6 +80,7 @@ export function ConnectionLiveIndicator(props: {
         state={props.item.state}
         active
         tokens={props.item.output_tokens}
+        cadence={props.item.output_cadence}
         tone={props.tone}
       />
     )
@@ -93,7 +94,9 @@ export function ConnectionTtftValue(props: { item: ConnectionLogItem }) {
   if (!props.item.stream) return null
 
   if (props.item.ttft_ms == null) {
-    return <span className='text-muted-foreground'>{CONNECTION_EMPTY_VALUE}</span>
+    return (
+      <span className='text-muted-foreground'>{CONNECTION_EMPTY_VALUE}</span>
+    )
   }
 
   const ttftSeconds = props.item.ttft_ms / 1000
