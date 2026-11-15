@@ -22,8 +22,6 @@ const FULL_BAR_TOKENS = 0.75
  */
 const FULL_CADENCE_TOKENS = 48
 const BAR_INDEXES = Array.from({ length: BAR_COUNT }, (_, index) => index)
-/** One visual step every 50ms; five steps ease a new cadence window in 250ms. */
-const CADENCE_EASE_TICKS = 5
 
 function cadenceBarHeight(tokens: number): number {
   if (tokens <= 0) return 2
@@ -39,15 +37,28 @@ function cadenceBarHeight(tokens: number): number {
   return Math.max(2, Math.min(BAR_TRACK_PX, Math.round(scaled)))
 }
 
-/** Write the current heights without rounding away sub-pixel steps. */
-function paintBarHeights(
+/**
+ * Move a bar on the compositor, not in layout. The span keeps its 14px box and
+ * scales from the bottom; height animation would relayout every bar on every
+ * row, which is what made a full mobile list stutter.
+ */
+function paintBarHeight(bar: HTMLSpanElement, height: number) {
+  const clamped = Math.max(2, Math.min(BAR_TRACK_PX, height))
+  bar.dataset.height = `${clamped}px`
+  bar.style.transform = `scaleY(${(clamped / BAR_TRACK_PX).toFixed(4)})`
+}
+
+function paintCadenceBars(
   bars: Array<HTMLSpanElement | null>,
-  heights: number[]
+  values: number[]
 ) {
+  const padded = values.slice(-BAR_COUNT)
+  const leading = BAR_COUNT - padded.length
   for (const index of BAR_INDEXES) {
     const bar = bars[index]
     if (!bar) continue
-    bar.style.height = `${Math.round(heights[index] * 10) / 10}px`
+    const tokens = index >= leading ? (padded[index - leading] ?? 0) : 0
+    paintBarHeight(bar, cadenceBarHeight(tokens))
   }
 }
 
@@ -70,18 +81,6 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
   const lastTokensRef = useRef<number | null>(null)
   const pendingRef = useRef(0)
   const spendPerMSRef = useRef(0)
-  // Cadence is painted locally: the last window is the target, and the bars
-  // walk toward it in 50ms steps instead of jumping when the next poll lands.
-  const cadenceTargetsRef = useRef<number[]>(
-    Array.from({ length: BAR_COUNT }, () => 2)
-  )
-  const cadenceHeightsRef = useRef<number[]>(
-    Array.from({ length: BAR_COUNT }, () => 2)
-  )
-  const cadenceStepsRef = useRef<number[]>(
-    Array.from({ length: BAR_COUNT }, () => 0)
-  )
-  const cadenceReadyRef = useRef(false)
 
   const streaming = props.active && props.state === 'streaming'
   const waiting = props.active && !streaming
@@ -89,65 +88,13 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
   const hasCadence = streaming && cadence != null && cadence.length > 0
   const cadenceKey = hasCadence ? cadence.slice(-BAR_COUNT).join(',') : ''
 
-  // The backend publishes a time-aligned window of real 100ms buckets. That
-  // window is the target silhouette; the 50ms tick below eases every bar from
-  // its current height to the target, so a 250ms poll still reads as motion.
+  // The backend publishes a time-aligned window of real 100ms buckets. Paint
+  // that window straight onto each bar; GPU transform transitions do the
+  // interpolation between polls, so there is no per-row JS timer and no layout.
   useEffect(() => {
     if (!hasCadence || cadence == null) return
-    const values = cadence.slice(-BAR_COUNT)
-    const targets = Array.from({ length: BAR_COUNT }, (_, index) =>
-      cadenceBarHeight(values[index] ?? 0)
-    )
-    cadenceTargetsRef.current = targets
-
-    const current = cadenceHeightsRef.current
-    if (!cadenceReadyRef.current) {
-      // First real window: snap to it, then animate every later update.
-      cadenceHeightsRef.current = [...targets]
-      cadenceStepsRef.current = Array.from({ length: BAR_COUNT }, () => 0)
-      cadenceReadyRef.current = true
-      paintBarHeights(barsRef.current, cadenceHeightsRef.current)
-      return
-    }
-    cadenceStepsRef.current = targets.map(
-      (target, index) => (target - current[index]) / CADENCE_EASE_TICKS
-    )
+    paintCadenceBars(barsRef.current, cadence.slice(-BAR_COUNT))
   }, [cadence, cadenceKey, hasCadence])
-
-  // One 50ms step per tick: the five-step ease finishes in 250ms, matching the
-  // progress-poll interval. New windows retarget the remaining distance.
-  useEffect(() => {
-    if (!hasCadence) {
-      cadenceReadyRef.current = false
-      cadenceHeightsRef.current = Array.from({ length: BAR_COUNT }, () => 2)
-      cadenceStepsRef.current = Array.from({ length: BAR_COUNT }, () => 0)
-      return
-    }
-
-    const tick = () => {
-      const current = cadenceHeightsRef.current
-      const targets = cadenceTargetsRef.current
-      const steps = cadenceStepsRef.current
-      for (const index of BAR_INDEXES) {
-        const step = steps[index]
-        if (step === 0) continue
-        const target = targets[index]
-        let next = current[index] + step
-        if ((step > 0 && next >= target) || (step < 0 && next <= target)) {
-          next = target
-          steps[index] = 0
-        }
-        current[index] = next
-        const bar = barsRef.current[index]
-        if (bar) {
-          bar.style.height = `${Math.round(next * 10) / 10}px`
-        }
-      }
-    }
-
-    const timer = window.setInterval(tick, TICK_MS)
-    return () => window.clearInterval(timer)
-  }, [hasCadence])
 
   // Polls only report a running total, so turn each delta into a rate the tick
   // loop can spend evenly instead of replaying the burst as a single spike.
@@ -188,7 +135,7 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
           2,
           Math.round((levels[index] / peak) * BAR_TRACK_PX)
         )
-        bar.style.height = `${height}px`
+        paintBarHeight(bar, height)
       }
     }
 
@@ -202,6 +149,7 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
     <span
       data-slot='connection-beat-meter'
       data-scan={waiting ? '1' : '0'}
+      data-cadence={hasCadence ? '1' : '0'}
       className='connection-beat flex h-3.5 items-end gap-[2px]'
       aria-hidden='true'
     >

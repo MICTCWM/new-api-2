@@ -10,6 +10,9 @@ import type { ConnectionLogItem } from '../types'
  * moving between polls instead of snapping to the new total in a few frames.
  */
 const OUTPUT_COUNT_CATCHUP_MS = 160
+/** Repaint the number at 20fps; a per-frame React update on every live row was
+ * competing with the cadence strip on long mobile lists. */
+const OUTPUT_COUNT_PAINT_MS = 50
 /** Guards the easing against long frame gaps (background tab, heavy render). */
 const OUTPUT_COUNT_MAX_FRAME_MS = 250
 
@@ -34,14 +37,18 @@ function AnimatedOutputTokens(props: { value: number; active: boolean }) {
     // instead of jumping ahead and freezing until the next poll.
     let animationFrame = 0
     let lastFrameAt = performance.now()
+    let lastPaintAt = 0
     const step = (now: number) => {
       const elapsed = Math.min(now - lastFrameAt, OUTPUT_COUNT_MAX_FRAME_MS)
       lastFrameAt = now
       const target = targetRef.current
       const current = displayValueRef.current
-      // Caught up: stop scheduling frames until the value changes again (the
-      // effect below restarts the chase on the next poll).
-      if (current === target) return
+      // Caught up: paint the exact final integer and stop scheduling frames
+      // until the value changes again (the effect restarts the chase).
+      if (current === target) {
+        setDisplayValue(Math.round(target))
+        return
+      }
       const gap = target - current
       let delta = gap * (1 - Math.exp(-elapsed / OUTPUT_COUNT_CATCHUP_MS))
       if (Math.abs(delta) < 1) delta = gap > 0 ? 1 : -1
@@ -50,7 +57,10 @@ function AnimatedOutputTokens(props: { value: number; active: boolean }) {
           ? Math.min(current + delta, target)
           : Math.max(current + delta, target)
       displayValueRef.current = next
-      setDisplayValue(Math.round(next))
+      if (now - lastPaintAt >= OUTPUT_COUNT_PAINT_MS) {
+        lastPaintAt = now
+        setDisplayValue(Math.round(next))
+      }
       animationFrame = requestAnimationFrame(step)
     }
 

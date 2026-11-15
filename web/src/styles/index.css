@@ -720,17 +720,28 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 /* ── Connection beat meter ── */
-/* Bar heights are written imperatively from the streamed-token deltas; only the
- * idle sweep and the easing live here so the component stays data-driven. */
+/* Bars keep a fixed 14px box and scale from the bottom, so the animation runs
+ * on the compositor. Animating height here relaid out every bar on every row
+ * and made long mobile lists stutter. */
 .connection-beat-bar {
-  height: 2px;
-  /* The cadence tick advances one step every 50ms; matching the transition to
-   * that step keeps the small height changes from looking like hard cuts. */
-  transition: height 50ms linear;
+  height: 14px;
+  transform: scaleY(0.1429);
+  transform-origin: bottom;
+}
+
+/* Real cadence updates arrive every ~250ms; one continuous transform
+ * transition bridges the gap at the browser's frame rate. */
+.connection-beat[data-cadence='1'] .connection-beat-bar {
+  transition: transform 250ms linear;
+}
+
+/* The legacy running-total fallback is already ticked every 50ms. */
+.connection-beat[data-cadence='0'] .connection-beat-bar {
+  transition: transform 50ms linear;
 }
 
 .connection-beat[data-scan='1'] .connection-beat-bar {
-  height: 3px;
+  transform: scaleY(0.2143) !important;
   animation: connection-beat-crawl 1.6s linear infinite;
   animation-delay: calc(var(--beat-i) * 100ms);
 }
@@ -750,7 +761,8 @@ For commercial licensing, please contact support@quantumnous.com
   .connection-beat[data-scan='1'] .connection-beat-bar {
     animation: none;
   }
-  .connection-beat-bar {
+  .connection-beat[data-cadence='1'] .connection-beat-bar,
+  .connection-beat[data-cadence='0'] .connection-beat-bar {
     transition: none;
   }
 }

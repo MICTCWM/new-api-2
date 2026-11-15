@@ -76,15 +76,15 @@ describe('connection beat meter', () => {
     })
 
     // 20 tokens over a 500ms poll interval = 2 tokens per 50ms bar.
-    expect(bars(container)[LAST_BAR].style.height).toBe('14px')
-    expect(bars(container)[LAST_BAR - 1].style.height).toBe('2px')
+    expect(bars(container)[LAST_BAR].dataset.height).toBe('14px')
+    expect(bars(container)[LAST_BAR - 1].dataset.height).toBe('2px')
 
     act(() => {
       vi.advanceTimersByTime(TICK_MS)
     })
 
-    expect(bars(container)[LAST_BAR - 1].style.height).toBe('14px')
-    expect(bars(container)[LAST_BAR - 2].style.height).toBe('2px')
+    expect(bars(container)[LAST_BAR - 1].dataset.height).toBe('14px')
+    expect(bars(container)[LAST_BAR - 2].dataset.height).toBe('2px')
   })
 
   test('spreads one poll over the whole interval instead of replaying it as a spike', () => {
@@ -99,7 +99,7 @@ describe('connection beat meter', () => {
     })
 
     // Four ticks in, only four bars have received tokens.
-    const heights = bars(container).map((bar) => bar.style.height)
+    const heights = bars(container).map((bar) => bar.dataset.height)
     expect(heights.slice(0, BAR_COUNT - 4)).toEqual(
       Array(BAR_COUNT - 4).fill('2px')
     )
@@ -111,7 +111,7 @@ describe('connection beat meter', () => {
 
     // By the end of the poll interval the burst has filled ten bars, i.e. the
     // 500ms it is spread over — not the instantaneous spike one poll would be.
-    const lit = bars(container).filter((bar) => bar.style.height === '14px')
+    const lit = bars(container).filter((bar) => bar.dataset.height === '14px')
     expect(lit).toHaveLength(10)
   })
 
@@ -125,14 +125,14 @@ describe('connection beat meter', () => {
     act(() => {
       vi.advanceTimersByTime(500)
     })
-    expect(bars(container)[LAST_BAR].style.height).toBe('14px')
+    expect(bars(container)[LAST_BAR].dataset.height).toBe('14px')
 
     act(() => {
       vi.advanceTimersByTime(TICK_MS * BAR_COUNT)
     })
 
     for (const bar of bars(container)) {
-      expect(bar.style.height).toBe('2px')
+      expect(bar.dataset.height).toBe('2px')
     }
   })
 
@@ -148,7 +148,7 @@ describe('connection beat meter', () => {
     })
 
     // 0.6 tokens per bar is scaled against the 0.75-token floor, not itself.
-    expect(bars(container)[LAST_BAR].style.height).toBe('11px')
+    expect(bars(container)[LAST_BAR].dataset.height).toBe('11px')
   })
 
   test('ignores the estimate published at the first token as a cadence spike', () => {
@@ -164,7 +164,7 @@ describe('connection beat meter', () => {
       vi.advanceTimersByTime(TICK_MS)
     })
 
-    expect(bars(container)[LAST_BAR].style.height).toBe('2px')
+    expect(bars(container)[LAST_BAR].dataset.height).toBe('2px')
   })
 
   test('draws real 100ms cadence buckets instead of a synthetic even rate', () => {
@@ -173,7 +173,7 @@ describe('connection beat meter', () => {
       <ConnectionBeatMeter {...meterProps({ tokens: 100, cadence })} />
     )
 
-    expect(bars(container).map((bar) => bar.style.height)).toEqual([
+    expect(bars(container).map((bar) => bar.dataset.height)).toEqual([
       '2px',
       '2px',
       '4px',
@@ -200,7 +200,7 @@ describe('connection beat meter', () => {
     )
 
     for (const bar of bars(container)) {
-      expect(bar.style.height).toBe('2px')
+      expect(bar.dataset.height).toBe('2px')
     }
   })
 
@@ -210,7 +210,7 @@ describe('connection beat meter', () => {
       <ConnectionBeatMeter {...meterProps({ tokens: 100, cadence })} />
     )
 
-    expect(bars(container).map((bar) => bar.style.height)).toEqual([
+    expect(bars(container).map((bar) => bar.dataset.height)).toEqual([
       '2px',
       '8px',
       '2px',
@@ -226,14 +226,16 @@ describe('connection beat meter', () => {
     ])
   })
 
-  test('eases a new cadence window in 50ms steps', () => {
-    vi.useFakeTimers()
+  test('retargets a new cadence window immediately for compositor easing', () => {
     const idle = Array(BAR_COUNT).fill(0)
     const { container, rerender } = render(
       <ConnectionBeatMeter {...meterProps({ tokens: 100, cadence: idle })} />
     )
 
-    expect(bars(container)[LAST_BAR].style.height).toBe('2px')
+    expect(bars(container)[LAST_BAR].dataset.height).toBe('2px')
+    expect(
+      container.querySelector(METER_SELECTOR)?.getAttribute('data-cadence')
+    ).toBe('1')
 
     rerender(
       <ConnectionBeatMeter
@@ -244,18 +246,10 @@ describe('connection beat meter', () => {
       />
     )
 
-    // The new target is set immediately, but the visual step waits for the
-    // 50ms tick and only covers one fifth of the distance.
-    expect(bars(container)[LAST_BAR].style.height).toBe('2px')
-    act(() => {
-      vi.advanceTimersByTime(TICK_MS)
-    })
-    expect(bars(container)[LAST_BAR].style.height).toBe('2.6px')
-
-    act(() => {
-      vi.advanceTimersByTime(TICK_MS * 4)
-    })
-    expect(bars(container)[LAST_BAR].style.height).toBe('5px')
+    // The transform target updates now; the 250ms CSS transition does the
+    // visual interpolation without a per-row JS timer.
+    expect(bars(container)[LAST_BAR].dataset.height).toBe('5px')
+    expect(bars(container)[LAST_BAR].style.transform).toContain('scaleY')
   })
 
   test('hands the cell back once the connection closes', () => {
