@@ -6,11 +6,10 @@ import { CONNECTION_EMPTY_VALUE } from '../lib/connection-log-display'
 import type { ConnectionLogItem } from '../types'
 
 /**
- * Short catch-up: a poll's real delta lands almost immediately and then holds,
- * so bursts and pauses stay visible instead of being smeared across the whole
- * poll interval.
+ * Smooth catch-up across most of the progress-poll interval. The counter keeps
+ * moving between polls instead of snapping to the new total in a few frames.
  */
-const OUTPUT_COUNT_CATCHUP_MS = 90
+const OUTPUT_COUNT_CATCHUP_MS = 160
 /** Guards the easing against long frame gaps (background tab, heavy render). */
 const OUTPUT_COUNT_MAX_FRAME_MS = 250
 

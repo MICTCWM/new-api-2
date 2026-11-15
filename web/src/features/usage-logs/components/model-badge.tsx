@@ -7,6 +7,8 @@ interface ModelBadgeProps {
   className?: string
   /** Tighter height and icon for the one-line mobile layouts. */
   compact?: boolean
+  /** Let a long model name wrap instead of truncating it with an ellipsis. */
+  wrap?: boolean
 }
 
 interface ModelProvider {
@@ -111,6 +113,7 @@ function ModelBadgeContent(props: ModelBadgeProps) {
       className={cn(
         'border-border/60 bg-muted/30 h-6 max-w-none gap-1.5 rounded-md border px-2 [font-family:var(--font-body)]',
         props.compact && 'h-5 gap-1 rounded px-1.5 text-[10px]',
+        props.wrap && 'h-auto min-h-5 whitespace-normal py-0.5',
         provider && 'text-foreground',
         props.className
       )}
@@ -134,7 +137,14 @@ function ModelBadgeContent(props: ModelBadgeProps) {
             {getLobeIcon(provider.icon, iconSize)}
           </span>
         )}
-        <span className='truncate'>{props.modelName}</span>
+        <span
+          className={cn(
+            'max-w-full min-w-0',
+            props.wrap ? 'break-words leading-tight' : 'truncate'
+          )}
+        >
+          {props.modelName}
+        </span>
       </span>
     </StatusBadge>
   )

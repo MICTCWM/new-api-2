@@ -256,7 +256,7 @@ describe('connection logs mobile densities', () => {
     expect(activeRow.textContent).toContain('gpt-5.4')
     const modelBadge = activeRow.querySelector('[data-slot="model-badge"]')
     expect(modelBadge).toHaveTextContent('gpt-5.4')
-    expect(modelBadge).toHaveClass('max-w-[5rem]')
+    expect(modelBadge).toHaveClass('max-w-[6rem]', 'whitespace-normal')
     expect(within(activeRow).getByText('Connecting')).toHaveClass('sr-only')
     expect(screen.getByRole('button', { name: 'Compact' })).toHaveAttribute(
       'aria-pressed',

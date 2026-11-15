@@ -55,8 +55,9 @@ export function ConnectionLogsMobileCard(props: {
         />
         <ModelBadge
           compact
+          wrap
           modelName={props.item.model}
-          className='max-w-[45%] min-w-0 shrink'
+          className='max-w-[65%] min-w-0 shrink'
         />
         {/* The badge carries the full model name; the status cluster stays at
             the right edge and takes whatever width is left. */}

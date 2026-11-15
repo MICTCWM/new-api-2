@@ -398,10 +398,13 @@ describe('connection logs mobile cards', () => {
     expect(firstLine).toHaveClass('min-w-0')
     const modelBadge = card.querySelector('[data-slot="model-badge"]')
     expect(modelBadge).toHaveTextContent('gpt-5.4')
-    expect(modelBadge).toHaveClass('min-w-0', 'max-w-[45%]', 'shrink')
+    expect(modelBadge).toHaveClass('min-w-0', 'max-w-[65%]', 'shrink')
     expect(
       modelBadge?.querySelector('[data-slot="model-provider-icon"]')
     ).not.toBeNull()
+    const modelName = within(modelBadge as HTMLElement).getByText('gpt-5.4')
+    expect(modelName).not.toHaveClass('truncate')
+    expect(modelName).toHaveClass('break-words')
     // The model name is visible row text now, not an accessible-only label.
     expect(card.textContent).toContain('gpt-5.4')
     // The status cluster absorbs the remaining width and truncates instead of
@@ -433,6 +436,25 @@ describe('connection logs mobile cards', () => {
     expect(
       modelBadge?.querySelector('[data-slot="model-provider-icon"]')
     ).toBeNull()
+  })
+
+  test('wraps a long model name instead of truncating it', async () => {
+    const longModel = 'claude-sonnet-4-5-20250929'
+    mockGetConnectionLogs.mockResolvedValue({
+      success: true,
+      data: snapshot([{ ...BASE_ITEM, model: longModel }]),
+    })
+
+    renderPanel()
+
+    const card = await screen.findByRole('listitem')
+    const modelBadge = card.querySelector('[data-slot="model-badge"]')
+    expect(modelBadge).toHaveClass('max-w-[65%]', 'whitespace-normal')
+    expect(modelBadge).not.toHaveClass('whitespace-nowrap')
+    const modelName = within(card).getByText(longModel)
+    expect(modelName).toBeVisible()
+    expect(modelName).not.toHaveClass('truncate')
+    expect(modelName).toHaveClass('break-words')
   })
 
   test('drops the desktop sub-state line from the card', async () => {
@@ -515,7 +537,7 @@ describe('connection logs mobile cards', () => {
     // The model badge keeps a readable width while the metrics wrap.
     expect(card.querySelector('[data-slot="model-badge"]')).toHaveClass(
       'min-w-0',
-      'max-w-[45%]',
+      'max-w-[65%]',
       'shrink'
     )
     expect(card.querySelector('[data-slot="model-badge"]')).toHaveTextContent(

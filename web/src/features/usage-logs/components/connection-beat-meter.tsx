@@ -12,19 +12,28 @@ const BAR_COUNT = 12
 const TICK_MS = 50
 /** The delta reported by one progress poll is spread over this interval. */
 const REFILL_MS = 500
-const BAR_TRACK_PX = 12
+const BAR_TRACK_PX = 14
 /** Tokens per bar that already draw full height (≈15 tokens/s). */
 const FULL_BAR_TOKENS = 0.75
-/** Real 100ms buckets: 6 tokens in a bucket means a 60 tokens/s burst. */
-const FULL_CADENCE_TOKENS = 6
+/**
+ * Real 100ms buckets: 48 tokens in a bucket means a 480 tokens/s burst. A
+ * lower cap (the old 6) saturated almost every active bucket at full height,
+ * which made the strip read as binary instead of showing a rate gradation.
+ */
+const FULL_CADENCE_TOKENS = 48
 const BAR_INDEXES = Array.from({ length: BAR_COUNT }, (_, index) => index)
 
 function cadenceBarHeight(tokens: number): number {
   if (tokens <= 0) return 2
-  // Square-root scaling keeps low-rate differences visible without letting a
-  // fast model pin every bar at full height.
+  // Logarithmic scaling keeps 1–4 token buckets distinguishable while still
+  // leaving headroom for very fast streams; square-root alone compressed the
+  // middle of the range once the cap moved up.
   const ratio = Math.min(tokens, FULL_CADENCE_TOKENS) / FULL_CADENCE_TOKENS
-  const scaled = 2 + Math.sqrt(ratio) * (BAR_TRACK_PX - 2)
+  const scaled =
+    2 +
+    (Math.log1p(ratio * FULL_CADENCE_TOKENS) /
+      Math.log1p(FULL_CADENCE_TOKENS)) *
+      (BAR_TRACK_PX - 2)
   return Math.max(2, Math.min(BAR_TRACK_PX, Math.round(scaled)))
 }
 
@@ -129,7 +138,7 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
     <span
       data-slot='connection-beat-meter'
       data-scan={waiting ? '1' : '0'}
-      className='connection-beat flex h-3 items-end gap-[2px]'
+      className='connection-beat flex h-3.5 items-end gap-[2px]'
       aria-hidden='true'
     >
       {BAR_INDEXES.map((index) => (

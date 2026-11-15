@@ -76,14 +76,14 @@ describe('connection beat meter', () => {
     })
 
     // 20 tokens over a 500ms poll interval = 2 tokens per 50ms bar.
-    expect(bars(container)[LAST_BAR].style.height).toBe('12px')
+    expect(bars(container)[LAST_BAR].style.height).toBe('14px')
     expect(bars(container)[LAST_BAR - 1].style.height).toBe('2px')
 
     act(() => {
       vi.advanceTimersByTime(TICK_MS)
     })
 
-    expect(bars(container)[LAST_BAR - 1].style.height).toBe('12px')
+    expect(bars(container)[LAST_BAR - 1].style.height).toBe('14px')
     expect(bars(container)[LAST_BAR - 2].style.height).toBe('2px')
   })
 
@@ -103,7 +103,7 @@ describe('connection beat meter', () => {
     expect(heights.slice(0, BAR_COUNT - 4)).toEqual(
       Array(BAR_COUNT - 4).fill('2px')
     )
-    expect(heights.slice(BAR_COUNT - 4)).toEqual(Array(4).fill('12px'))
+    expect(heights.slice(BAR_COUNT - 4)).toEqual(Array(4).fill('14px'))
 
     act(() => {
       vi.advanceTimersByTime(TICK_MS * 6)
@@ -111,7 +111,7 @@ describe('connection beat meter', () => {
 
     // By the end of the poll interval the burst has filled ten bars, i.e. the
     // 500ms it is spread over — not the instantaneous spike one poll would be.
-    const lit = bars(container).filter((bar) => bar.style.height === '12px')
+    const lit = bars(container).filter((bar) => bar.style.height === '14px')
     expect(lit).toHaveLength(10)
   })
 
@@ -125,7 +125,7 @@ describe('connection beat meter', () => {
     act(() => {
       vi.advanceTimersByTime(500)
     })
-    expect(bars(container)[LAST_BAR].style.height).toBe('12px')
+    expect(bars(container)[LAST_BAR].style.height).toBe('14px')
 
     act(() => {
       vi.advanceTimersByTime(TICK_MS * BAR_COUNT)
@@ -148,7 +148,7 @@ describe('connection beat meter', () => {
     })
 
     // 0.6 tokens per bar is scaled against the 0.75-token floor, not itself.
-    expect(bars(container)[LAST_BAR].style.height).toBe('10px')
+    expect(bars(container)[LAST_BAR].style.height).toBe('11px')
   })
 
   test('ignores the estimate published at the first token as a cadence spike', () => {
@@ -176,16 +176,16 @@ describe('connection beat meter', () => {
     expect(bars(container).map((bar) => bar.style.height)).toEqual([
       '2px',
       '2px',
-      '6px',
-      '9px',
-      '2px',
-      '8px',
-      '2px',
-      '10px',
-      '2px',
+      '4px',
       '6px',
       '2px',
-      '8px',
+      '5px',
+      '2px',
+      '7px',
+      '2px',
+      '4px',
+      '2px',
+      '5px',
     ])
     expect(
       container.querySelector(METER_SELECTOR)?.getAttribute('data-scan')
@@ -202,6 +202,28 @@ describe('connection beat meter', () => {
     for (const bar of bars(container)) {
       expect(bar.style.height).toBe('2px')
     }
+  })
+
+  test('keeps intermediate cadence rates between idle and full height', () => {
+    const cadence = [0, 6, 0, 12, 0, 24, 0, 48, 0, 0, 0, 0]
+    const { container } = render(
+      <ConnectionBeatMeter {...meterProps({ tokens: 100, cadence })} />
+    )
+
+    expect(bars(container).map((bar) => bar.style.height)).toEqual([
+      '2px',
+      '8px',
+      '2px',
+      '10px',
+      '2px',
+      '12px',
+      '2px',
+      '14px',
+      '2px',
+      '2px',
+      '2px',
+      '2px',
+    ])
   })
 
   test('repaints when a new real cadence window arrives', () => {
@@ -221,7 +243,7 @@ describe('connection beat meter', () => {
       />
     )
 
-    expect(bars(container)[LAST_BAR].style.height).toBe('8px')
+    expect(bars(container)[LAST_BAR].style.height).toBe('5px')
   })
 
   test('hands the cell back once the connection closes', () => {

@@ -724,7 +724,9 @@ For commercial licensing, please contact support@quantumnous.com
  * idle sweep and the easing live here so the component stays data-driven. */
 .connection-beat-bar {
   height: 2px;
-  transition: height 180ms ease-out;
+  /* The cadence repaint lands every ~250ms; let the height transition cover
+   * almost the whole interval so the strip flows instead of stepping. */
+  transition: height 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .connection-beat[data-scan='1'] .connection-beat-bar {

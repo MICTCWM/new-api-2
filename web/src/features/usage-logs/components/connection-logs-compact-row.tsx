@@ -53,7 +53,7 @@ export function ConnectionLogsCompactRow(props: {
       <button
         type='button'
         aria-label={`${t('User')} ${name}`}
-        className='max-w-[4rem] shrink-0 truncate text-left font-medium hover:underline'
+        className='max-w-[3.5rem] shrink-0 truncate text-left font-medium hover:underline'
         onClick={(event) => {
           event.stopPropagation()
           setSelectedUserId(props.item.user_id)
@@ -64,8 +64,9 @@ export function ConnectionLogsCompactRow(props: {
       </button>
       <ModelBadge
         compact
+        wrap
         modelName={props.item.model}
-        className='max-w-[5rem] min-w-0 shrink'
+        className='max-w-[6rem] min-w-0 shrink'
       />
       <span className='ml-auto shrink-0 font-mono tabular-nums'>
         <span className='text-muted-foreground'>↑</span>
