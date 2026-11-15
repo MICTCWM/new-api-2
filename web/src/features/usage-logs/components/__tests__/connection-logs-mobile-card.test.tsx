@@ -230,7 +230,7 @@ describe('connection logs mobile cards', () => {
     ).not.toBeNull()
   })
 
-  test('shows model, HH:mm:ss time, tokens, TTFT and duration on the card', async () => {
+  test('shows the model logo, arrow tokens, TTFT seconds and total duration', async () => {
     mockGetConnectionLogs.mockResolvedValue({
       success: true,
       data: snapshot([
@@ -250,18 +250,35 @@ describe('connection logs mobile cards', () => {
     renderPanel()
 
     const card = await screen.findByRole('listitem')
-    expect(within(card).getByText('gpt-5.4')).toBeInTheDocument()
+    expect(within(card).getByRole('img', { name: 'gpt-5.4' })).toHaveAttribute(
+      'data-slot',
+      'model-icon'
+    )
     expect(card.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}/)
+    // Mobile rows intentionally omit the start timestamp to leave room for the
+    // model and state; only the elapsed duration remains.
     expect(
       card.querySelector('[data-slot="connection-mobile-time"]')
-    ).toHaveTextContent(/^\d{2}:\d{2}:\d{2}$/)
+    ).toBeNull()
     const metrics = card.querySelector(
       '[data-slot="connection-mobile-metrics"]'
     )
     expect(metrics).toHaveTextContent('Input 1,200')
     expect(metrics).toHaveTextContent('Output 512')
+    expect(metrics).toHaveTextContent('↑')
+    expect(metrics).toHaveTextContent('↓')
     expect(metrics).toHaveTextContent('TTFT 0.9s')
     expect(metrics).toHaveTextContent('4.0s')
+    const timeGroup = metrics?.querySelector(
+      '[data-slot="connection-mobile-time-group"]'
+    ) as HTMLElement
+    expect(timeGroup).not.toBeNull()
+    expect(
+      timeGroup.querySelector('[data-slot="connection-mobile-time-divider"]')
+    ).not.toBeNull()
+    expect(within(timeGroup).getByText('TTFT')).toHaveClass('sr-only')
+    expect(within(timeGroup).getByText('0.9s')).toBeInTheDocument()
+    expect(within(timeGroup).getByText('4.0s')).toBeInTheDocument()
     // Route and channel are no longer part of the compact card.
     expect(card.textContent).not.toContain('default')
     expect(card.textContent).not.toContain('#12')
@@ -367,7 +384,7 @@ describe('connection logs mobile cards', () => {
     expect(screen.getByText('Retrying in 2s')).toBeInTheDocument()
   })
 
-  test('keeps the model badge shrinkable and the status cluster tight', async () => {
+  test('shows only the model logo and keeps the status cluster tight', async () => {
     mockGetConnectionLogs.mockResolvedValue({
       success: true,
       data: snapshot([BASE_ITEM]),
@@ -379,20 +396,19 @@ describe('connection logs mobile cards', () => {
     expect(card).toHaveClass('overflow-hidden')
     const firstLine = card.firstElementChild
     expect(firstLine).toHaveClass('min-w-0')
-    const modelBadge = screen
-      .getByText('gpt-5.4')
-      .closest('[data-slot="status-badge"]')
-    expect(modelBadge).toHaveClass('min-w-16', 'grow')
-    // The provider icon is dropped below `sm` to leave the model name room.
-    expect(modelBadge).toHaveClass(
-      'max-sm:[&_[data-slot=model-provider-icon]]:hidden'
-    )
+    const modelIcon = within(card).getByRole('img', { name: 'gpt-5.4' })
+    expect(modelIcon).toHaveClass('size-5', 'shrink-0')
+    expect(
+      modelIcon.querySelector('[data-slot="model-provider-icon"]')
+    ).not.toBeNull()
+    // The name is an accessible label only, never visible row text.
+    expect(card.textContent).not.toContain('gpt-5.4')
     // The status cluster absorbs the remaining width and truncates instead of
     // pushing the card past the viewport.
     const statusCluster = card.querySelector(
       '[data-slot="connection-mobile-status"]'
     )
-    expect(statusCluster).toHaveClass('min-w-0', 'shrink')
+    expect(statusCluster).toHaveClass('ml-auto', 'min-w-0', 'shrink')
     expect(
       card.querySelector('[data-slot="connection-beat-meter"]')?.parentElement
     ).toHaveClass('shrink-0')
@@ -400,6 +416,24 @@ describe('connection logs mobile cards', () => {
       '[data-slot="connection-mobile-metrics"]'
     )
     expect(metrics).toHaveClass('flex-wrap', 'min-w-0')
+  })
+
+  test('uses a generic model icon when the provider is unknown', async () => {
+    mockGetConnectionLogs.mockResolvedValue({
+      success: true,
+      data: snapshot([{ ...BASE_ITEM, model: 'custom-model' }]),
+    })
+
+    renderPanel()
+
+    const card = await screen.findByRole('listitem')
+    const modelIcon = within(card).getByRole('img', { name: 'custom-model' })
+    expect(
+      modelIcon.querySelector('[data-slot="model-provider-icon"]')
+    ).toBeNull()
+    expect(
+      modelIcon.querySelector('[data-slot="model-fallback-icon"]')
+    ).not.toBeNull()
   })
 
   test('drops the desktop sub-state line from the card', async () => {
@@ -426,9 +460,6 @@ describe('connection logs mobile cards', () => {
     const card = await screen.findByRole('listitem')
     expect(within(card).getByText('#42')).toBeInTheDocument()
     expect(
-      card.querySelector('[data-slot="connection-mobile-time"]')
-    ).toHaveTextContent(/^\d{2}:\d{2}:\d{2}$/)
-    expect(
       card.querySelector('[data-slot="connection-mobile-metrics"]')
     ).toHaveTextContent('Input 1,200')
   })
@@ -447,27 +478,13 @@ describe('connection logs mobile cards', () => {
     )
     expect(fallback).toHaveTextContent('#123456')
     // The slot is fixed at 20px; clipping and truncating keep the digits from
-    // overlapping the time column next to it.
+    // overlapping the model badge next to it.
     expect(fallback).toHaveClass('size-5', 'overflow-hidden')
     expect(within(fallback as HTMLElement).getByText('#123456')).toHaveClass(
       'truncate',
       // `min-w-0` is what lets `truncate` actually clip inside the flex slot.
       'min-w-0'
     )
-  })
-
-  test('shows a dash when the started timestamp is invalid', async () => {
-    mockGetConnectionLogs.mockResolvedValue({
-      success: true,
-      data: snapshot([{ ...BASE_ITEM, started_at: 0 }]),
-    })
-
-    renderPanel()
-
-    const card = await screen.findByRole('listitem')
-    expect(
-      card.querySelector('[data-slot="connection-mobile-time"]')
-    ).toHaveTextContent(/^-$/)
   })
 
   test('wraps the retry info onto the metrics line while the model keeps a readable width', async () => {
@@ -494,12 +511,10 @@ describe('connection logs mobile cards', () => {
       '[data-slot="connection-mobile-metrics"]'
     )
     expect(metrics).toHaveClass('flex-wrap', 'min-w-0')
-    // Retry info shares the wrapped metrics line instead of shrinking the model.
+    // Retry info shares the wrapped metrics line instead of shrinking the row.
     expect(metrics).toContainElement(retryBadge)
-    // The model keeps a readable lower bound (`min-w-16`) while the metrics wrap.
-    expect(
-      screen.getByText('gpt-5.4').closest('[data-slot="status-badge"]')
-    ).toHaveClass('min-w-16')
+    // The model logo stays fixed while the metrics wrap.
+    expect(screen.getByRole('img', { name: 'gpt-5.4' })).toHaveClass('shrink-0')
   })
 
   test('renders the shared empty state when nothing is connected', async () => {

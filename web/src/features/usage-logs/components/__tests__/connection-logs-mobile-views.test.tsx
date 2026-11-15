@@ -251,6 +251,12 @@ describe('connection logs mobile densities', () => {
     expect(activeRow).toHaveClass('flex', 'items-center')
     expect(activeRow).toHaveAttribute('title', 'Input 1,200 · Output --')
     expect(activeRow.textContent).toContain('1200')
+    expect(activeRow.textContent).toContain('↑')
+    expect(activeRow.textContent).toContain('↓')
+    expect(activeRow.textContent).not.toContain('gpt-5.4')
+    expect(
+      within(activeRow).getByRole('img', { name: 'gpt-5.4' })
+    ).toHaveAttribute('data-slot', 'model-icon')
     expect(within(activeRow).getByText('Connecting')).toHaveClass('sr-only')
     expect(screen.getByRole('button', { name: 'Compact' })).toHaveAttribute(
       'aria-pressed',
@@ -278,6 +284,8 @@ describe('connection logs mobile densities', () => {
       '[data-slot="connection-grid-cell"]'
     )
     expect(cells).toHaveLength(2)
+    expect(cells[0].textContent).toContain('↑')
+    expect(cells[0].textContent).toContain('↓')
     expect(
       screen.getByRole('button', {
         name: 'User alice Connecting Input 1,200 Output --',

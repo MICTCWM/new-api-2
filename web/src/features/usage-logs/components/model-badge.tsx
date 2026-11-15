@@ -1,3 +1,5 @@
+import { Cpu } from 'lucide-react'
+
 import { StatusBadge } from '@/components/status-badge'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
@@ -5,6 +7,8 @@ import { cn } from '@/lib/utils'
 interface ModelBadgeProps {
   modelName: string
   className?: string
+  /** Show only the provider logo; the model name stays as the accessible label. */
+  iconOnly?: boolean
 }
 
 interface ModelProvider {
@@ -97,6 +101,37 @@ function resolveModelProvider(modelName: string): ModelProvider | null {
 
 function ModelBadgeContent(props: ModelBadgeProps) {
   const provider = resolveModelProvider(props.modelName)
+
+  if (props.iconOnly) {
+    return (
+      <span
+        data-slot='model-icon'
+        role='img'
+        aria-label={props.modelName}
+        title={props.modelName}
+        className={cn(
+          'inline-flex size-5 shrink-0 items-center justify-center',
+          props.className
+        )}
+      >
+        {provider ? (
+          <span
+            data-slot='model-provider-icon'
+            className='flex h-[18px] w-[18px] items-center justify-center'
+            aria-hidden='true'
+          >
+            {getLobeIcon(provider.icon, 18)}
+          </span>
+        ) : (
+          <Cpu
+            data-slot='model-fallback-icon'
+            className='text-muted-foreground size-4'
+            aria-hidden='true'
+          />
+        )}
+      </span>
+    )
+  }
 
   return (
     <StatusBadge

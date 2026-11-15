@@ -72,10 +72,15 @@ function ConnectionLogsGridCell(props: {
         )}
       </span>
       <span className='flex min-w-0 items-baseline gap-1 font-mono text-[10px] leading-none tabular-nums'>
-        <span>{compactInput}</span>
-        <span className='text-muted-foreground'>/</span>
-        <span className='text-muted-foreground min-w-0 truncate'>
-          {compactOutput}
+        <span className='inline-flex min-w-0 items-baseline gap-0.5'>
+          <span className='text-muted-foreground' aria-hidden='true'>
+            ↑
+          </span>
+          <span>{compactInput}</span>
+        </span>
+        <span className='text-muted-foreground inline-flex min-w-0 items-baseline gap-0.5'>
+          <span aria-hidden='true'>↓</span>
+          <span className='min-w-0 truncate'>{compactOutput}</span>
         </span>
       </span>
     </button>

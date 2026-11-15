@@ -11,6 +11,7 @@ import {
   getConnectionPresentation,
 } from '../lib/connection-log-display'
 import type { ConnectionLogItem } from '../types'
+import { ModelBadge } from './model-badge'
 import { useUsageLogsContext } from './usage-logs-provider'
 
 /**
@@ -61,12 +62,11 @@ export function ConnectionLogsCompactRow(props: {
       >
         {name}
       </button>
-      <span className='text-muted-foreground min-w-0 flex-1 truncate font-mono'>
-        {props.item.model}
-      </span>
-      <span className='shrink-0 font-mono tabular-nums'>
+      <ModelBadge iconOnly modelName={props.item.model} className='shrink-0' />
+      <span className='ml-auto shrink-0 font-mono tabular-nums'>
+        <span className='text-muted-foreground'>↑</span>
         {formatCompactNumber(props.item.input_tokens)}
-        <span className='text-muted-foreground'> / </span>
+        <span className='text-muted-foreground'> ↓</span>
         {props.item.output_tokens == null
           ? CONNECTION_EMPTY_VALUE
           : formatCompactNumber(props.item.output_tokens)}

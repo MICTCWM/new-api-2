@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 
 import { DataTablePagination } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
-import { formatNumber, formatTimeStr } from '@/lib/format'
+import { formatNumber } from '@/lib/format'
 
 import {
   formatConnectionDuration,
@@ -39,14 +39,6 @@ export function ConnectionLogsMobileCard(props: {
 }) {
   const { t } = useTranslation()
   const presentation = getConnectionPresentation(props.item, props.now, t)
-  // Desktop renders an invalid timestamp as "-", so the card must match.
-  const hasStartedAt =
-    props.item.started_at !== 0 &&
-    props.item.started_at !== -1 &&
-    Number.isFinite(props.item.started_at)
-  const startedAtLabel = hasStartedAt
-    ? formatTimeStr(new Date(props.item.started_at))
-    : '-'
 
   return (
     <div
@@ -61,24 +53,16 @@ export function ConnectionLogsMobileCard(props: {
           avatarOnly
           avatarClassName='size-5 **:data-[slot=avatar-fallback]:text-[10px]'
         />
-        <span
-          data-slot='connection-mobile-time'
-          className='text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums'
-        >
-          {startedAtLabel}
-        </span>
-        {/* `grow` only adds leftover width (`flex-grow: 1`); it leaves the flex
-            basis at auto. `flex-1` would set a 0% basis, so on a 320px card the
-            badge started at its minimum and showed only the provider icon. */}
         <ModelBadge
+          iconOnly
           modelName={props.item.model}
-          className='max-w-full min-w-16 grow max-sm:[&_[data-slot=model-provider-icon]]:hidden'
+          className='shrink-0'
         />
-        {/* The cluster may shrink: a long status label truncates instead of
-            squeezing the model name to nothing on a 320px viewport. */}
+        {/* The status cluster sits at the right edge: the logo alone identifies
+            the model, leaving the rest of the width to the live state. */}
         <div
           data-slot='connection-mobile-status'
-          className='flex min-w-0 shrink items-center gap-1.5'
+          className='ml-auto flex min-w-0 shrink items-center gap-1.5'
         >
           {props.hideActiveStatus && props.item.active ? (
             <span className='sr-only'>{t(presentation.meta.mainKey)}</span>
@@ -106,17 +90,39 @@ export function ConnectionLogsMobileCard(props: {
         data-slot='connection-mobile-metrics'
         className='text-muted-foreground mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 pl-7 font-mono text-[10px] leading-tight tracking-tighter tabular-nums sm:gap-x-2 sm:text-[11px] sm:tracking-normal'
       >
-        <span className='whitespace-nowrap'>
-          {t('Input')} {formatNumber(props.item.input_tokens)}
-        </span>
-        <span className='whitespace-nowrap'>
-          {t('Output')} <ConnectionOutputTokens item={props.item} />
-        </span>
-        {props.item.stream ? (
-          <span className='whitespace-nowrap'>
-            {t('TTFT')} <ConnectionTtftValue item={props.item} />
+        <span className='whitespace-nowrap' title={t('Input')}>
+          <span className='text-muted-foreground' aria-hidden='true'>
+            ↑{' '}
           </span>
-        ) : null}
+          <span className='sr-only'>{t('Input')} </span>
+          {formatNumber(props.item.input_tokens)}
+        </span>
+        <span className='whitespace-nowrap' title={t('Output')}>
+          <span className='text-muted-foreground' aria-hidden='true'>
+            ↓{' '}
+          </span>
+          <span className='sr-only'>{t('Output')} </span>
+          <ConnectionOutputTokens item={props.item} />
+        </span>
+        <span
+          data-slot='connection-mobile-time-group'
+          className='ml-auto flex shrink-0 items-center gap-1.5'
+        >
+          <span
+            data-slot='connection-mobile-time-divider'
+            className='bg-border h-3 w-px shrink-0'
+            aria-hidden='true'
+          />
+          {props.item.stream ? (
+            <span className='whitespace-nowrap' title={t('TTFT')}>
+              <span className='sr-only'>{t('TTFT')} </span>
+              <ConnectionTtftValue item={props.item} />
+            </span>
+          ) : null}
+          <span className='whitespace-nowrap' title={t('Duration')}>
+            {formatConnectionDuration(presentation.elapsed)}
+          </span>
+        </span>
         <ConnectionRetryBadge count={props.item.retry_count} />
         {presentation.retrying ? (
           <span className='text-warning whitespace-nowrap'>
@@ -125,9 +131,6 @@ export function ConnectionLogsMobileCard(props: {
             })}
           </span>
         ) : null}
-        <span className='ml-auto whitespace-nowrap'>
-          {formatConnectionDuration(presentation.elapsed)}
-        </span>
       </div>
     </div>
   )
