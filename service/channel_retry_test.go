@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -35,4 +37,32 @@ func TestRecordChannelRetryFailureKeepsAttemptAndSanitizedReason(t *testing.T) {
 	require.Equal(t, 429, failures[0].StatusCode)
 	require.Equal(t, string(types.ErrorCodeDoRequestFailed), failures[0].ErrorCode)
 	require.Contains(t, failures[0].Reason, "upstream quota exceeded")
+}
+
+func TestTryStartChannelRetryBackoffAndLimit(t *testing.T) {
+	param := &RetryParam{}
+	channel := &model.Channel{Id: 7}
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		delay, ok := param.TryStartChannelRetry(channel, 3)
+		require.True(t, ok)
+		require.Equal(t, time.Duration(attempt)*time.Second, delay)
+	}
+
+	_, ok := param.TryStartChannelRetry(channel, 3)
+	require.False(t, ok)
+	require.Equal(t, 3, param.ChannelRetryCount())
+
+	// Every channel keeps its own retry budget within the same request.
+	delay, ok := param.TryStartChannelRetry(&model.Channel{Id: 8}, 2)
+	require.True(t, ok)
+	require.Equal(t, time.Second, delay)
+	require.Equal(t, 4, param.ChannelRetryCount())
+}
+
+func TestTryStartChannelRetryRejectsZeroLimit(t *testing.T) {
+	param := &RetryParam{}
+	_, ok := param.TryStartChannelRetry(&model.Channel{Id: 7}, 0)
+	require.False(t, ok)
+	require.Equal(t, 0, param.ChannelRetryCount())
 }

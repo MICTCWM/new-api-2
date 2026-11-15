@@ -1,11 +1,16 @@
 package model
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestFilterChannelIDsByFallback(t *testing.T) {
@@ -132,8 +137,14 @@ func TestFilterAbilitiesByFallback(t *testing.T) {
 func setFallbackChannelIDSetForTest(t *testing.T, set map[int]struct{}) {
 	t.Helper()
 	channelSyncLock.Lock()
+	previous := fallbackChannelIDSet
 	fallbackChannelIDSet = set
 	channelSyncLock.Unlock()
+	t.Cleanup(func() {
+		channelSyncLock.Lock()
+		fallbackChannelIDSet = previous
+		channelSyncLock.Unlock()
+	})
 }
 
 func TestGetFallbackSequenceIDs(t *testing.T) {
@@ -222,4 +233,80 @@ func TestBuildFallbackChannelIDSet(t *testing.T) {
 		require.NotNil(t, set)
 		assert.Empty(t, set)
 	})
+}
+
+func TestFallbackMarkedChannelIsExcludedFromNormalCandidates(t *testing.T) {
+	previousDB := DB
+	previousType := common.MainDatabaseType()
+	previousMemoryCache := common.MemoryCacheEnabled
+	channelSyncLock.Lock()
+	previousFallbackDB := fallbackSetDB
+	previousFallbackLoaded := fallbackSetLastLoaded
+	fallbackSetDB = nil
+	fallbackSetLastLoaded = time.Time{}
+	channelSyncLock.Unlock()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Channel{}, &Ability{}, &OpencodeChannelUsage{}, &OpencodePoolUsage{}, &CommandChannelUsage{}, &CommandPoolUsage{}, &SpeedProtectionState{}))
+	DB = db
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() {
+		DB = previousDB
+		common.SetMainDatabaseType(previousType)
+		common.MemoryCacheEnabled = previousMemoryCache
+		channelSyncLock.Lock()
+		fallbackSetDB = previousFallbackDB
+		fallbackSetLastLoaded = previousFallbackLoaded
+		channelSyncLock.Unlock()
+	})
+
+	primary := &Channel{Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Key: "primary", Models: "gpt-4o", Group: "default"}
+	fallback := &Channel{Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Key: "fallback", Models: "gpt-4o", Group: "default"}
+	owner := &Channel{Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Key: "owner", Models: "other", Group: "default", FallbackSequence: "2"}
+	for _, channel := range []*Channel{primary, fallback, owner} {
+		require.NoError(t, db.Create(channel).Error)
+		require.NoError(t, db.Create(&Ability{Group: "default", Model: channel.GetModels()[0], ChannelId: channel.Id, Enabled: true}).Error)
+	}
+
+	InitChannelCache()
+	require.True(t, IsFallbackChannel(fallback.Id))
+	channel, err := GetChannelWithAttempted("default", "gpt-4o", 0, "", nil)
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	require.Equal(t, primary.Id, channel.Id)
+
+	codePrimary := &Channel{Type: constant.ChannelTypeCommand, Status: common.ChannelStatusEnabled, Key: "code-primary", Models: CommandFlashModel, Group: "default"}
+	codeFallback := &Channel{Type: constant.ChannelTypeCommand, Status: common.ChannelStatusEnabled, Key: "code-fallback", Models: CommandFlashModel, Group: "default"}
+	require.NoError(t, db.Create(codePrimary).Error)
+	require.NoError(t, db.Create(codeFallback).Error)
+	owner.FallbackSequence = fmt.Sprintf("%d", codeFallback.Id)
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", owner.Id).Update("fallback_sequence", owner.FallbackSequence).Error)
+	for _, codeChannel := range []*Channel{codePrimary, codeFallback} {
+		require.NoError(t, db.Create(&Ability{Group: "default", Model: CommandFlashModel, ChannelId: codeChannel.Id, Enabled: true}).Error)
+	}
+	InitChannelCache()
+	require.True(t, IsFallbackChannel(codeFallback.Id))
+
+	codeCandidates, err := GetCodeProviderCandidates("default", CommandFlashModel, nil)
+	require.NoError(t, err)
+	require.Len(t, codeCandidates, 1)
+	require.Equal(t, codePrimary.Id, codeCandidates[0].Id)
+
+	openPrimary := &Channel{Type: constant.ChannelTypeOpencode, Status: common.ChannelStatusEnabled, Key: "open-primary", Models: OpencodeModel, Group: "default"}
+	openFallback := &Channel{Type: constant.ChannelTypeOpencode, Status: common.ChannelStatusEnabled, Key: "open-fallback", Models: OpencodeModel, Group: "default"}
+	require.NoError(t, db.Create(openPrimary).Error)
+	require.NoError(t, db.Create(openFallback).Error)
+	owner.FallbackSequence = fmt.Sprintf("%d", openFallback.Id)
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", owner.Id).Update("fallback_sequence", owner.FallbackSequence).Error)
+	for _, openChannel := range []*Channel{openPrimary, openFallback} {
+		require.NoError(t, db.Create(&Ability{Group: "default", Model: OpencodeModel, ChannelId: openChannel.Id, Enabled: true}).Error)
+	}
+	InitChannelCache()
+	require.True(t, IsFallbackChannel(openFallback.Id))
+
+	openCandidates, err := GetOpencodeCandidates("default", OpencodeModel, nil)
+	require.NoError(t, err)
+	require.Len(t, openCandidates, 1)
+	require.Equal(t, openPrimary.Id, openCandidates[0].Id)
 }

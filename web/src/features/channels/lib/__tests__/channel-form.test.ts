@@ -262,6 +262,117 @@ describe('transformFormDataToUpdatePayload', () => {
 
     expect(formData.video_frame_extraction_enabled).toBe(true)
   })
+
+  it('serializes the TPM limit, buffer, limit mode and 429 rewrite into the settings JSON', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      channel_tpm_limit: 500_000,
+      channel_tpm_buffer: 100_000,
+      channel_limit_mode: 'queue' as const,
+      rewrite_upstream_429: true,
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+    const settings = JSON.parse(payload.settings as string) as Record<
+      string,
+      unknown
+    >
+
+    expect(settings.channel_tpm_limit).toBe(500_000)
+    expect(settings.channel_tpm_buffer).toBe(100_000)
+    expect(settings.channel_limit_mode).toBe('queue')
+    expect(settings.rewrite_upstream_429).toBe(true)
+  })
+
+  it('normalizes reject 429 mode and rewrites when saving', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      channel_tpm_limit: 500_000,
+      channel_limit_mode: 'reject-429' as 'reject',
+      rewrite_upstream_429: false,
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+    const settings = JSON.parse(payload.settings as string) as Record<
+      string,
+      unknown
+    >
+
+    expect(settings.channel_limit_mode).toBe('reject')
+    expect(settings.rewrite_upstream_429).toBe(false)
+  })
+
+  it('drops TPM throttle settings for fixed code channels', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      type: CHANNEL_TYPE_COMMAND,
+      channel_tpm_limit: 500_000,
+      channel_tpm_buffer: 100_000,
+      channel_limit_mode: 'queue' as const,
+      rewrite_upstream_429: true,
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+    const settings = JSON.parse(payload.settings as string) as Record<
+      string,
+      unknown
+    >
+
+    expect(settings.channel_tpm_limit).toBeUndefined()
+    expect(settings.channel_tpm_buffer).toBeUndefined()
+    expect(settings.channel_limit_mode).toBeUndefined()
+    expect(settings.rewrite_upstream_429).toBeUndefined()
+  })
+
+  it('round-trips the TPM throttle settings from the settings JSON', () => {
+    const channel = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      id: 1,
+      type: 1,
+      status: 1,
+      created_time: 0,
+      test_time: 0,
+      response_time: 0,
+      settings: JSON.stringify({
+        channel_tpm_limit: 500_000,
+        channel_tpm_buffer: 100_000,
+        channel_limit_mode: 'queue',
+        rewrite_upstream_429: true,
+      }),
+      group: 'default',
+      channel_info: {} as Channel['channel_info'],
+    } as unknown as Channel
+
+    const formData = transformChannelToFormDefaults(channel)
+
+    expect(formData.channel_tpm_limit).toBe(500_000)
+    expect(formData.channel_tpm_buffer).toBe(100_000)
+    expect(formData.channel_limit_mode).toBe('queue')
+    expect(formData.rewrite_upstream_429).toBe(true)
+  })
+
+  it('falls back to the reject mode and the default buffer for unknown/absent values', () => {
+    const channel = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      id: 1,
+      type: 1,
+      status: 1,
+      created_time: 0,
+      test_time: 0,
+      response_time: 0,
+      settings: JSON.stringify({
+        channel_limit_mode: 'unsupported',
+        channel_tpm_buffer: 'not-a-number',
+      }),
+      group: 'default',
+      channel_info: {} as Channel['channel_info'],
+    } as unknown as Channel
+
+    const formData = transformChannelToFormDefaults(channel)
+
+    expect(formData.channel_limit_mode).toBe('reject')
+    expect(formData.channel_tpm_buffer).toBe(500_000)
+  })
 })
 
 describe('Command model combinations', () => {

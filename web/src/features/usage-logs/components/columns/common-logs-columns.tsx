@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import type { ColumnDef } from '@tanstack/react-table'
 import { Sparkles, KeyRound, MessagesSquare } from 'lucide-react'
 import { useState } from 'react'
@@ -52,6 +34,7 @@ import {
   isPerCallBilling,
 } from '../../lib/utils'
 import type { LogOtherData } from '../../types'
+import { ChannelRetryLabel } from '../channel-retry-label'
 import { DetailsDialog } from '../dialogs/details-dialog'
 import { LogCostDisplay } from '../log-cost-display'
 import { ModelBadge } from '../model-badge'
@@ -428,11 +411,16 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                         />
                       )}
                   </div>
-                  {log.channel_name && (
-                    <span className='text-muted-foreground/70 truncate [font-family:var(--font-body)] !text-xs'>
-                      {channelName}
-                    </span>
-                  )}
+                  <span className='flex min-w-0 items-center gap-1.5'>
+                    {log.channel_name && (
+                      <span className='text-muted-foreground/70 truncate [font-family:var(--font-body)] !text-xs'>
+                        {channelName}
+                      </span>
+                    )}
+                    <ChannelRetryLabel
+                      count={other?.admin_info?.channel_retry_count ?? 0}
+                    />
+                  </span>
                 </TooltipTrigger>
                 <TooltipContent>
                   <div className='space-y-1'>

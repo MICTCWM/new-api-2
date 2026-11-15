@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 /* eslint-disable react-refresh/only-export-components */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -71,7 +53,6 @@ import {
   MODEL_FETCHABLE_TYPES,
   isFixedCodeChannelType,
 } from '../constants'
-import { CODE_PROVIDER_SESSION_USAGE_QUERY_KEY } from '../lib/session-occupancy'
 import {
   formatRelativeTime,
   formatResponseTime,
@@ -91,9 +72,11 @@ import {
   isTagAggregateRow,
   type TagRow,
 } from '../lib'
+import { CODE_PROVIDER_SESSION_USAGE_QUERY_KEY } from '../lib/session-occupancy'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type {
   Channel,
+  ChannelQueueItem,
   CommandUsageSnapshot,
   OpencodeUsageSnapshot,
   OpencodeUsageWindow,
@@ -590,9 +573,7 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
         })}
       </div>
       <Suspense
-        fallback={
-          <div className='size-16 shrink-0' aria-hidden='true' />
-        }
+        fallback={<div className='size-16 shrink-0' aria-hidden='true' />}
       >
         <SessionOccupancyChart
           activeSessions={occupancy?.active_sessions}
@@ -601,6 +582,194 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
         />
       </Suspense>
     </div>
+  )
+}
+
+function ChannelQueueList(props: {
+  items: ChannelQueueItem[]
+  queuedCount: number
+  etaSeconds: number
+  headerLabel: string
+  emptyHint: string
+}) {
+  const { t } = useTranslation()
+  const waitSeconds = (queuedAt: number) =>
+    Math.max(0, Math.round((Date.now() - queuedAt) / 1000))
+  return (
+    <div className='w-full max-w-72 rounded-md border bg-muted/20 px-2 py-1 text-left'>
+      <div className='text-muted-foreground flex flex-wrap items-center justify-between gap-x-2 text-[10px] leading-4'>
+        <span className='font-medium'>
+          {props.headerLabel}: {props.queuedCount}
+        </span>
+        <span className='shrink-0 tabular-nums'>
+          {t('Estimated wait')}: {props.etaSeconds}
+          {t('s')}
+        </span>
+      </div>
+      {props.items.length > 0 ? (
+        <div
+          className='overflow-y-auto text-[10px] leading-5'
+          style={{ maxHeight: CHANNEL_QUEUE_LIST_MAX_ROWS * 20 }}
+        >
+          {props.items.map((item) => (
+            <div
+              key={item.request_id}
+              className='grid grid-cols-[minmax(0,1fr)_auto] gap-x-2'
+            >
+              <span className='truncate'>
+                {t('Input tokens')}:{' '}
+                <span className='tabular-nums'>
+                  {formatTokensCount(item.input_tokens)}
+                </span>
+              </span>
+              <span className='shrink-0 tabular-nums'>
+                {t('Queued')} {waitSeconds(item.queued_at)}{t('s')}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className='text-muted-foreground/60 text-[9px] leading-4'>
+          {props.emptyHint}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatTokensCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`
+  return `${tokens}`
+}
+
+const CHANNEL_QUEUE_LIST_MAX_ROWS = 3
+
+function ChannelConcurrencyDonut(props: {
+  occupiedCount: number
+  limit: number
+}) {
+  const { t } = useTranslation()
+  const ratio = props.occupiedCount / Math.max(1, props.limit)
+  let color = 'text-green-500'
+  if (ratio >= 1) {
+    color = 'text-red-500'
+  } else if (ratio >= 0.5) {
+    color = 'text-yellow-500'
+  }
+  const radius = 15
+  const circumference = 2 * Math.PI * radius
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <div
+            className={`relative size-10 ${color}`}
+            role='img'
+            aria-label={t('Current concurrency: {{count}} / {{limit}}', {
+              count: props.occupiedCount,
+              limit: props.limit,
+            })}
+          />
+        }
+      >
+        <svg className='size-10 -rotate-90' viewBox='0 0 40 40'>
+          <circle
+            cx='20'
+            cy='20'
+            r={radius}
+            fill='none'
+            className='text-muted stroke-current'
+            strokeWidth='4'
+          />
+          <circle
+            cx='20'
+            cy='20'
+            r={radius}
+            fill='none'
+            className='stroke-current transition-all'
+            strokeWidth='4'
+            strokeLinecap='round'
+            strokeDasharray={circumference}
+            strokeDashoffset={circumference * (1 - ratio)}
+          />
+        </svg>
+        <span className='absolute inset-0 flex items-center justify-center text-[10px] font-medium tabular-nums'>
+          {props.occupiedCount}/{props.limit}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <div className='space-y-1 text-xs'>
+          <div>
+            {t('Occupied concurrency')}: {props.occupiedCount} / {props.limit}
+          </div>
+          <div>
+            {t('Available concurrency')}:{' '}
+            {Math.max(0, props.limit - props.occupiedCount)}
+          </div>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function ChannelTPMGauge(props: {
+  tpmCount: number
+  tpmEffective: number
+  tpmBuffer: number
+}) {
+  const { t } = useTranslation()
+  const ratio = props.tpmEffective > 0 ? props.tpmCount / props.tpmEffective : 0
+  let barColor = 'bg-green-500'
+  if (ratio >= 1) {
+    barColor = 'bg-red-500'
+  } else if (ratio >= 0.5) {
+    barColor = 'bg-yellow-500'
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <div
+            className='relative flex size-10 items-end justify-center'
+            role='img'
+            aria-label={t('Current TPM: {{count}} / {{limit}}', {
+              count: props.tpmCount,
+              limit: props.tpmEffective,
+            })}
+          />
+        }
+      >
+        <span className='absolute inset-0 flex items-center justify-center text-[9px] font-medium'>
+          {t('TPM')}
+        </span>
+        <div className='bg-muted relative h-1.5 w-9 overflow-hidden rounded-full'>
+          <div
+            className={cn('h-full transition-all', barColor)}
+            style={{ width: `${Math.min(100, ratio * 100)}%` }}
+          />
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>
+        <div className='space-y-1 text-xs'>
+          <div>
+            {t('Window token usage')}: {formatTokensCount(props.tpmCount)} /{' '}
+            {formatTokensCount(props.tpmEffective)}
+          </div>
+          <div>
+            {t('Buffer')}: {formatTokensCount(props.tpmBuffer)}
+          </div>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function ChannelTPMPercentageLabel(props: { percentage: number }) {
+  return (
+    <span className='text-muted-foreground text-[9px] leading-3 tabular-nums'>
+      {props.percentage}%
+    </span>
   )
 }
 
@@ -613,6 +782,7 @@ function ChannelConcurrencyGaugeCell({ channel }: { channel: Channel }) {
     channelOtherSettings.channel_concurrency_limit ??
     channelOtherSettings.channel_rpm_limit ??
     0
+  const channelTPMLimit = channelOtherSettings.channel_tpm_limit ?? 0
 
   const { data: codeProviderUsage } = useQuery({
     queryKey: ['code-provider-usage', channel.id],
@@ -624,82 +794,101 @@ function ChannelConcurrencyGaugeCell({ channel }: { channel: Channel }) {
   const { data: channelConcurrencyUsage } = useQuery({
     queryKey: ['channel-concurrency-usage', channel.id],
     queryFn: () => getChannelConcurrencyUsage(channel.id),
-    enabled: !isFixedCodeChannel && channelConcurrencyLimit > 0,
-    refetchInterval: 15_000,
+    enabled:
+      !isFixedCodeChannel &&
+      (channelConcurrencyLimit > 0 || channelTPMLimit > 0),
+    refetchInterval: 5_000,
   })
 
-  const usage = isFixedCodeChannel
-    ? codeProviderUsage?.data
-    : channelConcurrencyUsage?.data
-  if (!usage || usage.concurrency_limit <= 0) return null
-
-  const actualCount = Math.min(
-    usage.concurrency_limit,
-    Math.max(0, usage.concurrency_count)
-  )
-  const occupiedCount = actualCount
-  const availableCount = Math.max(0, usage.concurrency_limit - occupiedCount)
-  const ratio = occupiedCount / Math.max(1, usage.concurrency_limit)
-  let color = 'text-green-500'
-  if (ratio >= 1) {
-    color = 'text-red-500'
-  } else if (ratio >= 0.5) {
-    color = 'text-yellow-500'
+  if (isFixedCodeChannel) {
+    const codeUsage = codeProviderUsage?.data
+    if (!codeUsage || (codeUsage.concurrency_limit ?? 0) <= 0) return null
+    const occupiedCount = Math.min(
+      codeUsage.concurrency_limit,
+      Math.max(0, codeUsage.concurrency_count)
+    )
+    return (
+      <TooltipProvider>
+        <ChannelConcurrencyDonut
+          occupiedCount={occupiedCount}
+          limit={codeUsage.concurrency_limit}
+        />
+      </TooltipProvider>
+    )
   }
-  const radius = 15
-  const circumference = 2 * Math.PI * radius
+
+  const usage = channelConcurrencyUsage?.data
+  if (!usage) return null
+
+  const hasConcurrencyGauge = (usage.concurrency_limit ?? 0) > 0
+  const tpmLimit = usage.tpm_limit ?? 0
+  const hasTPMGauge = tpmLimit > 0
+  if (!hasConcurrencyGauge && !hasTPMGauge) return null
+
+  const isQueueMode = (usage.limit_mode ?? 'reject') === 'queue'
+  const queueItems = usage.queue_items ?? []
+  const concurrencyQueueItems = queueItems.filter((item) => item.kind !== 'tpm')
+  const tpmQueueItems = queueItems.filter((item) => item.kind === 'tpm')
+
+  const occupiedCount = Math.min(
+    Math.max(usage.concurrency_limit ?? 0, 1),
+    Math.max(0, usage.concurrency_count ?? 0)
+  )
+
+  const tpmCount = Math.max(0, usage.tpm_count ?? 0)
+  const tpmEffective = (usage.tpm_effective ?? tpmLimit) || tpmLimit
+  const tpmRatio = tpmEffective > 0 ? tpmCount / tpmEffective : 0
+  const tpmResetSeconds = Math.max(
+    0,
+    Math.round((usage.tpm_reset_at - Date.now()) / 1000)
+  )
+
   return (
     <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <div
-              className={`relative size-10 ${color}`}
-              role='img'
-              aria-label={t('Current concurrency: {{count}} / {{limit}}', {
-                count: occupiedCount,
-                limit: usage.concurrency_limit,
-              })}
+      <div className='-my-2 flex w-full max-w-72 flex-col items-center gap-1'>
+        <div className='flex justify-center gap-2'>
+          {hasConcurrencyGauge && (
+            <ChannelConcurrencyDonut
+              occupiedCount={occupiedCount}
+              limit={usage.concurrency_limit}
             />
-          }
-        >
-          <svg className='size-10 -rotate-90' viewBox='0 0 40 40'>
-            <circle
-              cx='20'
-              cy='20'
-              r={radius}
-              fill='none'
-              className='text-muted stroke-current'
-              strokeWidth='4'
-            />
-            <circle
-              cx='20'
-              cy='20'
-              r={radius}
-              fill='none'
-              className='stroke-current transition-all'
-              strokeWidth='4'
-              strokeLinecap='round'
-              strokeDasharray={circumference}
-              strokeDashoffset={circumference * (1 - ratio)}
-            />
-          </svg>
-          <span className='absolute inset-0 flex items-center justify-center text-[10px] font-medium tabular-nums'>
-            {occupiedCount}/{usage.concurrency_limit}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent>
-          <div className='space-y-1 text-xs'>
-            <div>
-              {t('Occupied concurrency')}: {occupiedCount} /{' '}
-              {usage.concurrency_limit}
+          )}
+          {hasTPMGauge && (
+            <div className='flex flex-col items-center'>
+              <ChannelTPMGauge
+                tpmCount={tpmCount}
+                tpmEffective={tpmEffective}
+                tpmBuffer={usage.tpm_buffer ?? 0}
+              />
+              <ChannelTPMPercentageLabel
+                percentage={Math.round(tpmRatio * 100)}
+              />
             </div>
-            <div>
-              {t('Available concurrency')}: {availableCount}
-            </div>
+          )}
+        </div>
+        {isQueueMode && (
+          <div className='flex w-full flex-col gap-1'>
+            {hasConcurrencyGauge && (
+              <ChannelQueueList
+                items={concurrencyQueueItems}
+                queuedCount={usage.queued_concurrency_count ?? 0}
+                etaSeconds={usage.queue_eta_seconds ?? 0}
+                headerLabel={t('Queued')}
+                emptyHint={t('No queued requests')}
+              />
+            )}
+            {hasTPMGauge && (
+              <ChannelQueueList
+                items={tpmQueueItems}
+                queuedCount={usage.queued_tpm_count ?? 0}
+                etaSeconds={usage.queue_eta_seconds ?? tpmResetSeconds}
+                headerLabel={t('Queued')}
+                emptyHint={t('No queued requests')}
+              />
+            )}
           </div>
-        </TooltipContent>
-      </Tooltip>
+        )}
+      </div>
     </TooltipProvider>
   )
 }

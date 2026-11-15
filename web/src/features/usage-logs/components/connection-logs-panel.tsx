@@ -1,41 +1,29 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import { useQuery } from '@tanstack/react-query'
 import { Activity, CircleDashed, RefreshCw, Waves } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardHeader } from '@/components/ui/card'
 import { IconBadge } from '@/components/ui/icon-badge'
+import { useMediaQuery } from '@/hooks'
 import { formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { getConnectionLogs } from '../api'
 import type { ConnectionLogItem } from '../types'
-import { ConnectionLogsTable } from './connection-logs-table'
+import {
+  ConnectionLogsTable,
+  type ConnectionViewMode,
+} from './connection-logs-table'
+import { ConnectionLogsViewToggle } from './connection-logs-view-toggle'
 
 // Token counts must keep moving smoothly, so progress polls well below the
 // five-second log refresh.
 const REFRESH_INTERVAL_MS = 5000
 const LIVE_PROGRESS_INTERVAL_MS = 500
 const EMPTY_ITEMS: ConnectionLogItem[] = []
+const VIEW_MODE_STORAGE_KEY = 'connection_logs_view_mode'
 
 interface ConnectionStatProps {
   label: string
@@ -57,7 +45,7 @@ function ConnectionStat(props: ConnectionStatProps) {
       </div>
       <div
         data-testid={props.testId}
-        className='mt-1 font-mono text-lg leading-none font-semibold tabular-nums'
+        className='mt-1 truncate font-mono text-base leading-none font-semibold tabular-nums sm:text-lg'
       >
         {props.value}
       </div>
@@ -70,15 +58,128 @@ function ConnectionLogsFrame(props: { role?: 'alert'; children: ReactNode }) {
   return (
     <div
       role={props.role}
-      className='text-muted-foreground flex min-h-32 items-center justify-center rounded-lg border text-sm'
+      className='text-muted-foreground flex min-h-32 flex-1 items-center justify-center rounded-lg border text-sm'
     >
       {props.children}
     </div>
   )
 }
 
+/**
+ * Mobile header: one 24px line replaces the desktop title block, the wrapping
+ * node/refresh copy and the two tall stat cards, so the list starts roughly
+ * eighty pixels higher on a 320px viewport.
+ */
+function ConnectionLogsMobileHeader(props: {
+  nodeName?: string
+  refreshing: boolean
+  onRefresh: () => void
+  viewMode: ConnectionViewMode
+  onViewModeChange: (mode: ConnectionViewMode) => void
+}) {
+  const { t } = useTranslation()
+  const refreshSeconds = REFRESH_INTERVAL_MS / 1000
+
+  return (
+    <CardHeader
+      data-slot='connection-mobile-header'
+      className='flex flex-row items-center gap-1.5 border-b px-2 py-1'
+    >
+      <CircleDashed
+        className='text-muted-foreground size-3 shrink-0'
+        aria-hidden='true'
+      />
+      <span className='text-[11px] font-medium whitespace-nowrap'>
+        {t('Live connections')}
+      </span>
+      {props.nodeName ? (
+        <span className='text-muted-foreground min-w-0 truncate font-mono text-[10px]'>
+          {props.nodeName}
+        </span>
+      ) : null}
+      <span
+        className='text-muted-foreground ml-auto shrink-0 font-mono text-[10px] tabular-nums'
+        title={t('Auto refresh: {{seconds}}s', { seconds: refreshSeconds })}
+      >
+        {refreshSeconds}s
+      </span>
+      <ConnectionLogsViewToggle
+        value={props.viewMode}
+        onChange={props.onViewModeChange}
+      />
+      <Button
+        variant='ghost'
+        size='icon-xs'
+        className='size-6'
+        aria-label={t('Refresh')}
+        onClick={props.onRefresh}
+        disabled={props.refreshing}
+      >
+        <RefreshCw
+          className={cn('size-3', props.refreshing && 'animate-spin')}
+          aria-hidden='true'
+        />
+      </Button>
+    </CardHeader>
+  )
+}
+
+/** Single-row totals: the same two numbers the desktop stat cards show. */
+function ConnectionLogsMobileStats(props: {
+  concurrent: string
+  inputTokens: string
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <div
+      data-slot='connection-mobile-stats'
+      className='text-muted-foreground flex min-w-0 items-center gap-x-3 px-2 text-[10px]'
+    >
+      <span className='flex min-w-0 items-baseline gap-1'>
+        <Activity
+          className='text-info size-3 shrink-0 self-center'
+          aria-hidden='true'
+        />
+        <span className='truncate'>{t('Active connections')}</span>
+        <span
+          data-testid='connection-concurrent'
+          className='text-foreground shrink-0 font-mono text-[11px] font-semibold tabular-nums'
+        >
+          {props.concurrent}
+        </span>
+      </span>
+      <span className='flex min-w-0 items-baseline gap-1'>
+        <Waves
+          className='text-chart-1 size-3 shrink-0 self-center'
+          aria-hidden='true'
+        />
+        <span className='truncate'>{t('Total input tokens')}</span>
+        <span
+          data-testid='connection-total-input'
+          className='text-foreground shrink-0 font-mono text-[11px] font-semibold tabular-nums'
+        >
+          {props.inputTokens}
+        </span>
+      </span>
+    </div>
+  )
+}
+
 export function ConnectionLogsPanel() {
   const { t } = useTranslation()
+  const isMobile = useMediaQuery('(max-width: 640px)')
+  const [viewMode, setViewMode] = useState<ConnectionViewMode>(() => {
+    try {
+      const stored = localStorage.getItem(VIEW_MODE_STORAGE_KEY)
+      if (stored === 'list' || stored === 'compact' || stored === 'grid') {
+        return stored
+      }
+    } catch {
+      /* Private mode or disabled storage: keep the default. */
+    }
+    return 'list'
+  })
   const logsQuery = useQuery({
     queryKey: ['usage-logs', 'connection-logs'],
     queryFn: () => getConnectionLogs(),
@@ -102,6 +203,12 @@ export function ConnectionLogsPanel() {
     const liveItem = progressByRequestID.get(item.request_id)
     return liveItem ? { ...item, ...liveItem } : item
   })
+  const concurrentValue = formatNumber(
+    progress?.concurrent ?? snapshot?.concurrent ?? null
+  )
+  const totalInputValue = formatNumber(
+    progress?.total_input_tokens ?? snapshot?.total_input_tokens ?? null
+  )
 
   let detail: ReactNode
   if (logsQuery.isLoading) {
@@ -116,6 +223,7 @@ export function ConnectionLogsPanel() {
     detail = (
       <ConnectionLogsTable
         items={items}
+        viewMode={viewMode}
         // The five-second snapshot anchors the node clock; progress polls only
         // refresh values, so the client keeps ticking from this offset.
         clockOffset={
@@ -127,9 +235,44 @@ export function ConnectionLogsPanel() {
     )
   }
 
+  const handleViewModeChange = (mode: ConnectionViewMode) => {
+    setViewMode(mode)
+    try {
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode)
+    } catch {
+      /* The in-memory switch still works when storage is unavailable. */
+    }
+  }
+
+  if (isMobile) {
+    return (
+      <Card className='h-full min-h-0 gap-0 overflow-hidden py-0'>
+        <ConnectionLogsMobileHeader
+          nodeName={snapshot?.node_name}
+          refreshing={logsQuery.isFetching}
+          onRefresh={() => void logsQuery.refetch()}
+          viewMode={viewMode}
+          onViewModeChange={handleViewModeChange}
+        />
+        {/* Same two-slot shape as the desktop content (stats, then the table),
+            so changing the breakpoint re-renders the table instead of
+            remounting it and losing the current page. */}
+        <CardContent className='flex min-h-0 flex-1 flex-col gap-1 px-1.5 py-1'>
+          <div className='-mx-1.5 shrink-0'>
+            <ConnectionLogsMobileStats
+              concurrent={concurrentValue}
+              inputTokens={totalInputValue}
+            />
+          </div>
+          {detail}
+        </CardContent>
+      </Card>
+    )
+  }
+
   return (
-    <Card className='h-full min-h-0 gap-3'>
-      <CardHeader>
+    <Card className='h-full min-h-0 gap-3 max-sm:gap-2'>
+      <CardHeader className='max-sm:px-3'>
         <CardAction>
           <Button
             variant='ghost'
@@ -144,7 +287,7 @@ export function ConnectionLogsPanel() {
             {t('Refresh')}
           </Button>
         </CardAction>
-        <div className='text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs'>
+        <div className='text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs'>
           <span>{t('Live connections on this node')}</span>
           {snapshot?.node_name ? (
             <span className='font-mono'>{snapshot.node_name}</span>
@@ -161,25 +304,19 @@ export function ConnectionLogsPanel() {
         </div>
       </CardHeader>
 
-      <CardContent className='flex min-h-0 flex-1 flex-col gap-3'>
+      <CardContent className='flex min-h-0 flex-1 flex-col gap-3 max-sm:gap-2 max-sm:px-3'>
         <div className='bg-border grid grid-cols-2 gap-px'>
           <ConnectionStat
             label={t('Active connections')}
             testId='connection-concurrent'
-            value={formatNumber(
-              progress?.concurrent ?? snapshot?.concurrent ?? null
-            )}
+            value={concurrentValue}
             icon={<Activity />}
             tone='info'
           />
           <ConnectionStat
             label={t('Total input tokens')}
             testId='connection-total-input'
-            value={formatNumber(
-              progress?.total_input_tokens ??
-                snapshot?.total_input_tokens ??
-                null
-            )}
+            value={totalInputValue}
             icon={<Waves />}
             tone='primary'
           />

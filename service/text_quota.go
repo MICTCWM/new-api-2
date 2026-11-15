@@ -394,6 +394,29 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
+func settleChannelTPMUsage(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, promptTokens, completionTokens int) {
+	if relayInfo == nil {
+		return
+	}
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
+	if completionTokens < 0 {
+		completionTokens = 0
+	}
+	input := int64(promptTokens)
+	output := int64(completionTokens)
+	total := input
+	if output > int64(^uint64(0)>>1)-input {
+		total = int64(^uint64(0) >> 1)
+	} else {
+		total += output
+	}
+	if err := model.SettleChannelTPMUsage(relayInfo.ChannelId, relayInfo.ChannelTPMReservedTokens, total); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("failed to settle channel TPM usage for channel %d: %s", relayInfo.ChannelId, err.Error()))
+	}
+}
+
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
@@ -572,6 +595,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	// 连接日志：到这里才对外展示输出 token，并用量替换请求前的估算输入。
 	SettleConnectionTokens(relayInfo.RequestId, summary.PromptTokens, summary.CompletionTokens)
+
+	// 渠道 TPM 限制：用上游上报的真实吞吐替换预留的估算输入，
+	// 使该渠道的一分钟 TPM 窗口反映实际 token 用量。
+	settleChannelTPMUsage(ctx, relayInfo, summary.PromptTokens, summary.CompletionTokens)
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,

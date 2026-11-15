@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import { z } from 'zod'
 
 // ============================================================================
@@ -101,6 +83,14 @@ export interface ChannelSettings {
 export interface ChannelOtherSettings {
   channel_concurrency_limit?: number
   channel_rpm_limit?: number
+  // Same-channel retries after an upstream error, with 1s, 2s, 3s... backoff.
+  channel_retry_times?: number
+  // Per-channel TPM throttle: total tokens per minute, minus the buffer
+  // headroom before enforcement; "" / reject / queue switches the mode.
+  channel_tpm_limit?: number
+  channel_tpm_buffer?: number
+  channel_limit_mode?: '' | 'reject' | 'queue'
+  rewrite_upstream_429?: boolean
   speed_protection_enabled?: boolean
   speed_protection_groups?: string[]
   azure_responses_version?: string
@@ -237,6 +227,18 @@ export interface CommandUsageResponse {
   data?: CommandUsageSnapshot
 }
 
+export interface ChannelQueueItem {
+  request_id: string
+  user_id: number
+  username: string
+  group: string
+  model: string
+  input_tokens: number
+  queued_at: number
+  kind: 'concurrency' | 'tpm' | string
+  position: number
+}
+
 export interface ChannelConcurrencyUsageSnapshot {
   channel_id: number
   rpm_count: number
@@ -244,6 +246,16 @@ export interface ChannelConcurrencyUsageSnapshot {
   rpm_reset_at: number
   concurrency_count: number
   concurrency_limit: number
+  tpm_limit: number
+  tpm_buffer: number
+  tpm_effective: number
+  tpm_count: number
+  tpm_reset_at: number
+  limit_mode: string
+  queued_concurrency_count: number
+  queued_tpm_count: number
+  queue_eta_seconds: number
+  queue_items: ChannelQueueItem[]
 }
 
 export interface ChannelConcurrencyUsageResponse {
@@ -326,6 +338,7 @@ export interface ChannelTestResponse {
   message?: string
   error_code?: string
   time?: number
+  source_status_code?: number
   data?: {
     response_time?: number
     error?: string

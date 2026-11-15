@@ -161,6 +161,11 @@ var BatchUpdateInterval int
 
 var RelayTimeout int // unit is second
 
+// NonStreamTimeout bounds a non-stream text relay request, including retries,
+// from the upstream request until the response body is fully read. Zero
+// disables the extra deadline.
+var NonStreamTimeout int // unit is second
+
 var RelayIdleConnTimeout int // unit is second
 var RelayMaxIdleConns int
 var RelayMaxIdleConnsPerHost int

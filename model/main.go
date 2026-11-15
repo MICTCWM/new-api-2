@@ -297,6 +297,7 @@ func migrateDB() error {
 		&CommandChannelUsage{},
 		&CommandPoolUsage{},
 		&ChannelRPMUsage{},
+		&ChannelQueueEntry{},
 		&SpeedProtectionState{},
 		&ModelSplitUsage{},
 	)
@@ -371,6 +372,7 @@ func migrateDBFast() error {
 		{&CommandChannelUsage{}, "CommandChannelUsage"},
 		{&CommandPoolUsage{}, "CommandPoolUsage"},
 		{&ChannelRPMUsage{}, "ChannelRPMUsage"},
+		{&ChannelQueueEntry{}, "ChannelQueueEntry"},
 		{&SpeedProtectionState{}, "SpeedProtectionState"},
 		{&ModelSplitUsage{}, "ModelSplitUsage"},
 	}

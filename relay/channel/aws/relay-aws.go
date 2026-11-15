@@ -229,6 +229,9 @@ func getAwsModelID(requestModel string) string {
 func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
 
 	requestContext := c.Request.Context()
+	if info.UpstreamContext != nil {
+		requestContext = info.UpstreamContext
+	}
 	ctx, cancel := newAwsInvokeContext(requestContext)
 	defer cancel()
 
@@ -259,6 +262,9 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 
 func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
 	requestContext := c.Request.Context()
+	if info.UpstreamContext != nil {
+		requestContext = info.UpstreamContext
+	}
 	ctx, cancel := newAwsInvokeContext(requestContext)
 	defer cancel()
 
@@ -317,6 +323,9 @@ streamLoop:
 func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
 
 	requestContext := c.Request.Context()
+	if info.UpstreamContext != nil {
+		requestContext = info.UpstreamContext
+	}
 	ctx, cancel := newAwsInvokeContext(requestContext)
 	defer cancel()
 

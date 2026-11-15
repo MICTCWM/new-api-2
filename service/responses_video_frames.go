@@ -23,12 +23,10 @@ import (
 )
 
 const (
-	responsesVideoFrameLimit = 120
-	responsesVideoHighFPS    = 10
-	responsesVideoLowFPS     = 5
+	responsesVideoFrameLimit = 60
 )
 
-var errResponsesVideoTooLong = errors.New("video is too long: maximum 120 frames at 5 fps")
+var errResponsesVideoTooLong = errors.New("video is too long: maximum 60 frames at one frame every 3 seconds")
 
 // ExpandResponsesVideoFrames replaces Responses input_video parts with JPEG
 // input_image parts. It intentionally runs before protocol conversion so every
@@ -209,21 +207,24 @@ func extractResponsesVideoFrames(c *gin.Context, part map[string]any) ([]any, er
 		return nil, err
 	}
 
-	frames, err := extractResponsesVideoFPS(c, videoPath, workDir, responsesVideoHighFPS)
-	if err != nil {
-		return nil, err
-	}
-	if len(frames) > responsesVideoFrameLimit {
-		if err := removeFrameFiles(workDir); err != nil {
-			return nil, err
+	frameRates := []string{"5", "3", "2", "1", "1/2", "1/3"}
+	var frames []string
+	for attempt, frameRate := range frameRates {
+		if attempt > 0 {
+			if err := removeFrameFiles(workDir); err != nil {
+				return nil, err
+			}
 		}
-		frames, err = extractResponsesVideoFPS(c, videoPath, workDir, responsesVideoLowFPS)
+		frames, err = extractResponsesVideoFPS(c, videoPath, workDir, attempt, frameRate)
 		if err != nil {
 			return nil, err
 		}
-		if len(frames) > responsesVideoFrameLimit {
-			return nil, errResponsesVideoTooLong
+		if len(frames) <= responsesVideoFrameLimit {
+			break
 		}
+	}
+	if len(frames) > responsesVideoFrameLimit {
+		return nil, errResponsesVideoTooLong
 	}
 	if len(frames) == 0 {
 		return nil, errors.New("video contains no decodable frames")
@@ -383,15 +384,15 @@ func responsesVideoMaxBytes() int64 {
 	return maxBytes
 }
 
-func extractResponsesVideoFPS(c *gin.Context, videoPath, workDir string, fps int) ([]string, error) {
-	outputPattern := filepath.Join(workDir, fmt.Sprintf("frame-%02d-%%06d.jpg", fps))
+func extractResponsesVideoFPS(c *gin.Context, videoPath, workDir string, attempt int, fps string) ([]string, error) {
+	outputPattern := filepath.Join(workDir, fmt.Sprintf("frame-%02d-%%06d.jpg", attempt))
 	ctx := context.Background()
 	if c != nil && c.Request != nil {
 		ctx = c.Request.Context()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	filter := fmt.Sprintf("fps=%d,scale=1280:1280:force_original_aspect_ratio=decrease", fps)
+	filter := fmt.Sprintf("fps=%s,scale=1280:1280:force_original_aspect_ratio=decrease", fps)
 	command := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", videoPath, "-vf", filter, "-frames:v", fmt.Sprint(responsesVideoFrameLimit+1), "-q:v", "5", outputPattern)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
@@ -402,7 +403,7 @@ func extractResponsesVideoFPS(c *gin.Context, videoPath, workDir string, fps int
 		}
 		return nil, fmt.Errorf("extract video frames with ffmpeg: %s", message)
 	}
-	files, err := filepath.Glob(filepath.Join(workDir, fmt.Sprintf("frame-%02d-*.jpg", fps)))
+	files, err := filepath.Glob(filepath.Join(workDir, fmt.Sprintf("frame-%02d-*.jpg", attempt)))
 	if err != nil {
 		return nil, fmt.Errorf("list extracted video frames: %w", err)
 	}

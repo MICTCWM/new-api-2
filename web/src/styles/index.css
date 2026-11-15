@@ -718,3 +718,85 @@ For commercial licensing, please contact support@quantumnous.com
     display: none;
   }
 }
+
+/* ── Connection beat meter ── */
+/* Bar heights are written imperatively from the streamed-token deltas; only the
+ * idle sweep and the easing live here so the component stays data-driven. */
+.connection-beat-bar {
+  height: 2px;
+  transition: height 180ms ease-out;
+}
+
+.connection-beat[data-scan='1'] .connection-beat-bar {
+  height: 3px;
+  animation: connection-beat-crawl 1.6s linear infinite;
+  animation-delay: calc(var(--beat-i) * 100ms);
+}
+
+@keyframes connection-beat-crawl {
+  0%,
+  66%,
+  100% {
+    opacity: 0.25;
+  }
+  20% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-beat[data-scan='1'] .connection-beat-bar {
+    animation: none;
+  }
+  .connection-beat-bar {
+    transition: none;
+  }
+}
+
+/* ── Connection drop meter (non-stream) ── */
+/* Highlights fall down a handful of bars, faster than the beat meter scrolls,
+ * so a non-stream wait never reads as an idle stream. */
+.connection-drop-bar {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklch, currentColor 22%, transparent);
+}
+
+.connection-drop-highlight {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: connection-drop-fall var(--drop-dur, 0.55s) linear infinite;
+  animation-delay: var(--drop-delay, 0s);
+}
+
+@keyframes connection-drop-fall {
+  0% {
+    transform: translateY(-5px);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-drop-highlight {
+    animation: none;
+    transform: translateY(2px);
+    opacity: 0.9;
+  }
+}

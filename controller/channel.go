@@ -179,6 +179,17 @@ func GetChannelConcurrencyUsage(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 排队模式下补充等待队列信息：排队数、预计清空时间与队列明细，
+	// 供管理端并发/TPM 仪表盘展示；429 模式不展示队列。
+	if usage != nil && usage.LimitMode == model.ChannelLimitModeQueue &&
+		(usage.ConcurrencyLimit > 0 || usage.TPMLimit > 0) {
+		queuedConcurrency, queuedTPM, etaSeconds, items := service.GetChannelQueueStats(
+			id, usage.ConcurrencyLimit, usage.ConcurrencyCount, usage.TPMResetAt)
+		usage.QueuedConcurrencyCount = queuedConcurrency
+		usage.QueuedTPMCount = queuedTPM
+		usage.QueueETASeconds = etaSeconds
+		usage.QueueItems = items
+	}
 	common.ApiSuccess(c, usage)
 }
 

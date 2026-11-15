@@ -9,6 +9,10 @@ import (
 
 const channelRetryFailuresContextKey = "channel_retry_failures"
 
+// ChannelRetryCountContextKey stores how many same-channel retries the request
+// spent before it succeeded or gave up.
+const ChannelRetryCountContextKey = "channel_retry_count"
+
 // ChannelRetryFailure describes a channel attempt that failed before the
 // request moved to the next channel. It is written under admin_info so the
 // upstream failure details stay out of regular user-facing logs.
@@ -75,6 +79,11 @@ func getChannelRetryFailures(c *gin.Context) []ChannelRetryFailure {
 func AppendChannelRetryAdminInfo(c *gin.Context, adminInfo map[string]interface{}) {
 	if c == nil || adminInfo == nil {
 		return
+	}
+	if count, ok := c.Get(ChannelRetryCountContextKey); ok {
+		if retries, ok := count.(int); ok && retries > 0 {
+			adminInfo["channel_retry_count"] = retries
+		}
 	}
 	failures := getChannelRetryFailures(c)
 	if len(failures) == 0 {

@@ -114,6 +114,20 @@ func IsFallbackChannel(channelID int) bool {
 func InitChannelCache() {
 	initCol()
 	if !common.MemoryCacheEnabled {
+		// The DB-backed selector still uses a short-lived fallback marking set.
+		// Refresh it here as part of the normal channel sync so edits to
+		// fallback_sequence take effect immediately instead of waiting for the
+		// TTL to expire.
+		if DB == nil {
+			common.SysError("failed to refresh fallback channel set: main database is not initialized")
+		} else if set, err := refreshFallbackChannelIDSet(); err != nil {
+			common.SysError(fmt.Sprintf("failed to refresh fallback channel set: %v", err))
+		} else {
+			channelSyncLock.Lock()
+			fallbackSetDB = set
+			fallbackSetLastLoaded = time.Now()
+			channelSyncLock.Unlock()
+		}
 		InvalidatePricingCache()
 		return
 	}

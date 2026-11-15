@@ -69,8 +69,18 @@ type ChannelOtherSettings struct {
 	// ChannelConcurrencyLimit controls this channel's simultaneous request
 	// limit. Zero means unlimited. ChannelRPMLimit is retained as a legacy
 	// alias for settings written by older versions.
-	ChannelConcurrencyLimit               int                   `json:"channel_concurrency_limit,omitempty"`
-	ChannelRPMLimit                       int                   `json:"channel_rpm_limit,omitempty"`
+	ChannelConcurrencyLimit int `json:"channel_concurrency_limit,omitempty"`
+	ChannelRPMLimit         int `json:"channel_rpm_limit,omitempty"`
+	// ChannelRetryTimes retries the same channel on any upstream error before
+	// failing over, waiting 1s, 2s, 3s... between attempts. Zero disables it.
+	ChannelRetryTimes int `json:"channel_retry_times,omitempty"`
+	// ChannelTPMLimit caps the total tokens this channel may push per minute.
+	// Zero means unlimited. ChannelTPMBuffer is headroom subtracted from the
+	// limit before enforcement so bursts end before hitting the upstream cap.
+	ChannelTPMLimit                       int                   `json:"channel_tpm_limit,omitempty"`
+	ChannelTPMBuffer                      *int                  `json:"channel_tpm_buffer,omitempty"`
+	ChannelLimitMode                      string                `json:"channel_limit_mode,omitempty"` // "" / "reject" (429) / "queue"
+	RewriteUpstream429                    bool                  `json:"rewrite_upstream_429,omitempty"`
 	SpeedProtectionEnabled                bool                  `json:"speed_protection_enabled,omitempty"`
 	SpeedProtectionGroups                 []string              `json:"speed_protection_groups,omitempty"`
 	AzureResponsesVersion                 string                `json:"azure_responses_version,omitempty"`

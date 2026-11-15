@@ -261,6 +261,9 @@ func GetSpeedProtectionCandidates(group, modelName string, attempted map[int]str
 		if channel == nil {
 			continue
 		}
+		if IsFallbackChannel(channel.Id) {
+			continue
+		}
 		if _, ok := attempted[channel.Id]; ok {
 			continue
 		}

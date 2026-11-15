@@ -40,6 +40,7 @@ type testResult struct {
 	context             *gin.Context
 	localErr            error
 	newAPIError         *types.NewAPIError
+	sourceStatusCode    int
 	firstResponseMillis int64
 	firstResponseSeen   bool
 }
@@ -468,9 +469,10 @@ func testChannelWithGroup(ctx context.Context, channel *model.Channel, testUserI
 				err,
 			))
 			return testResult{
-				context:     c,
-				localErr:    err,
-				newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
+				context:          c,
+				localErr:         err,
+				newAPIError:      types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
+				sourceStatusCode: httpResp.StatusCode,
 			}
 		}
 	}
@@ -935,6 +937,9 @@ func TestChannel(c *gin.Context) {
 		if result.newAPIError != nil {
 			resp["error_code"] = result.newAPIError.GetErrorCode()
 		}
+		if result.sourceStatusCode > 0 {
+			resp["source_status_code"] = result.sourceStatusCode
+		}
 		c.JSON(http.StatusOK, resp)
 		return
 	}
@@ -943,12 +948,16 @@ func TestChannel(c *gin.Context) {
 	go channel.UpdateResponseTime(milliseconds)
 	consumedTime := float64(milliseconds) / 1000.0
 	if result.newAPIError != nil {
-		c.JSON(http.StatusOK, gin.H{
+		resp := gin.H{
 			"success":    false,
 			"message":    result.newAPIError.Error(),
 			"time":       consumedTime,
 			"error_code": result.newAPIError.GetErrorCode(),
-		})
+		}
+		if result.sourceStatusCode > 0 {
+			resp["source_status_code"] = result.sourceStatusCode
+		}
+		c.JSON(http.StatusOK, resp)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1001,7 +1010,7 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 	}
 
 	if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
 		summary.Disabled++
 	}
 

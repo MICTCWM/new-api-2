@@ -49,6 +49,66 @@ type RetryParam struct {
 	FallbackStarted bool
 	// FirstError 记录主渠道的首个错误，兜底全部失败后返回给用户。
 	FirstError *types.NewAPIError
+	// FallbackFirstErrorCodeProvider 标记 FirstError 来自 OpenCode/Command 渠道。
+	// 兜底耗尽返回该错误时沿用 code-provider 的脱敏规则，避免下游看到上游细节。
+	FallbackFirstErrorCodeProvider bool
+
+	// ── 同渠道重试（Channel Retry）──
+	// channelRetries 记录每个渠道已经用掉的同渠道重试次数；sameChannelRetryCount
+	// 是本请求累计的同渠道重试次数（写日志用）。
+	channelRetries        map[int]int
+	sameChannelRetryCount int
+	// pendingRetryChannel 非空时，下一次循环跳过渠道选择，直接重投该渠道。
+	pendingRetryChannel *model.Channel
+}
+
+// ChannelRetryCount 返回本请求累计的同渠道重试次数。
+func (p *RetryParam) ChannelRetryCount() int {
+	if p == nil {
+		return 0
+	}
+	return p.sameChannelRetryCount
+}
+
+// TryStartChannelRetry 为当前渠道预留下一次重试并返回退避时长。
+// 第 1 次重试等 1s、第 2 次等 2s，依次递增；次数用尽或 limit<=0 时返回 false。
+func (p *RetryParam) TryStartChannelRetry(channel *model.Channel, limit int) (time.Duration, bool) {
+	if p == nil || channel == nil || limit <= 0 {
+		return 0, false
+	}
+	if p.channelRetries == nil {
+		p.channelRetries = make(map[int]int)
+	}
+	used := p.channelRetries[channel.Id]
+	if used >= limit {
+		return 0, false
+	}
+	p.channelRetries[channel.Id] = used + 1
+	p.sameChannelRetryCount++
+	return time.Duration(p.channelRetries[channel.Id]) * time.Second, true
+}
+
+// SetPendingRetryChannel 安排下一次循环直接重投该渠道。
+func (p *RetryParam) SetPendingRetryChannel(channel *model.Channel) {
+	if p == nil {
+		return
+	}
+	p.pendingRetryChannel = channel
+}
+
+// TakePendingRetryChannel 取出待重投的渠道，没有时返回 nil。
+func (p *RetryParam) TakePendingRetryChannel() *model.Channel {
+	if p == nil {
+		return nil
+	}
+	channel := p.pendingRetryChannel
+	p.pendingRetryChannel = nil
+	return channel
+}
+
+// HasPendingRetryChannel 报告是否有等待重投的同渠道。
+func (p *RetryParam) HasPendingRetryChannel() bool {
+	return p != nil && p.pendingRetryChannel != nil
 }
 
 var codeProviderLoadSelectionCursor atomic.Uint64
@@ -351,6 +411,14 @@ func selectAffinityCodeProviderCandidate(param *RetryParam, group string) (*mode
 		}
 		return nil, nil
 	}
+	if model.IsFallbackChannel(channel.Id) {
+		if !ShouldKeepChannelAffinityOnChannelDisabled() {
+			ClearCurrentChannelAffinityCache(param.Ctx)
+		} else {
+			ClearCurrentChannelAffinitySelection(param.Ctx)
+		}
+		return nil, nil
+	}
 	if channel.Status != common.ChannelStatusEnabled ||
 		(channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand) ||
 		!model.IsChannelEnabledForGroupModel(group, param.ModelName, channel.Id) ||
@@ -422,6 +490,14 @@ func selectQueuedAffinityCandidate(param *RetryParam) (*model.Channel, string, e
 			ClearCurrentChannelAffinitySelection(param.Ctx)
 		}
 		return nil, "", err
+	}
+	if model.IsFallbackChannel(channel.Id) {
+		if !ShouldKeepChannelAffinityOnChannelDisabled() {
+			ClearCurrentChannelAffinityCache(param.Ctx)
+		} else {
+			ClearCurrentChannelAffinitySelection(param.Ctx)
+		}
+		return nil, "", nil
 	}
 	if channel.Status != common.ChannelStatusEnabled ||
 		(channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand) {

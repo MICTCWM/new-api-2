@@ -7,6 +7,7 @@
   "At least one mapping is required": "At least one mapping is required",
   "Avg cost": "Avg cost",
   "Below threshold": "Below threshold",
+  "Buffer": "Buffer",
   "Cancels at period end": "Cancels at period end",
   "Click to view Command quota": "Click to view Command quota",
   "Command must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash": "Command must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash",

@@ -234,7 +234,7 @@ func selectAffinityChannel(c *gin.Context, modelName string, usingGroup string) 
 	if service.RequestModelSplitTarget(c) == "" && usingGroup != "auto" {
 		routingModel = service.ResolveGroupMappedModel(usingGroup, modelName)
 	}
-	if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+	if err == nil && preferred != nil && !model.IsFallbackChannel(preferred.Id) && preferred.Status == common.ChannelStatusEnabled &&
 		channelSupportsRequestPath(preferred, c.Request.URL.Path, routingModel) {
 		if preferred.Type == constant.ChannelTypeOpencode || preferred.Type == constant.ChannelTypeCommand {
 			quotaAvailable, quotaErr := model.CodeProviderChannelHasCapacity(preferred, routingModel, time.Now().Unix(), false)
@@ -264,7 +264,7 @@ func selectAffinityChannel(c *gin.Context, modelName string, usingGroup string) 
 	if rateLimitedAffinity {
 		preferred, err = model.CacheGetChannel(preferredChannelID)
 	}
-	if preferred == nil || preferred.Status != common.ChannelStatusEnabled ||
+	if preferred == nil || model.IsFallbackChannel(preferred.Id) || preferred.Status != common.ChannelStatusEnabled ||
 		!channelSupportsRequestPath(preferred, c.Request.URL.Path, routingModel) {
 		if !keepAffinityCache && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
 			service.ClearCurrentChannelAffinityCache(c)

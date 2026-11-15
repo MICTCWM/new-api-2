@@ -1109,6 +1109,20 @@ func (channel *Channel) ValidateSettings() error {
 	if err := ValidateChannelConcurrencyLimit(channelOtherSettings.ChannelConcurrencyLimit); err != nil {
 		return err
 	}
+	if err := ValidateChannelTPMLimit(channelOtherSettings.ChannelTPMLimit); err != nil {
+		return err
+	}
+	if err := ValidateChannelRetryTimes(channelOtherSettings.ChannelRetryTimes); err != nil {
+		return err
+	}
+	if channelOtherSettings.ChannelTPMBuffer != nil {
+		if err := ValidateChannelTPMBuffer(*channelOtherSettings.ChannelTPMBuffer); err != nil {
+			return err
+		}
+	}
+	if err := validateChannelLimitMode(channelOtherSettings.ChannelLimitMode); err != nil {
+		return err
+	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom && channelOtherSettings.UpstreamModelUpdateCheckEnabled {
 		if _, ok := channelOtherSettings.AdvancedCustom.ModelListRoute(); !ok {
 			return fmt.Errorf("advanced custom channels require a %s route when upstream model update checks are enabled", dto.AdvancedCustomModelListPath)

@@ -51,6 +51,10 @@ type connectionRecord struct {
 	// settled marks that upstream usage arrived; it replaces the live estimate.
 	settled    atomic.Bool
 	finishedAt atomic.Int64 // unix ms, 0 while the connection is open
+	// retryCount counts same-channel retries spent on this request; retryWaitUntil
+	// is the unix ms deadline of the current backoff, zero outside a wait.
+	retryCount     atomic.Int64
+	retryWaitUntil atomic.Int64
 }
 
 type ConnectionLogItem struct {
@@ -71,6 +75,10 @@ type ConnectionLogItem struct {
 	OutputTokens *int64 `json:"output_tokens"` // nil until stream text or settled usage exists
 	StreamChunks int64  `json:"stream_chunks"`
 	Active       bool   `json:"active"`
+	RetryCount   int    `json:"retry_count"`
+	// RetryWaitMS is the remaining backoff before the next attempt, zero when
+	// the connection is not waiting to retry.
+	RetryWaitMS int64 `json:"retry_wait_ms"`
 }
 
 type ConnectionLogSnapshot struct {
@@ -91,6 +99,8 @@ type ConnectionLogProgressItem struct {
 	InputTokens  int64  `json:"input_tokens"`
 	OutputTokens *int64 `json:"output_tokens"`
 	Active       bool   `json:"active"`
+	RetryCount   int    `json:"retry_count"`
+	RetryWaitMS  int64  `json:"retry_wait_ms"`
 }
 
 type ConnectionLogProgressSnapshot struct {
@@ -222,6 +232,26 @@ func UpdateConnectionOutputText(requestID, text, model string, extraTokens int) 
 
 // FinishConnection closes the record; it stays visible for the retention window
 // so the panel can still show the completed connection.
+// MarkConnectionRetry records a same-channel retry and the backoff deadline, so
+// the live connection view can show that the request is still alive and waiting.
+func MarkConnectionRetry(requestID string, count int, waitUntilMS int64) {
+	record := lookupConnection(requestID)
+	if record == nil {
+		return
+	}
+	record.retryCount.Store(int64(count))
+	record.retryWaitUntil.Store(waitUntilMS)
+}
+
+// ClearConnectionRetryWait ends the retry backoff for the next attempt.
+func ClearConnectionRetryWait(requestID string) {
+	record := lookupConnection(requestID)
+	if record == nil {
+		return
+	}
+	record.retryWaitUntil.Store(0)
+}
+
 func FinishConnection(requestID string) {
 	record := lookupConnection(requestID)
 	if record == nil {
@@ -258,6 +288,10 @@ func (record *connectionRecord) toItem(nowMS int64) ConnectionLogItem {
 		InputTokens:  record.input.Load(),
 		StreamChunks: record.chunks.Load(),
 		Active:       active,
+		RetryCount:   int(record.retryCount.Load()),
+	}
+	if waitUntil := record.retryWaitUntil.Load(); active && waitUntil > nowMS {
+		item.RetryWaitMS = waitUntil - nowMS
 	}
 	end := nowMS
 	if finished := record.finishedAt.Load(); finished != 0 {
@@ -355,6 +389,41 @@ func GetConnectionLogSnapshot() *ConnectionLogSnapshot {
 	return snapshot
 }
 
+// RecentChannelCompletionDuration averages the durations of recently finished
+// connections on the channel, giving limit queues a wave-based ETA. Zero when
+// nothing finished recently.
+func RecentChannelCompletionDuration(channelID int) time.Duration {
+	if channelID <= 0 {
+		return 0
+	}
+	nowMS := connectionLogNowMS()
+	var count int
+	var totalDurationMS int64
+	connectionLogs.Range(func(_, value any) bool {
+		record, ok := value.(*connectionRecord)
+		if !ok {
+			return true
+		}
+		finished := record.finishedAt.Load()
+		if finished == 0 || int(record.channelID.Load()) != channelID {
+			return true
+		}
+		// Ignore stale records older than the retention window.
+		if nowMS-finished > connectionLogRetention.Milliseconds() {
+			return true
+		}
+		if duration := finished - record.startedAt; duration > 0 {
+			totalDurationMS += duration
+			count++
+		}
+		return true
+	})
+	if count == 0 {
+		return 0
+	}
+	return time.Duration(totalDurationMS/int64(count)) * time.Millisecond
+}
+
 // GetConnectionLogProgressSnapshot returns the small set of fields that change
 // during a request, allowing the UI to refresh live progress separately from the
 // five-second log-list refresh.
@@ -377,6 +446,8 @@ func GetConnectionLogProgressSnapshot() *ConnectionLogProgressSnapshot {
 			InputTokens:  item.InputTokens,
 			OutputTokens: item.OutputTokens,
 			Active:       item.Active,
+			RetryCount:   item.RetryCount,
+			RetryWaitMS:  item.RetryWaitMS,
 		})
 	}
 	return progress

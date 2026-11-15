@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import {
   AlertTriangle,
   Check,
@@ -187,9 +169,7 @@ function QuotaWindowCard(props: {
               {props.title}
             </CardTitle>
             <CardDescription className='mt-1 text-xs'>
-              {hasData
-                ? `${formatCredits(used)} / ${formatCredits(cap)}`
-                : '-'}
+              {hasData ? `${formatCredits(used)} / ${formatCredits(cap)}` : '-'}
             </CardDescription>
           </div>
           <div className='shrink-0 text-right'>
@@ -227,15 +207,15 @@ function QuotaWindowCard(props: {
             <div className='text-muted-foreground text-[11px]'>
               {t('Reset at:')}
             </div>
-            <div className='break-all tabular-nums'>{formatEpochMs(resetAt)}</div>
+            <div className='break-all tabular-nums'>
+              {formatEpochMs(resetAt)}
+            </div>
           </div>
           <div className='min-w-0 sm:text-right'>
             <div className='text-muted-foreground text-[11px]'>
               {props.resetLabel ?? t('Resets in:')}
             </div>
-            <div className='tabular-nums'>
-              {formatTimeLeftMs(resetAt, t)}
-            </div>
+            <div className='tabular-nums'>{formatTimeLeftMs(resetAt, t)}</div>
           </div>
         </div>
       </CardContent>
@@ -625,7 +605,9 @@ export function CommandcodeQuotaDialog({
             <SectionHeading
               title={t('Usage Summary')}
               description={
-                usage.period_basis ? `${t('Period')}: ${usage.period_basis}` : undefined
+                usage.period_basis
+                  ? `${t('Period')}: ${usage.period_basis}`
+                  : undefined
               }
             />
             <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>

@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import { z } from 'zod'
 
 import {
@@ -317,6 +299,11 @@ export const channelFormSchema = z
     system_prompt_override: z.boolean().optional(),
     // Type-specific settings (stored in settings JSON)
     channel_concurrency_limit: z.number().int().min(0).max(10000).optional(),
+    channel_retry_times: z.number().int().min(0).max(5).optional(),
+    channel_tpm_limit: z.number().int().min(0).max(100_000_000).optional(),
+    channel_tpm_buffer: z.number().int().min(0).max(100_000_000).optional(),
+    channel_limit_mode: z.enum(['', 'reject', 'queue']).optional(),
+    rewrite_upstream_429: z.boolean().optional(),
     speed_protection_enabled: z.boolean().optional(),
     speed_protection_groups: z.array(z.string()).optional(),
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
@@ -576,6 +563,11 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   system_prompt_override: false,
   // Type-specific settings
   channel_concurrency_limit: 0,
+  channel_retry_times: 0,
+  channel_tpm_limit: 0,
+  channel_tpm_buffer: 500_000,
+  channel_limit_mode: 'reject',
+  rewrite_upstream_429: false,
   is_enterprise_account: false,
   vertex_key_type: 'json',
   aws_key_type: 'ak_sk',
@@ -651,6 +643,10 @@ export function transformChannelToFormDefaults(
   let isEnterpriseAccount = false
   let awsKeyType: 'ak_sk' | 'api_key' = 'ak_sk'
   let channelConcurrencyLimit = 0
+  let channelTPMLimit = 0
+  let channelTPMBuffer = 500_000
+  let channelLimitMode: 'reject' | 'queue' = 'reject'
+  let rewriteUpstream429 = false
   let allowServiceTier = false
   let disableStore = false
   let allowSafetyIdentifier = false
@@ -667,6 +663,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateIgnoredModels = ''
   let speedProtectionEnabled = false
   let speedProtectionGroups: string[] = []
+  let channelRetryTimes = 0
   let advancedCustom = ''
 
   if (channel.settings) {
@@ -685,6 +682,33 @@ export function transformChannelToFormDefaults(
         parsedConcurrencyLimit <= 10000
           ? parsedConcurrencyLimit
           : 0
+      const parsedRetryTimes = parsed.channel_retry_times
+      channelRetryTimes =
+        typeof parsedRetryTimes === 'number' &&
+        Number.isInteger(parsedRetryTimes) &&
+        parsedRetryTimes >= 0 &&
+        parsedRetryTimes <= 5
+          ? parsedRetryTimes
+          : 0
+      const parsedTPMLimit = parsed.channel_tpm_limit
+      channelTPMLimit =
+        typeof parsedTPMLimit === 'number' &&
+        Number.isInteger(parsedTPMLimit) &&
+        parsedTPMLimit >= 0 &&
+        parsedTPMLimit <= 100_000_000
+          ? parsedTPMLimit
+          : 0
+      const parsedTPMBuffer = parsed.channel_tpm_buffer
+      channelTPMBuffer =
+        typeof parsedTPMBuffer === 'number' &&
+        Number.isInteger(parsedTPMBuffer) &&
+        parsedTPMBuffer >= 0 &&
+        parsedTPMBuffer <= 100_000_000
+          ? parsedTPMBuffer
+          : 500_000
+      channelLimitMode =
+        parsed.channel_limit_mode === 'queue' ? 'queue' : 'reject'
+      rewriteUpstream429 = parsed.rewrite_upstream_429 === true
       allowServiceTier = parsed.allow_service_tier === true
       disableStore = parsed.disable_store === true
       allowSafetyIdentifier = parsed.allow_safety_identifier === true
@@ -760,6 +784,11 @@ export function transformChannelToFormDefaults(
     ...extraSettings,
     // Type-specific settings
     channel_concurrency_limit: channelConcurrencyLimit,
+    channel_retry_times: channelRetryTimes,
+    channel_tpm_limit: channelTPMLimit,
+    channel_tpm_buffer: channelTPMBuffer,
+    channel_limit_mode: channelLimitMode,
+    rewrite_upstream_429: rewriteUpstream429,
     is_enterprise_account: isEnterpriseAccount,
     vertex_key_type: vertexKeyType,
     azure_responses_version: azureResponsesVersion,
@@ -929,12 +958,30 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   if (isFixedCodeChannelType(formData.type)) {
     delete settingsObj.channel_concurrency_limit
     delete settingsObj.channel_rpm_limit
+    delete settingsObj.channel_tpm_limit
+    delete settingsObj.channel_tpm_buffer
+    delete settingsObj.channel_limit_mode
   } else {
     delete settingsObj.channel_rpm_limit
     settingsObj.channel_concurrency_limit = Math.trunc(
       formData.channel_concurrency_limit || 0
     )
+    settingsObj.channel_tpm_limit = Math.trunc(formData.channel_tpm_limit || 0)
+    // The buffer only matters once a TPM limit exists; keep editing it anyway
+    // so it is already in place when a limit is turned on later.
+    settingsObj.channel_tpm_buffer = Math.trunc(
+      formData.channel_tpm_buffer == null
+        ? 500_000
+        : formData.channel_tpm_buffer
+    )
+    settingsObj.channel_limit_mode =
+      formData.channel_limit_mode === 'queue' ? 'queue' : 'reject'
   }
+  settingsObj.channel_retry_times = Math.min(
+    5,
+    Math.max(0, Math.trunc(formData.channel_retry_times || 0))
+  )
+  settingsObj.rewrite_upstream_429 = formData.rewrite_upstream_429 === true
 
   // Upstream model update settings (for model-fetchable channel types)
   if (MODEL_FETCHABLE_TYPES.has(formData.type)) {

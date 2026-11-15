@@ -141,6 +141,9 @@ func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) 
 	if newApiErr == nil {
 		return
 	}
+	if newApiErr.SourceStatusCode == 0 {
+		newApiErr.SourceStatusCode = newApiErr.StatusCode
+	}
 	if statusCodeMappingStr == "" || statusCodeMappingStr == "{}" {
 		return
 	}

@@ -1383,6 +1383,13 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 		if channel == nil {
 			continue
 		}
+		// Channels referenced by any fallback_sequence are reserved for
+		// explicit fallback routing. They must not enter the normal
+		// OpenCode/Command candidate pool, even when they expose the same
+		// group and model as a primary channel.
+		if IsFallbackChannel(channel.Id) {
+			continue
+		}
 		if _, ok := attempted[channel.Id]; ok {
 			continue
 		}
@@ -1454,6 +1461,9 @@ func getCodeProviderCapacitySnapshot(group, modelName string, now int64) (*Openc
 	snapshot := &OpencodeCapacitySnapshot{}
 	for _, channel := range channels {
 		if channel == nil {
+			continue
+		}
+		if IsFallbackChannel(channel.Id) {
 			continue
 		}
 		if group != "" && modelName != "" {
@@ -1586,6 +1596,11 @@ func getOpencodeCandidates(group, modelName string, attempted map[int]struct{}, 
 			continue
 		}
 		if !channelSupportsCodeProviderModel(channel, modelName) {
+			continue
+		}
+		// Fallback-marked channels are reserved for explicit fallback routing,
+		// matching getCodeProviderCandidates.
+		if IsFallbackChannel(channel.Id) {
 			continue
 		}
 		ok, err := OpencodeChannelHasCapacityForModel(channel, modelName, now)

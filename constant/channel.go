@@ -66,6 +66,19 @@ const (
 
 const OpencodeUpstreamExhaustedMessage = "上游错误"
 
+// Per-channel limit 429 messages (English, returned to API callers).
+const (
+	// ChannelConcurrencyLimitMessage is returned when the channel's active
+	// request count reaches the admin-configured concurrency limit.
+	ChannelConcurrencyLimitMessage = "The current total concurrency has reached the regional limit"
+	// ChannelTPMLimitMessage is returned when the channel's one-minute token
+	// throughput reaches the admin-configured TPM limit.
+	ChannelTPMLimitMessage = "The current total TPM has reached the regional limit"
+	// ChannelUpstream429RewriteMessage replaces an upstream 429 body when the
+	// channel enables the overwrite switch.
+	ChannelUpstream429RewriteMessage = "The current request volume has exceeded the region's capacity limit"
+)
+
 // streamSupportedChannelTypes lists channel types whose relay path can
 // measure a streaming first response. Keep this capability in constant so
 // model validation and relay routing use the same source of truth.

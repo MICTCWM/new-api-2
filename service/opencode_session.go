@@ -705,6 +705,9 @@ func SelectOpencodeSessionChannel(c *gin.Context, group, modelName, requestPath 
 	}
 	for _, candidate := range candidates {
 		if candidate != nil {
+			if model.IsFallbackChannel(candidate.Id) {
+				continue
+			}
 			candidateByID[candidate.Id] = candidate
 		}
 	}
@@ -735,7 +738,7 @@ func SelectOpencodeSessionChannel(c *gin.Context, group, modelName, requestPath 
 		var remembered *model.Channel
 		if channel := findOpencodeCandidate(allCandidates, selectedID); channel != nil {
 			remembered = channel
-		} else if channel, channelErr := model.CacheGetChannel(selectedID); channelErr == nil && channel != nil && channel.Status == common.ChannelStatusEnabled && model.IsChannelEnabledForGroupModel(group, modelName, channel.Id) && model.ChannelSupportsRequestPath(channel, requestPath, modelName) {
+		} else if channel, channelErr := model.CacheGetChannel(selectedID); channelErr == nil && channel != nil && !model.IsFallbackChannel(channel.Id) && channel.Status == common.ChannelStatusEnabled && model.IsChannelEnabledForGroupModel(group, modelName, channel.Id) && model.ChannelSupportsRequestPath(channel, requestPath, modelName) {
 			remembered = channel
 		}
 		if remembered != nil {
@@ -756,7 +759,7 @@ func SelectOpencodeSessionChannel(c *gin.Context, group, modelName, requestPath 
 		attemptedOriginal := isOpencodeChannelAttempted(attempted, binding.ChannelID)
 		original := findOpencodeCandidate(allCandidates, binding.ChannelID)
 		if original == nil && !attemptedOriginal {
-			if channel, channelErr := model.CacheGetChannel(binding.ChannelID); channelErr == nil && channel != nil && channel.Status == common.ChannelStatusEnabled && model.IsChannelEnabledForGroupModel(group, modelName, channel.Id) && model.ChannelSupportsRequestPath(channel, requestPath, modelName) {
+			if channel, channelErr := model.CacheGetChannel(binding.ChannelID); channelErr == nil && channel != nil && !model.IsFallbackChannel(channel.Id) && channel.Status == common.ChannelStatusEnabled && model.IsChannelEnabledForGroupModel(group, modelName, channel.Id) && model.ChannelSupportsRequestPath(channel, requestPath, modelName) {
 				quotaAvailable, quotaErr := model.CodeProviderChannelHasCapacity(channel, modelName, time.Now().Unix(), false)
 				if quotaErr != nil {
 					return nil, false, quotaErr
@@ -1004,7 +1007,7 @@ func waitForOpencodeSessionCapacity(param *RetryParam, group string) (*model.Cha
 	}
 	if param.Ctx.GetBool(ginKeyOpencodeSessionWaitDone) {
 		if selectedID := rememberedOpencodeSessionChannelID(param.Ctx); selectedID > 0 && !isOpencodeChannelAttempted(param.AttemptedChannelIDs, selectedID) {
-			if channel, err := model.CacheGetChannel(selectedID); err == nil && channel != nil {
+			if channel, err := model.CacheGetChannel(selectedID); err == nil && channel != nil && !model.IsFallbackChannel(channel.Id) {
 				setOpencodeSessionQueueRequired(param.Ctx, false)
 				return channel, group, nil
 			}

@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import i18next from 'i18next'
@@ -29,6 +11,14 @@ import { UsageLogsProvider } from '../usage-logs-provider'
 vi.mock('../../api', () => ({ getConnectionLogs: vi.fn() }))
 
 const mockGetConnectionLogs = vi.mocked(getConnectionLogs)
+
+/**
+ * Deep copy of the English bundle before a test injects its fixtures.
+ * `getResourceBundle` hands back the live resource object that
+ * `addResourceBundle` mutates in place, so a shallow reference would already
+ * contain the fixture and the restore would just re-install it.
+ */
+let originalTranslationBundle: Record<string, string> | undefined
 
 const BASE_ITEM: ConnectionLogItem = {
   request_id: 'req-a',
@@ -48,6 +38,8 @@ const BASE_ITEM: ConnectionLogItem = {
   output_tokens: null,
   stream_chunks: 0,
   active: true,
+  retry_count: 0,
+  retry_wait_ms: 0,
 }
 
 function snapshot(
@@ -82,29 +74,52 @@ function renderPanel() {
 describe('connection logs panel', () => {
   beforeEach(() => {
     mockGetConnectionLogs.mockReset()
-    i18next.addResourceBundle('en', 'translation', {
-      'Connection Logs': 'Connection Logs',
-      Connecting: 'Connecting',
-      'Connection completed': 'Connection completed',
-      'Waiting for first token': 'Waiting for first token',
-      'Streaming output': 'Streaming output',
-      'Waiting for response': 'Waiting for response',
-      'Active connections': 'Active connections',
-      'Total input tokens': 'Total input tokens',
-      'Input tokens': 'Input tokens',
-      'Output tokens': 'Output tokens',
-      TTFT: 'TTFT',
-      Duration: 'Duration',
-      'No connections right now': 'No connections right now',
-      'Failed to load logs': 'Failed to load logs',
-      Refresh: 'Refresh',
-      'Auto refresh: {{seconds}}s': 'Auto refresh: {{seconds}}s',
-      'Live connections on this node': 'Live connections on this node',
-    })
+    originalTranslationBundle = structuredClone(
+      i18next.getResourceBundle('en', 'translation') ?? {}
+    )
+    i18next.addResourceBundle(
+      'en',
+      'translation',
+      {
+        'Connection Logs': 'Connection Logs',
+        Connecting: 'Connecting',
+        'Connection completed': 'Connection completed',
+        'Waiting for first token': 'Waiting for first token',
+        'Streaming output': 'Streaming output',
+        'Waiting for response': 'Waiting for response',
+        'Active connections': 'Active connections',
+        'Total input tokens': 'Total input tokens',
+        'Input tokens': 'Input tokens',
+        'Output tokens': 'Output tokens',
+        TTFT: 'TTFT',
+        Duration: 'Duration',
+        'No connections right now': 'No connections right now',
+        'Failed to load logs': 'Failed to load logs',
+        Refresh: 'Refresh',
+        'Auto refresh: {{seconds}}s': 'Auto refresh: {{seconds}}s',
+        'Live connections on this node': 'Live connections on this node',
+        'Retry ×{{count}}': 'Retry ×{{count}}',
+        'Retrying in {{seconds}}s': 'Retrying in {{seconds}}s',
+      },
+      true,
+      true
+    )
   })
 
   afterEach(() => {
     vi.useRealTimers()
+    // Drop the injected fixture keys, then re-install the deep copy taken
+    // before the fixture was merged in, so the injected keys do not leak.
+    i18next.removeResourceBundle('en', 'translation')
+    if (originalTranslationBundle) {
+      i18next.addResourceBundle(
+        'en',
+        'translation',
+        originalTranslationBundle,
+        true,
+        true
+      )
+    }
   })
 
   test('shows concurrency and total input tokens from the snapshot', async () => {
@@ -134,10 +149,40 @@ describe('connection logs panel', () => {
       data: snapshot([BASE_ITEM]),
     })
 
-    renderPanel()
+    const { container } = renderPanel()
 
     expect(await screen.findByText('Connecting')).toBeInTheDocument()
     expect(screen.getByText('Waiting for first token')).toBeInTheDocument()
+    expect(
+      container.querySelector('[data-slot="connection-beat-meter"]')
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-slot="connection-drop-meter"]')
+    ).toBeNull()
+  })
+
+  test('uses the falling-bar meter for a non-stream connection', async () => {
+    mockGetConnectionLogs.mockResolvedValue({
+      success: true,
+      data: snapshot([
+        {
+          ...BASE_ITEM,
+          stream: false,
+          state: 'waiting_response',
+          ttft_ms: null,
+        },
+      ]),
+    })
+
+    const { container } = renderPanel()
+
+    expect(await screen.findByText('Connecting')).toBeInTheDocument()
+    expect(
+      container.querySelector('[data-slot="connection-drop-meter"]')
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-slot="connection-beat-meter"]')
+    ).toBeNull()
   })
 
   test('keeps output tokens and TTFT as placeholders until the first token', async () => {
@@ -196,6 +241,56 @@ describe('connection logs panel', () => {
     expect(await screen.findByText('Connection completed')).toBeInTheDocument()
     expect(await screen.findByText('512')).toBeInTheDocument()
     expect(screen.queryByText('--')).not.toBeInTheDocument()
+  })
+
+  test('shows the retry count and countdown while a connection is retried', async () => {
+    mockGetConnectionLogs.mockResolvedValue({
+      success: true,
+      data: snapshot([
+        {
+          ...BASE_ITEM,
+          state: 'streaming',
+          first_token_at: BASE_ITEM.started_at + 900,
+          ttft_ms: 900,
+          retry_count: 2,
+          retry_wait_ms: 1500,
+        },
+      ]),
+    })
+
+    renderPanel()
+
+    expect(await screen.findByText('Retry ×2')).toBeInTheDocument()
+    expect(screen.getByText('Retrying in 2s')).toBeInTheDocument()
+  })
+
+  test('keeps the status cell identical for a finished connection', async () => {
+    mockGetConnectionLogs.mockResolvedValue({
+      success: true,
+      data: snapshot([
+        {
+          ...BASE_ITEM,
+          state: 'completed',
+          finished_at: BASE_ITEM.started_at + 4000,
+          duration_ms: 4000,
+          output_tokens: 512,
+          active: false,
+        },
+      ]),
+    })
+
+    const { container } = renderPanel()
+
+    expect(await screen.findByText('Connection completed')).toBeInTheDocument()
+    // The live meter is replaced by a green check, and the fixed column layout
+    // keeps that swap from resizing the table.
+    expect(
+      container.querySelector('[data-slot="connection-beat-meter"]')
+    ).toBeNull()
+    expect(
+      container.querySelector('[data-slot="connection-done-check"]')
+    ).not.toBeNull()
+    expect(container.querySelector('table')?.className).toContain('table-fixed')
   })
 
   test('shows the final duration for a finished request', async () => {

@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -102,6 +84,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -250,9 +233,7 @@ const formatModelNames = (models: string[]): string =>
  * of id strings, dropping empty entries and deduplicating (first occurrence wins,
  * matching the backend GetFallbackSequenceIDs semantics).
  */
-const parseFallbackSequence = (
-  value: string | undefined
-): string[] => {
+const parseFallbackSequence = (value: string | undefined): string[] => {
   const seen = new Set<string>()
   return String(value || '')
     .split(',')
@@ -819,6 +800,7 @@ export function ChannelMutateDrawer({
   const currentTestModel = form.watch('test_model')
   const currentAutoBan = form.watch('auto_ban')
   const currentFallbackSequence = form.watch('fallback_sequence')
+  const currentChannelRetryTimes = form.watch('channel_retry_times')
   const currentTag = form.watch('tag')
   const currentRemark = form.watch('remark')
   const currentStatusCodeMapping = form.watch('status_code_mapping')
@@ -840,6 +822,7 @@ export function ChannelMutateDrawer({
   const currentSpeedProtectionEnabled = form.watch('speed_protection_enabled')
   const currentSpeedProtectionGroups = form.watch('speed_protection_groups')
   const currentChannelConcurrencyLimit = form.watch('channel_concurrency_limit')
+  const currentChannelTPMLimit = form.watch('channel_tpm_limit')
   const currentProxy = form.watch('proxy')
   const currentHttpProtocol = form.watch('http_protocol')
   const currentHttp2ConnectionShards = form.watch('http2_connection_shards')
@@ -1111,7 +1094,8 @@ export function ChannelMutateDrawer({
     currentWeight ||
     currentTestModel?.trim() ||
     (currentAutoBan ?? 1) !== 1 ||
-    currentFallbackSequence?.trim()
+    currentFallbackSequence?.trim() ||
+    (currentChannelRetryTimes ?? 0) > 0
   )
   const internalNotesConfigured = Boolean(
     currentTag?.trim() || currentRemark?.trim()
@@ -4046,11 +4030,12 @@ export function ChannelMutateDrawer({
                                                     disabled={index === 0}
                                                     aria-label={t('Move up')}
                                                     onClick={() => {
-                                                      const next = reorderFallback(
-                                                        field.value,
-                                                        index,
-                                                        -1
-                                                      )
+                                                      const next =
+                                                        reorderFallback(
+                                                          field.value,
+                                                          index,
+                                                          -1
+                                                        )
                                                       if (next !== undefined) {
                                                         field.onChange(next)
                                                       }
@@ -4068,11 +4053,12 @@ export function ChannelMutateDrawer({
                                                     }
                                                     aria-label={t('Move down')}
                                                     onClick={() => {
-                                                      const next = reorderFallback(
-                                                        field.value,
-                                                        index,
-                                                        1
-                                                      )
+                                                      const next =
+                                                        reorderFallback(
+                                                          field.value,
+                                                          index,
+                                                          1
+                                                        )
                                                       if (next !== undefined) {
                                                         field.onChange(next)
                                                       }
@@ -4086,10 +4072,11 @@ export function ChannelMutateDrawer({
                                                     size='icon-xs'
                                                     aria-label={t('Remove')}
                                                     onClick={() => {
-                                                      const next = removeFallback(
-                                                        field.value,
-                                                        id
-                                                      )
+                                                      const next =
+                                                        removeFallback(
+                                                          field.value,
+                                                          id
+                                                        )
                                                       field.onChange(next)
                                                     }}
                                                   >
@@ -4106,6 +4093,47 @@ export function ChannelMutateDrawer({
                                 }}
                               />
                             </div>
+
+                            <FormField
+                              control={form.control}
+                              name='channel_retry_times'
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('Channel Retry')}</FormLabel>
+                                  <FormControl>
+                                    <div className='flex items-center gap-3'>
+                                      <Slider
+                                        className='flex-1'
+                                        min={0}
+                                        max={5}
+                                        step={1}
+                                        value={[field.value ?? 0]}
+                                        onValueChange={(nextValue) => {
+                                          const firstValue = Array.isArray(
+                                            nextValue
+                                          )
+                                            ? nextValue[0]
+                                            : nextValue
+                                          field.onChange(firstValue)
+                                        }}
+                                      />
+                                      <span className='text-muted-foreground w-14 shrink-0 text-right text-xs tabular-nums'>
+                                        {(field.value ?? 0) > 0
+                                          ? t('{{count}} time(s)', {
+                                              count: field.value,
+                                            })
+                                          : t('Off')}
+                                      </span>
+                                    </div>
+                                  </FormControl>
+                                  <FormDescription>
+                                    {t(
+                                      'Retries a failed request on the same channel, waiting 1s, 2s, 3s... between attempts.'
+                                    )}
+                                  </FormDescription>
+                                </FormItem>
+                              )}
+                            />
                           </div>
 
                           <div
@@ -4442,89 +4470,308 @@ export function ChannelMutateDrawer({
                           >
                             <div className='divide-border space-y-0 divide-y border-y'>
                               {!isFixedCodeChannelType(currentType) && (
-                                <FormField
-                                  control={form.control}
-                                  name='channel_concurrency_limit'
-                                  render={({ field }) => {
-                                    const isCustom = (field.value || 0) > 0
-                                    return (
-                                      <FormItem className='space-y-3 px-4 py-3'>
-                                        <div className='space-y-1'>
-                                          <FormLabel>
-                                            {t('Channel concurrency limit')}
-                                          </FormLabel>
-                                          <FormDescription>
-                                            {t(
-                                              'Use a separate simultaneous request limit for this channel.'
-                                            )}
-                                          </FormDescription>
-                                        </div>
-                                        <Select
-                                          value={
-                                            isCustom ? 'custom' : 'unlimited'
-                                          }
-                                          onValueChange={(value) => {
-                                            field.onChange(
-                                              value === 'custom'
-                                                ? Math.max(1, field.value || 1)
-                                                : 0
-                                            )
-                                          }}
-                                        >
-                                          <FormControl>
-                                            <SelectTrigger>
-                                              <SelectValue />
-                                            </SelectTrigger>
-                                          </FormControl>
-                                          <SelectContent
-                                            alignItemWithTrigger={false}
-                                          >
-                                            <SelectGroup>
-                                              <SelectItem value='unlimited'>
-                                                {t('Unlimited')}
-                                              </SelectItem>
-                                              <SelectItem value='custom'>
-                                                {t('Custom')}
-                                              </SelectItem>
-                                            </SelectGroup>
-                                          </SelectContent>
-                                        </Select>
-                                        {isCustom && (
+                                <>
+                                  <FormField
+                                    control={form.control}
+                                    name='channel_concurrency_limit'
+                                    render={({ field }) => {
+                                      const isCustom = (field.value || 0) > 0
+                                      return (
+                                        <FormItem className='space-y-3 px-4 py-3'>
                                           <div className='space-y-1'>
-                                            <FormLabel className='text-xs'>
-                                              {t('Concurrent requests')}
+                                            <FormLabel>
+                                              {t('Channel concurrency limit')}
                                             </FormLabel>
-                                            <FormControl>
-                                              <Input
-                                                type='number'
-                                                min={1}
-                                                max={10000}
-                                                step={1}
-                                                value={field.value || 1}
-                                                onChange={(event) => {
-                                                  const value = Number(
-                                                    event.target.value
-                                                  )
-                                                  field.onChange(
-                                                    Number.isInteger(value) &&
-                                                      value >= 1
-                                                      ? Math.min(value, 10000)
-                                                      : 1
-                                                  )
-                                                }}
-                                              />
-                                            </FormControl>
+                                            <FormDescription>
+                                              {t(
+                                                'Use a separate simultaneous request limit for this channel.'
+                                              )}
+                                            </FormDescription>
                                           </div>
-                                        )}
-                                        <FormDescription>
-                                          {t('0 means unlimited')}
-                                        </FormDescription>
-                                        <FormMessage />
-                                      </FormItem>
-                                    )
-                                  }}
-                                />
+                                          <Select
+                                            value={
+                                              isCustom ? 'custom' : 'unlimited'
+                                            }
+                                            onValueChange={(value) => {
+                                              field.onChange(
+                                                value === 'custom'
+                                                  ? Math.max(
+                                                      1,
+                                                      field.value || 1
+                                                    )
+                                                  : 0
+                                              )
+                                            }}
+                                          >
+                                            <FormControl>
+                                              <SelectTrigger>
+                                                <SelectValue />
+                                              </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent
+                                              alignItemWithTrigger={false}
+                                            >
+                                              <SelectGroup>
+                                                <SelectItem value='unlimited'>
+                                                  {t('Unlimited')}
+                                                </SelectItem>
+                                                <SelectItem value='custom'>
+                                                  {t('Custom')}
+                                                </SelectItem>
+                                              </SelectGroup>
+                                            </SelectContent>
+                                          </Select>
+                                          {isCustom && (
+                                            <div className='space-y-1'>
+                                              <FormLabel className='text-xs'>
+                                                {t('Concurrent requests')}
+                                              </FormLabel>
+                                              <FormControl>
+                                                <Input
+                                                  type='number'
+                                                  min={1}
+                                                  max={10000}
+                                                  step={1}
+                                                  value={field.value || 1}
+                                                  onChange={(event) => {
+                                                    const value = Number(
+                                                      event.target.value
+                                                    )
+                                                    field.onChange(
+                                                      Number.isInteger(value) &&
+                                                        value >= 1
+                                                        ? Math.min(value, 10000)
+                                                        : 1
+                                                    )
+                                                  }}
+                                                />
+                                              </FormControl>
+                                            </div>
+                                          )}
+                                          <FormDescription>
+                                            {t('0 means unlimited')}
+                                          </FormDescription>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )
+                                    }}
+                                  />
+
+                                  <FormField
+                                    control={form.control}
+                                    name='channel_tpm_limit'
+                                    render={({ field }) => {
+                                      const isCustom = (field.value || 0) > 0
+                                      return (
+                                        <FormItem className='space-y-3 px-4 py-3'>
+                                          <div className='space-y-1'>
+                                            <FormLabel>
+                                              {t('Channel TPM limit')}
+                                            </FormLabel>
+                                            <FormDescription>
+                                              {t(
+                                                'Caps the total tokens this channel may process per minute. The buffer is subtracted before enforcement so long streams settle before the upstream cap.'
+                                              )}
+                                            </FormDescription>
+                                          </div>
+                                          <Select
+                                            value={
+                                              isCustom ? 'custom' : 'unlimited'
+                                            }
+                                            onValueChange={(value) => {
+                                              field.onChange(
+                                                value === 'custom'
+                                                  ? Math.max(
+                                                      1,
+                                                      field.value || 1_000_000
+                                                    )
+                                                  : 0
+                                              )
+                                            }}
+                                          >
+                                            <FormControl>
+                                              <SelectTrigger>
+                                                <SelectValue />
+                                              </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent
+                                              alignItemWithTrigger={false}
+                                            >
+                                              <SelectGroup>
+                                                <SelectItem value='unlimited'>
+                                                  {t('Unlimited')}
+                                                </SelectItem>
+                                                <SelectItem value='custom'>
+                                                  {t('Custom')}
+                                                </SelectItem>
+                                              </SelectGroup>
+                                            </SelectContent>
+                                          </Select>
+                                          {isCustom && (
+                                            <div className='space-y-3'>
+                                              <div className='space-y-1'>
+                                                <FormLabel className='text-xs'>
+                                                  {t(
+                                                    'Total tokens per minute (TPM)'
+                                                  )}
+                                                </FormLabel>
+                                                <FormControl>
+                                                  <Input
+                                                    type='number'
+                                                    min={1}
+                                                    max={100000000}
+                                                    step={1}
+                                                    value={field.value || 1}
+                                                    onChange={(event) => {
+                                                      const value = Number(
+                                                        event.target.value
+                                                      )
+                                                      field.onChange(
+                                                        Number.isInteger(
+                                                          value
+                                                        ) && value >= 1
+                                                          ? Math.min(
+                                                              value,
+                                                              100000000
+                                                            )
+                                                          : 1
+                                                      )
+                                                    }}
+                                                  />
+                                                </FormControl>
+                                              </div>
+                                              <FormField
+                                                control={form.control}
+                                                name='channel_tpm_buffer'
+                                                render={({
+                                                  field: bufferField,
+                                                }) => (
+                                                  <FormItem className='space-y-1'>
+                                                    <FormLabel className='text-xs'>
+                                                      {t('TPM buffer')}
+                                                    </FormLabel>
+                                                    <FormDescription className='text-xs'>
+                                                      {t(
+                                                        'Headroom subtracted from the TPM cap before enforcement so bursts end before hitting the upstream cap.'
+                                                      )}
+                                                    </FormDescription>
+                                                    <FormControl>
+                                                      <Input
+                                                        type='number'
+                                                        min={0}
+                                                        max={100000000}
+                                                        step={1}
+                                                        value={
+                                                          bufferField.value ==
+                                                          null
+                                                            ? 500000
+                                                            : bufferField.value
+                                                        }
+                                                        onChange={(event) => {
+                                                          const value = Number(
+                                                            event.target.value
+                                                          )
+                                                          bufferField.onChange(
+                                                            Number.isInteger(
+                                                              value
+                                                            ) && value >= 0
+                                                              ? Math.min(
+                                                                  value,
+                                                                  100000000
+                                                                )
+                                                              : 0
+                                                          )
+                                                        }}
+                                                      />
+                                                    </FormControl>
+                                                    <FormMessage />
+                                                  </FormItem>
+                                                )}
+                                              />
+                                            </div>
+                                          )}
+                                          <FormDescription>
+                                            {t('0 means unlimited')}
+                                          </FormDescription>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )
+                                    }}
+                                  />
+                                  {(currentChannelTPMLimit ?? 0) > 0 ||
+                                  (currentChannelConcurrencyLimit ?? 0) > 0 ? (
+                                    <FormField
+                                      control={form.control}
+                                      name='channel_limit_mode'
+                                      render={({ field }) => (
+                                        <FormItem className='space-y-3 px-4 py-3'>
+                                          <div className='space-y-1'>
+                                            <FormLabel>
+                                              {t('Exceeded limit mode')}
+                                            </FormLabel>
+                                            <FormDescription>
+                                              {t(
+                                                '429 mode rejects immediately with a 429 error. Queue mode holds the request and starts it once the remaining TPM covers the request input.'
+                                              )}
+                                            </FormDescription>
+                                          </div>
+                                          <Select
+                                            value={
+                                              field.value === 'queue'
+                                                ? 'queue'
+                                                : 'reject'
+                                            }
+                                            onValueChange={field.onChange}
+                                          >
+                                            <FormControl>
+                                              <SelectTrigger>
+                                                <SelectValue />
+                                              </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent
+                                              alignItemWithTrigger={false}
+                                            >
+                                              <SelectGroup>
+                                                <SelectItem value='reject'>
+                                                  {t('429 mode')}
+                                                </SelectItem>
+                                                <SelectItem value='queue'>
+                                                  {t('Queue mode')}
+                                                </SelectItem>
+                                              </SelectGroup>
+                                            </SelectContent>
+                                          </Select>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )}
+                                    />
+                                  ) : null}
+                                </>
                               )}
+                              <FormField
+                                control={form.control}
+                                name='rewrite_upstream_429'
+                                render={({ field }) => (
+                                  <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>
+                                        {t('Rewrite upstream 429')}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'When the upstream returns 429, respond with the 429 status and the gateway capacity message.'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value === true}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
                               <FormField
                                 control={form.control}
                                 name='speed_protection_enabled'

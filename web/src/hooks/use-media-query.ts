@@ -1,22 +1,4 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
-import { useSyncExternalStore } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 
 /**
  * React hook for responsive media queries
@@ -24,8 +6,9 @@ import { useSyncExternalStore } from 'react'
  * @returns boolean indicating if the query matches
  */
 export function useMediaQuery(query: string): boolean {
-  return useSyncExternalStore(
-    (onStoreChange) => {
+  // Stable per query: a parent re-rendering must not re-subscribe the listener.
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
       // Return early if window is not available (SSR)
       if (typeof window === 'undefined') {
         return () => {}
@@ -35,6 +18,11 @@ export function useMediaQuery(query: string): boolean {
       media.addEventListener('change', onStoreChange)
       return () => media.removeEventListener('change', onStoreChange)
     },
+    [query]
+  )
+
+  return useSyncExternalStore(
+    subscribe,
     () => {
       // Client-side: return the current match state
       if (typeof window !== 'undefined') {

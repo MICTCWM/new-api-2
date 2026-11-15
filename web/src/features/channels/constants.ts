@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 // ============================================================================
 // Channel Types (from constant/channel.go)
 // All label/name values are i18n keys; use t(value) when displaying.
@@ -29,8 +11,29 @@ export const CHANNEL_TYPE_COMMAND = 62
 // source of truth, while this set keeps unsupported channel types from showing
 // an unusable speed-protection control in the editor.
 export const SPEED_PROTECTION_SUPPORTED_CHANNEL_TYPES = new Set([
-  1, 3, 4, 14, 17, 23, 24, 25, 26, 33, 35, 39, 40, 43, 45, 46, 48, 53,
-  57, 58, 59, CHANNEL_TYPE_NEW_API, CHANNEL_TYPE_OPENCODE,
+  1,
+  3,
+  4,
+  14,
+  17,
+  23,
+  24,
+  25,
+  26,
+  33,
+  35,
+  39,
+  40,
+  43,
+  45,
+  46,
+  48,
+  53,
+  57,
+  58,
+  59,
+  CHANNEL_TYPE_NEW_API,
+  CHANNEL_TYPE_OPENCODE,
   CHANNEL_TYPE_COMMAND,
 ])
 

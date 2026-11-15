@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -58,6 +59,39 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIErro
 	return err
 }
 
+func shouldApplyNonStreamTimeout(format types.RelayFormat, info *relaycommon.RelayInfo) bool {
+	if info == nil || info.IsStream || common.NonStreamTimeout <= 0 {
+		return false
+	}
+	if info.RelayMode == relayconstant.RelayModeEmbeddings {
+		return false
+	}
+	switch format {
+	case types.RelayFormatOpenAI, types.RelayFormatClaude, types.RelayFormatGemini,
+		types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction:
+		return true
+	default:
+		return false
+	}
+}
+
+// applyNonStreamTimeoutError 把超时定时器到点引发的错误统一改写为 504，
+// 无论超时发生在等响应头还是读 body 阶段。
+func applyNonStreamTimeoutError(info *relaycommon.RelayInfo, err *types.NewAPIError) *types.NewAPIError {
+	if err == nil || info == nil || info.UpstreamContext == nil {
+		return err
+	}
+	if !errors.Is(info.UpstreamContext.Err(), context.DeadlineExceeded) {
+		return err
+	}
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("upstream non-stream response timed out after %d seconds", common.NonStreamTimeout),
+		types.ErrorCodeDoRequestFailed,
+		http.StatusGatewayTimeout,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
 func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
 	var err *types.NewAPIError
 	if strings.Contains(c.Request.URL.Path, "embed") {
@@ -77,6 +111,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	var (
 		newAPIError *types.NewAPIError
 		ws          *websocket.Conn
+		relayInfo   *relaycommon.RelayInfo
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -91,12 +126,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
+			if newAPIError.RewriteUpstream429 {
+				newAPIError.StatusCode = http.StatusTooManyRequests
+			}
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			// 最终返回给下游的错误必须落使用日志，不依赖 ERROR_LOG_ENABLED。
-			recordFinalRelayErrorLog(c, newAPIError)
+			recordFinalRelayErrorLog(c, newAPIError, relayInfo)
 			if newAPIError.Error() == constant.OpencodeUpstreamExhaustedMessage {
 				// Keep the public exhaustion message exact; request IDs remain in logs.
 				newAPIError.SetMessage(constant.OpencodeUpstreamExhaustedMessage)
+			} else if newAPIError.RewriteUpstream429 {
+				// Keep the upstream 429 status and replace its body with the
+				// selected channel's configured public message.
+				newAPIError.SetMessage(constant.ChannelUpstream429RewriteMessage)
 			} else {
 				newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			}
@@ -128,10 +170,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
+	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
+	}
+
+	if shouldApplyNonStreamTimeout(relayFormat, relayInfo) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(common.NonStreamTimeout)*time.Second)
+		defer cancel()
+		relayInfo.UpstreamContext = ctx
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
@@ -160,6 +208,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	relayInfo.SetEstimatePromptTokens(tokens)
+	var channelCapacityMeta *types.TokenCountMeta
 	// 连接日志：请求一进入就登记并发数与输入 token，结束时只关闭连接、不删除记录。
 	service.RegisterConnection(relayInfo, c.GetString("username"), tokens)
 	defer service.FinishConnection(relayInfo.RequestId)
@@ -217,23 +266,33 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		maxAttempts = 4
 	}
 	// 兜底模式下即使超出 maxAttempts 也必须继续，直到兜底序列全部尝试完毕或耗尽。
-	for attempt := 0; attempt < maxAttempts || retryParam.InFallback; attempt++ {
-		if attempt > 0 {
+	// 同渠道重试不消耗跨渠道预算，所以有待重投渠道时也继续循环。
+	for attempt := 0; attempt < maxAttempts || retryParam.InFallback || retryParam.HasPendingRetryChannel(); attempt++ {
+		pendingRetryChannel := retryParam.TakePendingRetryChannel()
+		if pendingRetryChannel == nil && attempt > 0 {
 			retryParam.IncreaseRetry()
 		}
-		if retryParam.OpencodePool && opencodeAttempts >= 4 {
+		// 兜底模式优先于 code-provider 的 4 次上限：兜底链未走完前不能提前截断。
+		if retryParam.OpencodePool && !retryParam.InFallback && opencodeAttempts >= 4 {
 			// 耗尽仍掩盖为「上游错误」，但 400 保留真实原因（如 context length）。
 			newAPIError = maskOpencodeExhaustedError(relayInfo.LastError)
 			break
 		}
 		relayInfo.RetryIndex = retryParam.GetRetry()
-		channel, channelErr := getChannel(c, relayInfo, retryParam)
+		channel := pendingRetryChannel
+		var channelErr *types.NewAPIError
+		if channel == nil {
+			channel, channelErr = getChannel(c, relayInfo, retryParam)
+		}
 
 		if channelErr != nil {
 			// 兜底序列全部失败：返回主渠道的首个错误，不再参与全局随机重试。
 			if retryParam.InFallback && !retryParam.HasNextFallback() {
 				if retryParam.FirstError != nil {
 					newAPIError = retryParam.FirstError
+					if retryParam.FallbackFirstErrorCodeProvider {
+						newAPIError = maskOpencodeExhaustedError(newAPIError)
+					}
 				} else {
 					newAPIError = channelErr
 				}
@@ -250,6 +309,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		concurrencyReserved := false
 		channelConcurrencyReserved := false
+		channelConcurrencySlotReserved := false
+		channelCapacityReservedTokens := 0
+		relayInfo.ChannelTPMReservedTokens = 0
 		if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand {
 			retryParam.OpencodePool = true
 			if retryParam.AttemptedChannelIDs == nil {
@@ -291,17 +353,73 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				retryParam.AttemptedChannelIDs = make(map[int]struct{})
 			}
 			retryParam.AttemptedChannelIDs[channel.Id] = struct{}{}
-			allowed, concurrencyErr := model.ReserveChannelConcurrency(channel, common.GetTimestamp())
-			if concurrencyErr != nil {
-				newAPIError = types.NewError(concurrencyErr, types.ErrorCodeDoRequestFailed)
-				break
+			capacityTokens := tokens
+			if model.GetChannelTPMLimit(channel) > 0 && !constant.CountToken {
+				if channelCapacityMeta == nil {
+					channelCapacityMeta = request.GetTokenCountMeta()
+				}
+				capacityTokens, err = service.EstimateChannelCapacityTokens(c, channelCapacityMeta, relayInfo)
+				if err != nil {
+					newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
+					break
+				}
+			}
+			if model.GetChannelTPMLimit(channel) > 0 && capacityTokens > model.GetChannelEffectiveTPMLimit(channel) {
+				// This request can never fit within the channel's effective TPM
+				// window, so queueing it would leave it waiting indefinitely.
+				newAPIError = channelLimitRejectError("tpm")
+				continue
+			}
+			// New requests do not bypass an existing queue. When there are no
+			// waiters, try to reserve immediately before registering a new wait.
+			queueMode := model.GetChannelLimitMode(channel) == model.ChannelLimitModeQueue
+			allowed := false
+			reason := ""
+			if queueMode && service.HasChannelQueue(channel.Id) {
+				reason = "concurrency"
+			} else {
+				var capacityErr error
+				allowed, reason, capacityErr = model.ReserveChannelCapacity(channel, common.GetTimestamp(), int64(capacityTokens))
+				if capacityErr != nil {
+					newAPIError = types.NewError(capacityErr, types.ErrorCodeDoRequestFailed)
+					break
+				}
+			}
+			if !allowed && queueMode {
+				if model.GetChannelTPMLimit(channel) == 0 && !constant.CountToken {
+					if channelCapacityMeta == nil {
+						channelCapacityMeta = request.GetTokenCountMeta()
+					}
+					capacityTokens, err = service.EstimateChannelCapacityTokens(c, channelCapacityMeta, relayInfo)
+					if err != nil {
+						newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
+						break
+					}
+				}
+				// 排队模式：登记到本渠道队列并等待容量释放，期间不换渠道。
+				queued, waitErr := waitChannelCapacity(c, relayInfo, channel, capacityTokens, reason)
+				if waitErr != nil {
+					if concurrencyReserved {
+						releaseOpencodeConcurrency(c, channel.Type, channel.Id)
+						concurrencyReserved = false
+					}
+					newAPIError = waitErr
+					break
+				}
+				allowed = queued
 			}
 			if !allowed {
-				newAPIError = types.NewErrorWithStatusCode(errors.New("channel concurrency limit exceeded"), types.ErrorCodeDoRequestFailed, http.StatusTooManyRequests)
+				// 429 模式（默认）：超限直接返回，交给重试链换渠道。
+				newAPIError = channelLimitRejectError(reason)
 				if service.GetCurrentChannelAffinitySelection(c) == channel.Id {
 					service.ClearCurrentChannelAffinitySelection(c)
 				}
 				continue
+			}
+			channelConcurrencySlotReserved = model.GetChannelConcurrencyLimit(channel) > 0
+			if model.GetChannelTPMLimit(channel) > 0 {
+				channelCapacityReservedTokens = capacityTokens
+				relayInfo.ChannelTPMReservedTokens = int64(capacityTokens)
 			}
 			channelConcurrencyReserved = true
 		}
@@ -312,8 +430,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				releaseOpencodeConcurrency(c, channel.Type, channel.Id)
 			}
 			if channelConcurrencyReserved {
-				releaseChannelConcurrency(c, channel)
+				releaseChannelCapacity(c, channel, channelCapacityReservedTokens, channelConcurrencySlotReserved)
 			}
+			relayInfo.ChannelTPMReservedTokens = 0
 			newAPIError = billingErr
 			break
 		}
@@ -330,8 +449,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				releaseOpencodeConcurrency(c, channel.Type, channel.Id)
 			}
 			if channelConcurrencyReserved {
-				releaseChannelConcurrency(c, channel)
+				releaseChannelCapacity(c, channel, channelCapacityReservedTokens, channelConcurrencySlotReserved)
 			}
+			relayInfo.ChannelTPMReservedTokens = 0
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
@@ -352,13 +472,27 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 
+		if newAPIError != nil {
+			newAPIError = applyNonStreamTimeoutError(relayInfo, newAPIError)
+		}
+
 		if concurrencyReserved {
 			releaseOpencodeConcurrency(c, channel.Type, channel.Id)
 			concurrencyReserved = false
 		}
 		if channelConcurrencyReserved {
-			releaseChannelConcurrency(c, channel)
+			releaseChannelConcurrency(c, channel, channelConcurrencySlotReserved)
 			channelConcurrencyReserved = false
+		}
+		if newAPIError != nil &&
+			upstreamStatusCode(newAPIError) == http.StatusTooManyRequests &&
+			newAPIError.GetErrorCode() != types.ErrorCodeChannelRateLimited &&
+			channelCapacityReservedTokens > 0 {
+			if err := model.RollbackChannelTPMTokens(channel, int64(channelCapacityReservedTokens)); err != nil {
+				logger.LogError(c, fmt.Sprintf("failed to rollback channel TPM tokens for channel %d after upstream 429: %s", channel.Id, err.Error()))
+			}
+			relayInfo.ChannelTPMReservedTokens = 0
+			service.NotifyChannelLimitQueues()
 		}
 
 		if newAPIError == nil {
@@ -367,9 +501,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
+		if newAPIError != nil &&
+			upstreamStatusCode(newAPIError) == http.StatusTooManyRequests &&
+			newAPIError.GetErrorCode() != types.ErrorCodeChannelRateLimited &&
+			model.ShouldRewriteUpstream429(channel) {
+			newAPIError.RewriteUpstream429 = true
+			newAPIError.StatusCode = http.StatusTooManyRequests
+		}
 		relayInfo.LastError = newAPIError
 
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
 		isCodeProviderChannel := channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand
 		if retryParam.OpencodePool && service.GetCurrentChannelAffinitySelection(c) == channel.Id {
 			// A failed code-provider affinity must not be reused on the next
@@ -385,15 +526,38 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			service.InvalidateOpencodeSessionBinding(c, relayInfo)
 		}
 
+		// ── 同渠道自动重试（Channel Retry）──
+		// 渠道配置了重试次数时，任意上游错误都先在原渠道按 1s、2s、3s… 退避重试；
+		// 重试不消耗跨渠道重试预算，也不会在 use_channel 里重复记录同一渠道。
+		if !retryParam.InFallback && !isCodeProviderChannel &&
+			!types.IsSkipRetryError(newAPIError) &&
+			(c.Request == nil || c.Request.Context().Err() == nil) {
+			if delay, ok := retryParam.TryStartChannelRetry(channel, model.GetChannelRetryTimes(channel)); ok {
+				// Publish the count before the wait: a successful retry returns
+				// early and the log is written from this context value.
+				c.Set(service.ChannelRetryCountContextKey, retryParam.ChannelRetryCount())
+				service.MarkConnectionRetry(relayInfo.RequestId, retryParam.ChannelRetryCount(), time.Now().Add(delay).UnixMilli())
+				if !waitChannelRetryDelay(c, delay) {
+					break
+				}
+				service.ClearConnectionRetryWait(relayInfo.RequestId)
+				retryParam.SetPendingRetryChannel(channel)
+				// 同渠道重投不占用 attempt 预算：抵消本次循环自增。
+				attempt--
+				continue
+			}
+		}
+
 		// ── 兜底序列（Fallback Sequence）失败路由 ──
-		// 仅当尚未启动兜底、且当前失败渠道非 Opencode/Command（不干扰 code-provider 流程）
-		// 并配置了兜底序列时，记录主渠道首个错误并启动兜底。FallbackStarted 启动后即置位，
-		// 兜底渠道自身失败不会再递归触发其自身兜底序列（防无限套娃）。
-		if !retryParam.FallbackStarted && !isCodeProviderChannel {
+		// 当尚未启动兜底且当前失败渠道配置了兜底序列时，记录主渠道首个错误并启动兜底。
+		// Opencode/Command 与普通渠道一致：兜底被标记后已退出常规候选池，只有这里能进入兜底链。
+		// FallbackStarted 启动后即置位，兜底渠道自身失败不会再递归触发其自身兜底序列（防无限套娃）。
+		if !retryParam.FallbackStarted {
 			fallbackIDs := channel.GetFallbackSequenceIDs()
 			if len(fallbackIDs) > 0 {
 				if retryParam.FirstError == nil {
 					retryParam.FirstError = newAPIError
+					retryParam.FallbackFirstErrorCodeProvider = isCodeProviderChannel
 				}
 				retryParam.StartFallback(fallbackIDs)
 			}
@@ -452,13 +616,27 @@ func releaseOpencodeConcurrency(c *gin.Context, channelType, channelID int) {
 	service.NotifyOpencodeQueue()
 }
 
-func releaseChannelConcurrency(c *gin.Context, channel *model.Channel) {
+func releaseChannelConcurrency(c *gin.Context, channel *model.Channel, concurrencySlotReserved bool) {
 	if channel == nil {
 		return
 	}
-	if err := model.ReleaseChannelConcurrency(channel); err != nil {
-		logger.LogError(c, fmt.Sprintf("failed to release channel concurrency for channel %d: %s", channel.Id, err.Error()))
+	if concurrencySlotReserved {
+		if err := model.ReleaseChannelConcurrency(channel); err != nil {
+			logger.LogError(c, fmt.Sprintf("failed to release channel concurrency for channel %d: %s", channel.Id, err.Error()))
+		}
 	}
+	// A freed slot (and any settled TPM budget) can unblock queued requests.
+	service.NotifyChannelLimitQueues()
+}
+
+func upstreamStatusCode(apiError *types.NewAPIError) int {
+	if apiError == nil {
+		return 0
+	}
+	if apiError.SourceStatusCode != 0 {
+		return apiError.SourceStatusCode
+	}
+	return apiError.StatusCode
 }
 
 func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
@@ -607,6 +785,22 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	return channel, nil
 }
 
+// waitChannelRetryDelay 等待同渠道重试的退避时间，客户端提前断开时返回 false。
+func waitChannelRetryDelay(c *gin.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	if c == nil || c.Request == nil {
+		<-timer.C
+		return true
+	}
+	select {
+	case <-timer.C:
+		return true
+	case <-c.Request.Context().Done():
+		return false
+	}
+}
+
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
 	if openaiErr == nil {
 		return false
@@ -660,9 +854,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 }
 
 // maskOpencodeExhaustedError 在 code-provider 重试耗尽时掩盖为「上游错误」。
-// 400 是客户端请求错误（如 context length），原样返回，不掩盖。
+// 400 和启用了覆写的上游 429 原样返回，不掩盖。
 func maskOpencodeExhaustedError(last *types.NewAPIError) *types.NewAPIError {
-	if last != nil && last.StatusCode == http.StatusBadRequest {
+	if last != nil && (last.StatusCode == http.StatusBadRequest || last.RewriteUpstream429) {
 		return last
 	}
 	return types.NewErrorWithStatusCode(
@@ -677,7 +871,7 @@ const relayFinalErrorLogWrittenKey = "relay_final_error_log_written"
 
 // recordFinalRelayErrorLog 将最终返回给下游的错误写入使用日志（type=5），
 // 不依赖 ERROR_LOG_ENABLED，避免下游已收到错误但后台排查不到。
-func recordFinalRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
+func recordFinalRelayErrorLog(c *gin.Context, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
 	if c == nil || err == nil || !types.IsRecordErrorLog(err) {
 		return
 	}
@@ -685,19 +879,39 @@ func recordFinalRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
 		return
 	}
 	c.Set(relayFinalErrorLogWrittenKey, true)
-	writeRelayErrorLog(c, err)
+	writeRelayErrorLog(c, err, relayInfo)
 }
 
-func writeRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
+func relayInfoFirstResponseMillis(info *relaycommon.RelayInfo) float64 {
+	if info == nil || !info.FirstResponseTime.After(info.StartTime) {
+		return 0
+	}
+	return float64(info.FirstResponseTime.UnixMilli() - info.StartTime.UnixMilli())
+}
+
+// errorLogGroup 与消费日志取同一来源：auto 分组在选渠后才解析出真实分组并写入
+// relayInfo，而 context 里的 "group" 仍是 "auto"。
+func errorLogGroup(c *gin.Context, info *relaycommon.RelayInfo) string {
+	if info != nil && strings.TrimSpace(info.UsingGroup) != "" {
+		return info.UsingGroup
+	}
+	return c.GetString("group")
+}
+
+func writeRelayErrorLog(c *gin.Context, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
 	userId := c.GetInt("id")
 	tokenName := c.GetString("token_name")
 	modelName := c.GetString("original_model")
 	tokenId := c.GetInt("token_id")
-	userGroup := c.GetString("group")
+	userGroup := errorLogGroup(c, relayInfo)
+	frtMs := relayInfoFirstResponseMillis(relayInfo)
 	channelId := c.GetInt("channel_id")
 	other := make(map[string]interface{})
 	if c.Request != nil && c.Request.URL != nil {
 		other["request_path"] = c.Request.URL.Path
+	}
+	if frtMs > 0 {
+		other["frt"] = frtMs
 	}
 	other["error_type"] = err.GetErrorType()
 	other["error_code"] = err.GetErrorCode()
@@ -723,7 +937,7 @@ func writeRelayErrorLog(c *gin.Context, err *types.NewAPIError) {
 	model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 }
 
-func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
+func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
 	service.RecordChannelRetryFailure(c, channelError.ChannelId, channelError.ChannelName, channelError.ChannelType, err)
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
@@ -735,7 +949,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	}
 
 	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
-		writeRelayErrorLog(c, err)
+		writeRelayErrorLog(c, err, relayInfo)
 	}
 
 }
@@ -896,7 +1110,8 @@ func RelayTask(c *gin.Context) {
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
-				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
+				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode),
+				relayInfo)
 		}
 
 		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {

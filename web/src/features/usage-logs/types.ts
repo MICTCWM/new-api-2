@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 /**
  * Type definitions for usage logs
  */
@@ -172,6 +154,8 @@ export interface LogOtherData {
     command_upstream_cost_micro_usd?: number
     command_pricing_period?: 'peak' | 'off_peak' | string
     channel_retry_failures?: ChannelRetryFailure[]
+    /** Same-channel retries spent on this request; absent when none happened. */
+    channel_retry_count?: number
     channel_affinity?: ChannelAffinityInfo
     opencode_session_affinity?: OpencodeSessionAffinityInfo
     // Session lifecycle logs (type=8, admin only)
@@ -515,6 +499,10 @@ export interface ConnectionLogItem {
   output_tokens: number | null
   stream_chunks: number
   active: boolean
+  /** Same-channel retries spent on this request. */
+  retry_count: number
+  /** Remaining backoff before the next attempt; zero outside a retry wait. */
+  retry_wait_ms: number
 }
 
 export interface ConnectionLogSnapshot {
@@ -537,6 +525,8 @@ export type ConnectionLogProgressItem = Pick<
   | 'input_tokens'
   | 'output_tokens'
   | 'active'
+  | 'retry_count'
+  | 'retry_wait_ms'
 >
 
 export interface ConnectionLogProgressSnapshot {
