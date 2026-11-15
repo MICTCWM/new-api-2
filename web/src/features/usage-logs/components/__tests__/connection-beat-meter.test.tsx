@@ -226,7 +226,8 @@ describe('connection beat meter', () => {
     ])
   })
 
-  test('repaints when a new real cadence window arrives', () => {
+  test('eases a new cadence window in 50ms steps', () => {
+    vi.useFakeTimers()
     const idle = Array(BAR_COUNT).fill(0)
     const { container, rerender } = render(
       <ConnectionBeatMeter {...meterProps({ tokens: 100, cadence: idle })} />
@@ -243,6 +244,17 @@ describe('connection beat meter', () => {
       />
     )
 
+    // The new target is set immediately, but the visual step waits for the
+    // 50ms tick and only covers one fifth of the distance.
+    expect(bars(container)[LAST_BAR].style.height).toBe('2px')
+    act(() => {
+      vi.advanceTimersByTime(TICK_MS)
+    })
+    expect(bars(container)[LAST_BAR].style.height).toBe('2.6px')
+
+    act(() => {
+      vi.advanceTimersByTime(TICK_MS * 4)
+    })
     expect(bars(container)[LAST_BAR].style.height).toBe('5px')
   })
 
