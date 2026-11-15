@@ -54,12 +54,12 @@ export function ConnectionLogsMobileCard(props: {
           avatarClassName='size-5 **:data-[slot=avatar-fallback]:text-[10px]'
         />
         <ModelBadge
-          iconOnly
+          compact
           modelName={props.item.model}
-          className='shrink-0'
+          className='max-w-[45%] min-w-0 shrink'
         />
-        {/* The status cluster sits at the right edge: the logo alone identifies
-            the model, leaving the rest of the width to the live state. */}
+        {/* The badge carries the full model name; the status cluster stays at
+            the right edge and takes whatever width is left. */}
         <div
           data-slot='connection-mobile-status'
           className='ml-auto flex min-w-0 shrink items-center gap-1.5'

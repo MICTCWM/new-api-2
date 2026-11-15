@@ -1,5 +1,3 @@
-import { Cpu } from 'lucide-react'
-
 import { StatusBadge } from '@/components/status-badge'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
@@ -7,8 +5,8 @@ import { cn } from '@/lib/utils'
 interface ModelBadgeProps {
   modelName: string
   className?: string
-  /** Show only the provider logo; the model name stays as the accessible label. */
-  iconOnly?: boolean
+  /** Tighter height and icon for the one-line mobile layouts. */
+  compact?: boolean
 }
 
 interface ModelProvider {
@@ -101,59 +99,39 @@ function resolveModelProvider(modelName: string): ModelProvider | null {
 
 function ModelBadgeContent(props: ModelBadgeProps) {
   const provider = resolveModelProvider(props.modelName)
-
-  if (props.iconOnly) {
-    return (
-      <span
-        data-slot='model-icon'
-        role='img'
-        aria-label={props.modelName}
-        title={props.modelName}
-        className={cn(
-          'inline-flex size-5 shrink-0 items-center justify-center',
-          props.className
-        )}
-      >
-        {provider ? (
-          <span
-            data-slot='model-provider-icon'
-            className='flex h-[18px] w-[18px] items-center justify-center'
-            aria-hidden='true'
-          >
-            {getLobeIcon(provider.icon, 18)}
-          </span>
-        ) : (
-          <Cpu
-            data-slot='model-fallback-icon'
-            className='text-muted-foreground size-4'
-            aria-hidden='true'
-          />
-        )}
-      </span>
-    )
-  }
+  const iconSize = props.compact ? 14 : 18
 
   return (
     <StatusBadge
+      data-slot='model-badge'
       copyText={props.modelName}
       size='sm'
       showDot={!provider}
       autoColor={provider ? undefined : props.modelName}
       className={cn(
         'border-border/60 bg-muted/30 h-6 max-w-none gap-1.5 rounded-md border px-2 [font-family:var(--font-body)]',
+        props.compact && 'h-5 gap-1 rounded px-1.5 text-[10px]',
         provider && 'text-foreground',
         props.className
       )}
     >
-      <span className='flex max-w-full min-w-0 items-center gap-1.5'>
+      <span
+        className={cn(
+          'flex max-w-full min-w-0 items-center',
+          props.compact ? 'gap-1' : 'gap-1.5'
+        )}
+      >
         {provider && (
           <span
             data-slot='model-provider-icon'
-            className='flex h-[18px] w-[18px] shrink-0 items-center justify-center'
+            className={cn(
+              'flex shrink-0 items-center justify-center',
+              props.compact ? 'h-3.5 w-3.5' : 'h-[18px] w-[18px]'
+            )}
             title={provider.label}
             aria-label={provider.label}
           >
-            {getLobeIcon(provider.icon, 18)}
+            {getLobeIcon(provider.icon, iconSize)}
           </span>
         )}
         <span className='truncate'>{props.modelName}</span>

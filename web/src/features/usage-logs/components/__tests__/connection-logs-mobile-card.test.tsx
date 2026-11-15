@@ -230,7 +230,7 @@ describe('connection logs mobile cards', () => {
     ).not.toBeNull()
   })
 
-  test('shows the model logo, arrow tokens, TTFT seconds and total duration', async () => {
+  test('shows the model name, arrow tokens, TTFT seconds and total duration', async () => {
     mockGetConnectionLogs.mockResolvedValue({
       success: true,
       data: snapshot([
@@ -250,10 +250,10 @@ describe('connection logs mobile cards', () => {
     renderPanel()
 
     const card = await screen.findByRole('listitem')
-    expect(within(card).getByRole('img', { name: 'gpt-5.4' })).toHaveAttribute(
-      'data-slot',
-      'model-icon'
-    )
+    expect(within(card).getByText('gpt-5.4')).toBeInTheDocument()
+    expect(
+      card.querySelector('[data-slot="model-provider-icon"]')
+    ).not.toBeNull()
     expect(card.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}/)
     // Mobile rows intentionally omit the start timestamp to leave room for the
     // model and state; only the elapsed duration remains.
@@ -384,7 +384,7 @@ describe('connection logs mobile cards', () => {
     expect(screen.getByText('Retrying in 2s')).toBeInTheDocument()
   })
 
-  test('shows only the model logo and keeps the status cluster tight', async () => {
+  test('shows the model name and keeps the status cluster tight', async () => {
     mockGetConnectionLogs.mockResolvedValue({
       success: true,
       data: snapshot([BASE_ITEM]),
@@ -396,13 +396,14 @@ describe('connection logs mobile cards', () => {
     expect(card).toHaveClass('overflow-hidden')
     const firstLine = card.firstElementChild
     expect(firstLine).toHaveClass('min-w-0')
-    const modelIcon = within(card).getByRole('img', { name: 'gpt-5.4' })
-    expect(modelIcon).toHaveClass('size-5', 'shrink-0')
+    const modelBadge = card.querySelector('[data-slot="model-badge"]')
+    expect(modelBadge).toHaveTextContent('gpt-5.4')
+    expect(modelBadge).toHaveClass('min-w-0', 'max-w-[45%]', 'shrink')
     expect(
-      modelIcon.querySelector('[data-slot="model-provider-icon"]')
+      modelBadge?.querySelector('[data-slot="model-provider-icon"]')
     ).not.toBeNull()
-    // The name is an accessible label only, never visible row text.
-    expect(card.textContent).not.toContain('gpt-5.4')
+    // The model name is visible row text now, not an accessible-only label.
+    expect(card.textContent).toContain('gpt-5.4')
     // The status cluster absorbs the remaining width and truncates instead of
     // pushing the card past the viewport.
     const statusCluster = card.querySelector(
@@ -418,7 +419,7 @@ describe('connection logs mobile cards', () => {
     expect(metrics).toHaveClass('flex-wrap', 'min-w-0')
   })
 
-  test('uses a generic model icon when the provider is unknown', async () => {
+  test('shows the model name without a provider icon when the provider is unknown', async () => {
     mockGetConnectionLogs.mockResolvedValue({
       success: true,
       data: snapshot([{ ...BASE_ITEM, model: 'custom-model' }]),
@@ -427,13 +428,11 @@ describe('connection logs mobile cards', () => {
     renderPanel()
 
     const card = await screen.findByRole('listitem')
-    const modelIcon = within(card).getByRole('img', { name: 'custom-model' })
+    const modelBadge = card.querySelector('[data-slot="model-badge"]')
+    expect(modelBadge).toHaveTextContent('custom-model')
     expect(
-      modelIcon.querySelector('[data-slot="model-provider-icon"]')
+      modelBadge?.querySelector('[data-slot="model-provider-icon"]')
     ).toBeNull()
-    expect(
-      modelIcon.querySelector('[data-slot="model-fallback-icon"]')
-    ).not.toBeNull()
   })
 
   test('drops the desktop sub-state line from the card', async () => {
@@ -513,8 +512,15 @@ describe('connection logs mobile cards', () => {
     expect(metrics).toHaveClass('flex-wrap', 'min-w-0')
     // Retry info shares the wrapped metrics line instead of shrinking the row.
     expect(metrics).toContainElement(retryBadge)
-    // The model logo stays fixed while the metrics wrap.
-    expect(screen.getByRole('img', { name: 'gpt-5.4' })).toHaveClass('shrink-0')
+    // The model badge keeps a readable width while the metrics wrap.
+    expect(card.querySelector('[data-slot="model-badge"]')).toHaveClass(
+      'min-w-0',
+      'max-w-[45%]',
+      'shrink'
+    )
+    expect(card.querySelector('[data-slot="model-badge"]')).toHaveTextContent(
+      'gpt-5.4'
+    )
   })
 
   test('renders the shared empty state when nothing is connected', async () => {

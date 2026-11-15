@@ -40,7 +40,7 @@ export function ConnectionLogsCompactRow(props: {
       data-slot='connection-compact-row'
       data-connection-request-id={props.item.request_id}
       title={`${t('Input')} ${fullInput} · ${t('Output')} ${fullOutput}`}
-      className='animate-in fade-in-0 slide-in-from-right-4 border-border/40 flex min-w-0 items-center gap-1.5 border-b px-2 py-[3px] text-[11px] leading-tight duration-300 last:border-b-0 motion-reduce:animate-none'
+      className='animate-in fade-in-0 slide-in-from-right-4 border-border/40 flex min-w-0 items-center gap-1 border-b px-2 py-[3px] text-[11px] leading-tight duration-300 last:border-b-0 motion-reduce:animate-none'
     >
       <span
         className={cn(
@@ -53,7 +53,7 @@ export function ConnectionLogsCompactRow(props: {
       <button
         type='button'
         aria-label={`${t('User')} ${name}`}
-        className='max-w-[5.5rem] shrink-0 truncate text-left font-medium hover:underline'
+        className='max-w-[4rem] shrink-0 truncate text-left font-medium hover:underline'
         onClick={(event) => {
           event.stopPropagation()
           setSelectedUserId(props.item.user_id)
@@ -62,7 +62,11 @@ export function ConnectionLogsCompactRow(props: {
       >
         {name}
       </button>
-      <ModelBadge iconOnly modelName={props.item.model} className='shrink-0' />
+      <ModelBadge
+        compact
+        modelName={props.item.model}
+        className='max-w-[5rem] min-w-0 shrink'
+      />
       <span className='ml-auto shrink-0 font-mono tabular-nums'>
         <span className='text-muted-foreground'>↑</span>
         {formatCompactNumber(props.item.input_tokens)}
@@ -71,7 +75,7 @@ export function ConnectionLogsCompactRow(props: {
           ? CONNECTION_EMPTY_VALUE
           : formatCompactNumber(props.item.output_tokens)}
       </span>
-      <span className='text-muted-foreground w-10 shrink-0 text-right font-mono text-[10px] tabular-nums'>
+      <span className='text-muted-foreground w-9 shrink-0 text-right font-mono text-[10px] tabular-nums'>
         {formatConnectionDuration(presentation.elapsed)}
       </span>
       <span className='sr-only'>{t(presentation.meta.mainKey)}</span>
