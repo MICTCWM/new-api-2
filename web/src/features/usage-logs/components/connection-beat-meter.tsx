@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { dotColorMap, type StatusVariant } from '@/components/status-badge'
 import { cn } from '@/lib/utils'
 
+import { onFrame } from '../lib/frame-loop'
 import type { ConnectionState } from '../types'
 
 // One bar per tick. When the backend sends real 100ms cadence buckets, the
@@ -21,6 +22,16 @@ const FULL_BAR_TOKENS = 0.75
  * which made the strip read as binary instead of showing a rate gradation.
  */
 const FULL_CADENCE_TOKENS = 48
+/**
+ * Time constant for easing a bar toward a new cadence target. It has to be
+ * longer than the 250ms progress poll: with a shorter constant the bars arrive,
+ * stop, then wait for the next window, which reads as a rhythmic stutter. At
+ * 260ms the strip is still moving when the next window lands, so the motion is
+ * continuous instead of pulsing four times a second.
+ */
+const CADENCE_EASE_MS = 260
+/** A bar this close to its target is settled; the frame loop can stop. */
+const SETTLE_EPSILON_PX = 0.05
 const BAR_INDEXES = Array.from({ length: BAR_COUNT }, (_, index) => index)
 
 function cadenceBarHeight(tokens: number): number {
@@ -34,32 +45,56 @@ function cadenceBarHeight(tokens: number): number {
     (Math.log1p(ratio * FULL_CADENCE_TOKENS) /
       Math.log1p(FULL_CADENCE_TOKENS)) *
       (BAR_TRACK_PX - 2)
-  return Math.max(2, Math.min(BAR_TRACK_PX, Math.round(scaled)))
+  return Math.max(2, Math.min(BAR_TRACK_PX, scaled))
 }
 
 /**
  * Move a bar on the compositor, not in layout. The span keeps its 14px box and
  * scales from the bottom; height animation would relayout every bar on every
- * row, which is what made a full mobile list stutter.
+ * row, which is what made a full mobile list stutter. Heights are written as
+ * sub-pixel scale factors so the easing is visible at every frame instead of
+ * quantising into twelve 1px steps.
  */
 function paintBarHeight(bar: HTMLSpanElement, height: number) {
   const clamped = Math.max(2, Math.min(BAR_TRACK_PX, height))
-  bar.dataset.height = `${clamped}px`
+  bar.dataset.height = `${Math.round(clamped)}px`
   bar.style.transform = `scaleY(${(clamped / BAR_TRACK_PX).toFixed(4)})`
 }
 
 function paintCadenceBars(
   bars: Array<HTMLSpanElement | null>,
-  values: number[]
+  heights: number[]
 ) {
-  const padded = values.slice(-BAR_COUNT)
-  const leading = BAR_COUNT - padded.length
+  for (const index of BAR_INDEXES) {
+    const bar = bars[index]
+    if (bar) paintBarHeight(bar, heights[index])
+  }
+}
+
+/**
+ * Record the target height on the element while the frame loop catches up.
+ * The visible height is the transform; the data attribute is what tests and
+ * accessibility checks read, so it should describe where the bar is heading.
+ */
+function paintCadenceTargets(
+  bars: Array<HTMLSpanElement | null>,
+  heights: number[]
+) {
   for (const index of BAR_INDEXES) {
     const bar = bars[index]
     if (!bar) continue
-    const tokens = index >= leading ? (padded[index - leading] ?? 0) : 0
-    paintBarHeight(bar, cadenceBarHeight(tokens))
+    const clamped = Math.max(2, Math.min(BAR_TRACK_PX, heights[index]))
+    bar.dataset.height = `${Math.round(clamped)}px`
   }
+}
+
+/** Bar heights for a cadence window, left-padding a short window with idle. */
+function cadenceTargets(values: number[]): number[] {
+  const padded = values.slice(-BAR_COUNT)
+  const leading = BAR_COUNT - padded.length
+  return BAR_INDEXES.map((index) =>
+    index >= leading ? cadenceBarHeight(padded[index - leading] ?? 0) : 2
+  )
 }
 
 interface ConnectionBeatMeterProps {
@@ -76,6 +111,10 @@ interface ConnectionBeatMeterProps {
 export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
   const barsRef = useRef<Array<HTMLSpanElement | null>>([])
   const levelsRef = useRef<number[]>(Array.from({ length: BAR_COUNT }, () => 0))
+  const targetsRef = useRef<number[]>(
+    Array.from({ length: BAR_COUNT }, () => 0)
+  )
+  const primedRef = useRef(false)
   const tokensRef = useRef(props.tokens)
   tokensRef.current = props.tokens
   const lastTokensRef = useRef<number | null>(null)
@@ -88,12 +127,61 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
   const hasCadence = streaming && cadence != null && cadence.length > 0
   const cadenceKey = hasCadence ? cadence.slice(-BAR_COUNT).join(',') : ''
 
-  // The backend publishes a time-aligned window of real 100ms buckets. Paint
-  // that window straight onto each bar; GPU transform transitions do the
-  // interpolation between polls, so there is no per-row JS timer and no layout.
+  // The backend publishes a time-aligned window of real 100ms buckets. Retarget
+  // every bar, then let the shared frame loop ease toward it: the whole strip
+  // moves at the frame rate instead of restarting a CSS transition four times a
+  // second, which is what read as a stutter.
   useEffect(() => {
-    if (!hasCadence || cadence == null) return
-    paintCadenceBars(barsRef.current, cadence.slice(-BAR_COUNT))
+    if (!hasCadence || cadence == null) {
+      primedRef.current = false
+      return
+    }
+    const targets = cadenceTargets(cadence)
+    targetsRef.current = targets
+    if (!primedRef.current) {
+      // First window (or the strip resumed after a pause): start on target,
+      // otherwise every fresh meter would grow out of the baseline.
+      primedRef.current = true
+      levelsRef.current = [...targets]
+      paintCadenceBars(barsRef.current, targets)
+      return
+    }
+    paintCadenceTargets(barsRef.current, targets)
+
+    const reduceMotion =
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    if (reduceMotion) {
+      levelsRef.current = [...targets]
+      paintCadenceBars(barsRef.current, targets)
+      return
+    }
+
+    // The loop stops once every bar settles, so a new window has to restart it;
+    // keeping one alive per idle row would burn the frame budget for nothing.
+    let lastFrameAt = 0
+    const unsubscribe = onFrame((now) => {
+      const elapsed = lastFrameAt === 0 ? 16 : Math.min(now - lastFrameAt, 250)
+      lastFrameAt = now
+      const ease = 1 - Math.exp(-elapsed / CADENCE_EASE_MS)
+      const levels = levelsRef.current
+      const pending = targetsRef.current
+      let unsettled = false
+      for (const index of BAR_INDEXES) {
+        const target = pending[index]
+        const current = levels[index]
+        let next = current + (target - current) * ease
+        if (Math.abs(target - next) < SETTLE_EPSILON_PX) {
+          next = target
+        } else {
+          unsettled = true
+        }
+        levels[index] = next
+      }
+      paintCadenceBars(barsRef.current, levels)
+      if (!unsettled) unsubscribe()
+    })
+
+    return unsubscribe
   }, [cadence, cadenceKey, hasCadence])
 
   // Polls only report a running total, so turn each delta into a rate the tick
@@ -128,15 +216,10 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
       const levels = [...levelsRef.current.slice(1), spent]
       levelsRef.current = levels
       const peak = Math.max(FULL_BAR_TOKENS, ...levels)
-      for (const index of BAR_INDEXES) {
-        const bar = barsRef.current[index]
-        if (!bar) continue
-        const height = Math.max(
-          2,
-          Math.round((levels[index] / peak) * BAR_TRACK_PX)
-        )
-        paintBarHeight(bar, height)
-      }
+      const heights = BAR_INDEXES.map((index) =>
+        Math.max(2, Math.round((levels[index] / peak) * BAR_TRACK_PX))
+      )
+      paintCadenceBars(barsRef.current, heights)
     }
 
     const timer = window.setInterval(tick, TICK_MS)

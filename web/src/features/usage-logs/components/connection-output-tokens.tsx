@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { formatNumber } from '@/lib/format'
 
 import { CONNECTION_EMPTY_VALUE } from '../lib/connection-log-display'
+import { onFrame } from '../lib/frame-loop'
 import type { ConnectionLogItem } from '../types'
 
 /**
@@ -34,10 +35,11 @@ function AnimatedOutputTokens(props: { value: number; active: boolean }) {
 
     // Chase the newest upstream value instead of replaying a fixed-length
     // tween: each poll only adds a small gap, so the counter keeps moving
-    // instead of jumping ahead and freezing until the next poll.
-    let animationFrame = 0
+    // instead of jumping ahead and freezing until the next poll. The chase runs
+    // on the panel's shared frame clock, not a rAF loop per row.
     let lastFrameAt = performance.now()
     let lastPaintAt = 0
+    let unsubscribe: (() => void) | null = null
     const step = (now: number) => {
       const elapsed = Math.min(now - lastFrameAt, OUTPUT_COUNT_MAX_FRAME_MS)
       lastFrameAt = now
@@ -47,6 +49,7 @@ function AnimatedOutputTokens(props: { value: number; active: boolean }) {
       // until the value changes again (the effect restarts the chase).
       if (current === target) {
         setDisplayValue(Math.round(target))
+        unsubscribe?.()
         return
       }
       const gap = target - current
@@ -61,11 +64,10 @@ function AnimatedOutputTokens(props: { value: number; active: boolean }) {
         lastPaintAt = now
         setDisplayValue(Math.round(next))
       }
-      animationFrame = requestAnimationFrame(step)
     }
 
-    animationFrame = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(animationFrame)
+    unsubscribe = onFrame(step)
+    return () => unsubscribe?.()
   }, [props.active, props.value])
 
   return <>{formatNumber(displayValue)}</>

@@ -38,7 +38,11 @@ import { ConnectionLogsMobileGrid } from './connection-logs-mobile-grid'
 import { ConnectionOutputTokens } from './connection-output-tokens'
 import { ModelBadge } from './model-badge'
 
-const TICK_INTERVAL_MS = 50
+// The clock only feeds the elapsed/retry labels, which render to one decimal
+// (0.1s). Ticking at 50ms rebuilt every visible row twenty times a second for
+// digits nobody could read; 250ms keeps the labels accurate to a tenth while
+// leaving the frame budget to the live bars.
+const TICK_INTERVAL_MS = 250
 const COLUMN_COUNT = 8
 // The service keeps finished records for 60 seconds. Mirror the cutoff on the
 // server-aligned clock so a completed row leaves on time instead of waiting for

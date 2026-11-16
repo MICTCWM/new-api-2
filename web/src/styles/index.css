@@ -729,10 +729,11 @@ For commercial licensing, please contact support@quantumnous.com
   transform-origin: bottom;
 }
 
-/* Real cadence updates arrive every ~250ms; one continuous transform
- * transition bridges the gap at the browser's frame rate. */
+/* Real cadence is eased on a shared frame loop (one loop for every live row).
+ * A CSS transition here restarted on each 250ms poll and re-accelerated mid
+ * flight, which is what made the strip look like it was catching a stutter. */
 .connection-beat[data-cadence='1'] .connection-beat-bar {
-  transition: transform 250ms linear;
+  transition: none;
 }
 
 /* The legacy running-total fallback is already ticked every 50ms. */
