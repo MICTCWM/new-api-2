@@ -7,10 +7,11 @@ import { onFrame } from '../lib/frame-loop'
 import type { ConnectionLogItem } from '../types'
 
 /**
- * Smooth catch-up across most of the progress-poll interval. The counter keeps
- * moving between polls instead of snapping to the new total in a few frames.
+ * Catch-up time constant. Short enough that the number snaps to a new total
+ * almost immediately, long enough that a poll landing mid-digit still reads as
+ * a count instead of a teleport.
  */
-const OUTPUT_COUNT_CATCHUP_MS = 160
+const OUTPUT_COUNT_CATCHUP_MS = 90
 /** Repaint the number at 20fps; a per-frame React update on every live row was
  * competing with the cadence strip on long mobile lists. */
 const OUTPUT_COUNT_PAINT_MS = 50

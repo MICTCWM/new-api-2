@@ -23,13 +23,14 @@ const FULL_BAR_TOKENS = 0.75
  */
 const FULL_CADENCE_TOKENS = 48
 /**
- * Time constant for easing a bar toward a new cadence target. It has to be
- * longer than the 250ms progress poll: with a shorter constant the bars arrive,
- * stop, then wait for the next window, which reads as a rhythmic stutter. At
- * 260ms the strip is still moving when the next window lands, so the motion is
- * continuous instead of pulsing four times a second.
+ * Attack/release easing, the way a hardware VU meter behaves: a burst snaps to
+ * its new height within a couple of frames, while a pause falls back with a
+ * short tail so the strip does not cut to idle. The slow single constant used
+ * in rc.87 read as lag — smooth, but the burst arrived noticeably after it
+ * happened upstream.
  */
-const CADENCE_EASE_MS = 260
+const CADENCE_ATTACK_MS = 55
+const CADENCE_RELEASE_MS = 190
 /** A bar this close to its target is settled; the frame loop can stop. */
 const SETTLE_EPSILON_PX = 0.05
 const BAR_INDEXES = Array.from({ length: BAR_COUNT }, (_, index) => index)
@@ -162,13 +163,15 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
     const unsubscribe = onFrame((now) => {
       const elapsed = lastFrameAt === 0 ? 16 : Math.min(now - lastFrameAt, 250)
       lastFrameAt = now
-      const ease = 1 - Math.exp(-elapsed / CADENCE_EASE_MS)
+      const attack = 1 - Math.exp(-elapsed / CADENCE_ATTACK_MS)
+      const release = 1 - Math.exp(-elapsed / CADENCE_RELEASE_MS)
       const levels = levelsRef.current
       const pending = targetsRef.current
       let unsettled = false
       for (const index of BAR_INDEXES) {
         const target = pending[index]
         const current = levels[index]
+        const ease = target > current ? attack : release
         let next = current + (target - current) * ease
         if (Math.abs(target - next) < SETTLE_EPSILON_PX) {
           next = target

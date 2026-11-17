@@ -19,9 +19,11 @@ import {
 import { ConnectionLogsViewToggle } from './connection-logs-view-toggle'
 
 // Token counts and the real cadence strip need frequent, small refreshes, so
-// progress polls well below the five-second log refresh.
+// progress polls well below the five-second log refresh. 150ms is fast enough
+// that a burst shows up almost as it happens; at 250ms the strip was always a
+// quarter second behind the tokens it was supposed to be reporting.
 const REFRESH_INTERVAL_MS = 5000
-const LIVE_PROGRESS_INTERVAL_MS = 250
+const LIVE_PROGRESS_INTERVAL_MS = 150
 const EMPTY_ITEMS: ConnectionLogItem[] = []
 const VIEW_MODE_STORAGE_KEY = 'connection_logs_view_mode'
 
