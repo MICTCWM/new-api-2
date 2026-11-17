@@ -4968,6 +4968,31 @@ export function ChannelMutateDrawer({
 
                               <FormField
                                 control={form.control}
+                                name='simulated_cache_creation_enabled'
+                                render={({ field }) => (
+                                  <FormItem className='flex items-center justify-between px-4 py-3'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>
+                                        {t('Simulate cache creation')}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'Only affects local billing and usage display; no cache parameters are sent upstream.'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
                                 name='video_frame_extraction_enabled'
                                 render={({ field }) => (
                                   <FormItem className='flex items-center justify-between px-4 py-3'>

@@ -5710,6 +5710,10 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Simulate cache creation": "模拟创建缓存",
+    "Only affects local billing and usage display; no cache parameters are sent upstream.": "只影响本站计费与用量展示，不会向上游发送任何缓存参数。",
+    "Create cache ratio (1 hour)": "1 小时缓存创建倍率",
+    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "按模型配置的 1 小时缓存创建倍率；留空则使用默认倍率（5 分钟倍率 × 1.6）。"
   }
 }

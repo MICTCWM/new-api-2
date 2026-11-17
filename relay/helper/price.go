@@ -126,8 +126,13 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		cacheRatio, _ = ratio_setting.GetCacheRatio(billingModel)
 		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(billingModel)
 		cacheCreationRatio5m = cacheCreationRatio
-		// 固定1h和5min缓存写入价格的比例
-		cacheCreationRatio1h = cacheCreationRatio * claudeCacheCreation1hMultiplier
+		// 1h 缓存写入倍率优先取管理员按模型配置的 CreateCacheRatio1h；未配置（或配置值 <= 0）时
+		// 才回退到固定倍率 5m × 6/3.75，禁止把 1.6 作为首选路径硬编码。
+		if configured1h, ok := ratio_setting.GetCreateCacheRatio1h(billingModel); ok && configured1h > 0 {
+			cacheCreationRatio1h = configured1h
+		} else {
+			cacheCreationRatio1h = cacheCreationRatio * claudeCacheCreation1hMultiplier
+		}
 		imageRatio, _ = ratio_setting.GetImageRatio(billingModel)
 		audioRatio = ratio_setting.GetAudioRatio(billingModel)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(billingModel)

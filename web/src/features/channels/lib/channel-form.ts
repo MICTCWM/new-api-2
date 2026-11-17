@@ -320,6 +320,7 @@ export const channelFormSchema = z
     claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
     disable_task_polling_sleep: z.boolean().optional(),
     station_cache_enabled: z.boolean().optional(), // Gateway station cache billing discount
+    simulated_cache_creation_enabled: z.boolean().optional(), // Locally simulate upstream cache creation for billing display only
     video_frame_extraction_enabled: z.boolean().optional(), // Extract Chat/Responses video input into image frames
     disable_protocol_conversion: z.boolean().optional(), // Keep Chat/Responses requests in their original protocol
     // Upstream model update settings (stored in settings JSON)
@@ -582,6 +583,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   claude_beta_query: false,
   disable_task_polling_sleep: false,
   station_cache_enabled: false,
+  simulated_cache_creation_enabled: false,
   video_frame_extraction_enabled: false,
   disable_protocol_conversion: false,
   upstream_model_update_check_enabled: false,
@@ -656,6 +658,7 @@ export function transformChannelToFormDefaults(
   let claudeBetaQuery = false
   let disableTaskPollingSleep = false
   let stationCacheEnabled = false
+  let simulatedCacheCreationEnabled = false
   let videoFrameExtractionEnabled = false
   let disableProtocolConversion = false
   let upstreamModelUpdateCheckEnabled = false
@@ -718,6 +721,8 @@ export function transformChannelToFormDefaults(
       claudeBetaQuery = parsed.claude_beta_query === true
       disableTaskPollingSleep = parsed.disable_task_polling_sleep === true
       stationCacheEnabled = parsed.station_cache_enabled === true
+      simulatedCacheCreationEnabled =
+        parsed.simulated_cache_creation_enabled === true
       videoFrameExtractionEnabled =
         parsed.video_frame_extraction_enabled === true
       disableProtocolConversion = parsed.disable_protocol_conversion === true
@@ -801,6 +806,7 @@ export function transformChannelToFormDefaults(
     claude_beta_query: claudeBetaQuery,
     disable_task_polling_sleep: disableTaskPollingSleep,
     station_cache_enabled: stationCacheEnabled,
+    simulated_cache_creation_enabled: simulatedCacheCreationEnabled,
     video_frame_extraction_enabled: videoFrameExtractionEnabled,
     disable_protocol_conversion: disableProtocolConversion,
     allow_safety_identifier: allowSafetyIdentifier,
@@ -940,6 +946,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     formData.disable_task_polling_sleep === true
 
   settingsObj.station_cache_enabled = formData.station_cache_enabled === true
+  settingsObj.simulated_cache_creation_enabled =
+    formData.simulated_cache_creation_enabled === true
   settingsObj.video_frame_extraction_enabled =
     formData.video_frame_extraction_enabled === true
   settingsObj.disable_protocol_conversion =

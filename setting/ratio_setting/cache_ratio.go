@@ -129,6 +129,7 @@ var defaultCreateCacheRatio = map[string]float64{
 
 var cacheRatioMap = types.NewRWMap[string, float64]()
 var createCacheRatioMap = types.NewRWMap[string, float64]()
+var createCacheRatio1hMap = types.NewRWMap[string, float64]()
 
 // GetCacheRatioMap returns a copy of the cache ratio map
 func GetCacheRatioMap() map[string]float64 {
@@ -145,6 +146,11 @@ func CreateCacheRatio2JSONString() string {
 	return createCacheRatioMap.MarshalJSONString()
 }
 
+// CreateCacheRatio1h2JSONString converts the 1h create cache ratio map to a JSON string
+func CreateCacheRatio1h2JSONString() string {
+	return createCacheRatio1hMap.MarshalJSONString()
+}
+
 // UpdateCacheRatioByJSONString updates the cache ratio map from a JSON string
 func UpdateCacheRatioByJSONString(jsonStr string) error {
 	return types.LoadFromJsonStringWithCallback(cacheRatioMap, jsonStr, InvalidateExposedDataCache)
@@ -153,6 +159,11 @@ func UpdateCacheRatioByJSONString(jsonStr string) error {
 // UpdateCreateCacheRatioByJSONString updates the create cache ratio map from a JSON string
 func UpdateCreateCacheRatioByJSONString(jsonStr string) error {
 	return types.LoadFromJsonStringWithCallback(createCacheRatioMap, jsonStr, InvalidateExposedDataCache)
+}
+
+// UpdateCreateCacheRatio1hByJSONString updates the 1h create cache ratio map from a JSON string
+func UpdateCreateCacheRatio1hByJSONString(jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(createCacheRatio1hMap, jsonStr, InvalidateExposedDataCache)
 }
 
 // GetCacheRatio returns the cache ratio for a model
@@ -172,10 +183,22 @@ func GetCreateCacheRatio(name string) (float64, bool) {
 	return ratio, true
 }
 
+// GetCreateCacheRatio1h returns the per-model configured 1h cache-creation ratio.
+// ok=false means the admin has not configured an explicit 1h value and the price
+// layer should fall back to cacheCreationRatio × 6/3.75.
+func GetCreateCacheRatio1h(name string) (float64, bool) {
+	ratio, ok := createCacheRatio1hMap.Get(name)
+	return ratio, ok
+}
+
 func GetCacheRatioCopy() map[string]float64 {
 	return cacheRatioMap.ReadAll()
 }
 
 func GetCreateCacheRatioCopy() map[string]float64 {
 	return createCacheRatioMap.ReadAll()
+}
+
+func GetCreateCacheRatio1hCopy() map[string]float64 {
+	return createCacheRatio1hMap.ReadAll()
 }

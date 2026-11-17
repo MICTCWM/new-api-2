@@ -52,6 +52,7 @@ type ModelFormValues = {
   ModelRatio: string
   CacheRatio: string
   CreateCacheRatio: string
+  CreateCacheRatio1h: string
   CompletionRatio: string
   ImageRatio: string
   AudioRatio: string
@@ -76,6 +77,7 @@ type ModelJsonFieldName =
   | 'ModelRatio'
   | 'CacheRatio'
   | 'CreateCacheRatio'
+  | 'CreateCacheRatio1h'
   | 'CompletionRatio'
   | 'ImageRatio'
   | 'AudioRatio'
@@ -107,6 +109,12 @@ const modelJsonFields: Array<{
     labelKey: 'Create cache ratio',
     descriptionKey:
       'Ratio applied when creating cache entries for supported models.',
+  },
+  {
+    name: 'CreateCacheRatio1h',
+    labelKey: 'Create cache ratio (1 hour)',
+    descriptionKey:
+      'Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).',
   },
   {
     name: 'CompletionRatio',

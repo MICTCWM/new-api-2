@@ -34,90 +34,14 @@ import { useUpdateOption } from '../hooks/use-update-option'
 import { positiveIntegerSchema } from '../utils/numeric-field'
 import { GroupRatioForm } from './group-ratio-form'
 import { ModelRatioForm } from './model-ratio-form'
+import {
+  createJsonStringField,
+  createModelSchema,
+  type Translate,
+} from './model-ratio-schema'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
-import {
-  formatJsonForTextarea,
-  type JsonValidationError,
-  normalizeJsonString,
-  validateJsonString,
-} from './utils'
-
-type Translate = (key: string, options?: Record<string, unknown>) => string
-
-function formatJsonValidationError(
-  t: Translate,
-  error?: JsonValidationError,
-  fallback = 'Invalid JSON'
-) {
-  if (!error) return t(fallback)
-
-  if (error.type === 'required') return t('Value is required')
-  if (error.type === 'structure') {
-    return t(
-      fallback === 'Invalid JSON' ? 'JSON structure is invalid' : fallback
-    )
-  }
-
-  let locationMessage: string
-  if (error.line && error.column) {
-    locationMessage = t(
-      'JSON is invalid at line {{line}}, column {{column}}.',
-      {
-        line: error.line,
-        column: error.column,
-      }
-    )
-  } else if (error.position !== undefined) {
-    locationMessage = t('JSON is invalid at position {{position}}.', {
-      position: error.position,
-    })
-  } else {
-    locationMessage = t('JSON is invalid. Please check the syntax.')
-  }
-
-  const parts = [locationMessage]
-
-  if (error.missingCommaLine) {
-    parts.push(
-      t('Check line {{line}} for a missing comma.', {
-        line: error.missingCommaLine,
-      })
-    )
-  }
-
-  return parts.join(' ')
-}
-
-function createJsonStringField(
-  t: Translate,
-  options?: Parameters<typeof validateJsonString>[1]
-) {
-  return z.string().superRefine((value, ctx) => {
-    const result = validateJsonString(value, options)
-    if (!result.valid) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: formatJsonValidationError(t, result.error, result.message),
-      })
-    }
-  })
-}
-
-const createModelSchema = (t: Translate) =>
-  z.object({
-    ModelPrice: createJsonStringField(t),
-    ModelRatio: createJsonStringField(t),
-    CacheRatio: createJsonStringField(t),
-    CreateCacheRatio: createJsonStringField(t),
-    CompletionRatio: createJsonStringField(t),
-    ImageRatio: createJsonStringField(t),
-    AudioRatio: createJsonStringField(t),
-    AudioCompletionRatio: createJsonStringField(t),
-    ExposeRatioEnabled: z.boolean(),
-    BillingMode: createJsonStringField(t),
-    BillingExpr: createJsonStringField(t),
-  })
+import { formatJsonForTextarea, normalizeJsonString } from './utils'
 
 const createGroupSchema = (t: Translate) =>
   z.object({
@@ -186,6 +110,7 @@ export function RatioSettingsCard({
     ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
     CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
     CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
+    CreateCacheRatio1h: normalizeJsonString(modelDefaults.CreateCacheRatio1h),
     CompletionRatio: normalizeJsonString(modelDefaults.CompletionRatio),
     ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
     AudioRatio: normalizeJsonString(modelDefaults.AudioRatio),
@@ -224,6 +149,9 @@ export function RatioSettingsCard({
       ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
       CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
       CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
+      CreateCacheRatio1h: formatJsonForTextarea(
+        modelDefaults.CreateCacheRatio1h
+      ),
       CompletionRatio: formatJsonForTextarea(modelDefaults.CompletionRatio),
       ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
       AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
@@ -257,6 +185,9 @@ export function RatioSettingsCard({
       ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
       CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
       CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
+      CreateCacheRatio1h: normalizeJsonString(
+        modelDefaults.CreateCacheRatio1h
+      ),
       CompletionRatio: normalizeJsonString(modelDefaults.CompletionRatio),
       ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
       AudioRatio: normalizeJsonString(modelDefaults.AudioRatio),
@@ -275,6 +206,9 @@ export function RatioSettingsCard({
       ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
       CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
       CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
+      CreateCacheRatio1h: formatJsonForTextarea(
+        modelDefaults.CreateCacheRatio1h
+      ),
       CompletionRatio: formatJsonForTextarea(modelDefaults.CompletionRatio),
       ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
       AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
@@ -320,6 +254,7 @@ export function RatioSettingsCard({
         ModelRatio: normalizeJsonString(values.ModelRatio),
         CacheRatio: normalizeJsonString(values.CacheRatio),
         CreateCacheRatio: normalizeJsonString(values.CreateCacheRatio),
+        CreateCacheRatio1h: normalizeJsonString(values.CreateCacheRatio1h),
         CompletionRatio: normalizeJsonString(values.CompletionRatio),
         ImageRatio: normalizeJsonString(values.ImageRatio),
         AudioRatio: normalizeJsonString(values.AudioRatio),

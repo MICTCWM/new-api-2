@@ -5710,6 +5710,10 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Simulate cache creation": "Simulate cache creation",
+    "Only affects local billing and usage display; no cache parameters are sent upstream.": "Only affects local billing and usage display; no cache parameters are sent upstream.",
+    "Create cache ratio (1 hour)": "Create cache ratio (1 hour)",
+    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio)."
   }
 }

@@ -193,6 +193,7 @@ export type ModelSettings = {
   ModelRatio: string;
   CacheRatio: string;
   CreateCacheRatio: string;
+  CreateCacheRatio1h: string;
   CompletionRatio: string;
   ImageRatio: string;
   AudioRatio: string;
@@ -259,6 +260,7 @@ export type BillingSettings = {
   ModelRatio: string;
   CacheRatio: string;
   CreateCacheRatio: string;
+  CreateCacheRatio1h: string;
   CompletionRatio: string;
   ImageRatio: string;
   AudioRatio: string;

@@ -73,6 +73,7 @@ type GeneralOpenAIRequest struct {
 	Store json.RawMessage `json:"store,omitempty"`
 	// Used by OpenAI to cache responses for similar requests to optimize your cache hit rates. Replaces the user field
 	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
+	PromptCacheOptions   json.RawMessage `json:"prompt_cache_options,omitempty"`
 	PromptCacheRetention json.RawMessage `json:"prompt_cache_retention,omitempty"`
 	LogitBias            json.RawMessage `json:"logit_bias,omitempty"`
 	Metadata             json.RawMessage `json:"metadata,omitempty"`
@@ -309,7 +310,11 @@ type Message struct {
 	Reasoning        *string         `json:"reasoning,omitempty"`
 	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallId       string          `json:"tool_call_id,omitempty"`
-	parsedContent    []MediaContent
+	// CacheControl mirrors Anthropic-style cache_control attached to a chat
+	// message. Kept as raw JSON so unknown shapes parse without error; the
+	// simulated-cache layer only reads the optional ttl field.
+	CacheControl  json.RawMessage `json:"cache_control,omitempty"`
+	parsedContent []MediaContent
 	//parsedStringContent *string
 }
 

@@ -73,7 +73,7 @@ type textQuotaSummary struct {
 // surcharge (e.g. /v1/alpha/search returns no usage but bills one web_search
 // call), so token count alone is not sufficient to decide.
 func (s *textQuotaSummary) hasBillableUsage() bool {
-	return s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero()
+	return s.TotalTokens > 0 || s.CacheTokens > 0 || s.CacheCreationTokens > 0 || !s.ToolCallSurchargeQuota.IsZero()
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -317,7 +317,15 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		if !dCachedCreationTokens.IsZero() || hasSplitCacheCreationTokens {
 			if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived {
 				baseTokens = baseTokens.Sub(dCachedCreationTokens)
-				cachedCreationTokensWithRatio = dCachedCreationTokens.Mul(dCacheCreationRatio)
+				// openai 语义（非 legacy Claude-derived）按 5m / 1h / 其余 三段拆分倍率计费，
+				// base 仍扣 total；legacy Claude-derived 分支保持既有行为不变。
+				creationRemaining := summary.CacheCreationTokens - summary.CacheCreationTokens5m - summary.CacheCreationTokens1h
+				if creationRemaining < 0 {
+					creationRemaining = 0
+				}
+				cachedCreationTokensWithRatio = decimal.NewFromInt(int64(creationRemaining)).Mul(dCacheCreationRatio)
+				cachedCreationTokensWithRatio = cachedCreationTokensWithRatio.Add(decimal.NewFromInt(int64(summary.CacheCreationTokens5m)).Mul(dCacheCreationRatio5m))
+				cachedCreationTokensWithRatio = cachedCreationTokensWithRatio.Add(decimal.NewFromInt(int64(summary.CacheCreationTokens1h)).Mul(dCacheCreationRatio1h))
 			} else {
 				remaining := summary.CacheCreationTokens - summary.CacheCreationTokens5m - summary.CacheCreationTokens1h
 				if remaining < 0 {
@@ -428,9 +436,15 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
-	// 站内缓存钩子：渠道开启且能提取消息时，计算命中并合并进 billingUsage 的 cached tokens，
-	// 使 calculateTextQuotaSummary 按现有 CacheRatio 自动打折。同时可能改写 extraContent 追加命中日志。
-	extraContent, billingUsage = applyStationCache(relayInfo, billingUsage, extraContent)
+	// 模拟创建缓存钩子：在站内缓存之前调用。模拟层生效时跳过站内缓存注入，
+	// 两者都是前缀折扣机制，避免叠加；开关关闭时站内缓存行为不变。
+	var simulatedCacheApplied bool
+	extraContent, billingUsage, simulatedCacheApplied = applySimulatedCacheCreation(relayInfo, billingUsage, extraContent)
+	if !simulatedCacheApplied {
+		// 站内缓存钩子：渠道开启且能提取消息时，计算命中并合并进 billingUsage 的 cached tokens，
+		// 使 calculateTextQuotaSummary 按现有 CacheRatio 自动打折。同时可能改写 extraContent 追加命中日志。
+		extraContent, billingUsage = applyStationCache(relayInfo, billingUsage, extraContent)
+	}
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
 
 	var tieredResult *billingexpr.TieredResult

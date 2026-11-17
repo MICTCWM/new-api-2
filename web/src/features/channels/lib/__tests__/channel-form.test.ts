@@ -263,6 +263,97 @@ describe('transformFormDataToUpdatePayload', () => {
     expect(formData.video_frame_extraction_enabled).toBe(true)
   })
 
+  it('persists the simulated cache creation toggle into the settings JSON', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      simulated_cache_creation_enabled: true,
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+    const settings = JSON.parse(payload.settings as string) as Record<
+      string,
+      unknown
+    >
+
+    expect(settings.simulated_cache_creation_enabled).toBe(true)
+  })
+
+  it('serializes the simulated cache creation toggle as false when off', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      simulated_cache_creation_enabled: false,
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+    const settings = JSON.parse(payload.settings as string) as Record<
+      string,
+      unknown
+    >
+
+    expect(settings.simulated_cache_creation_enabled).toBe(false)
+  })
+
+  it('defaults the simulated cache creation toggle to off when the setting is absent', () => {
+    const channel = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      id: 1,
+      type: 1,
+      status: 1,
+      created_time: 0,
+      test_time: 0,
+      response_time: 0,
+      settings: '{}',
+      group: 'default',
+      channel_info: {} as Channel['channel_info'],
+    } as unknown as Channel
+
+    const formData = transformChannelToFormDefaults(channel)
+
+    expect(formData.simulated_cache_creation_enabled).toBe(false)
+  })
+
+  it('round-trips an enabled simulated cache creation toggle from the settings JSON', () => {
+    const channel = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      id: 1,
+      type: 1,
+      status: 1,
+      created_time: 0,
+      test_time: 0,
+      response_time: 0,
+      settings: JSON.stringify({
+        simulated_cache_creation_enabled: true,
+      }),
+      group: 'default',
+      channel_info: {} as Channel['channel_info'],
+    } as unknown as Channel
+
+    const formData = transformChannelToFormDefaults(channel)
+
+    expect(formData.simulated_cache_creation_enabled).toBe(true)
+  })
+
+  it('treats non-boolean truthy values for the simulated cache creation toggle as off', () => {
+    const channel = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      id: 1,
+      type: 1,
+      status: 1,
+      created_time: 0,
+      test_time: 0,
+      response_time: 0,
+      settings: JSON.stringify({
+        simulated_cache_creation_enabled: 'yes',
+      }),
+      group: 'default',
+      channel_info: {} as Channel['channel_info'],
+    } as unknown as Channel
+
+    const formData = transformChannelToFormDefaults(channel)
+
+    expect(formData.simulated_cache_creation_enabled).toBe(false)
+  })
+
   it('serializes the TPM limit, buffer, limit mode and 429 rewrite into the settings JSON', () => {
     const formData = {
       ...CHANNEL_FORM_DEFAULT_VALUES,
