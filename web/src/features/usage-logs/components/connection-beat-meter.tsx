@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 
 import { dotColorMap, type StatusVariant } from '@/components/status-badge'
 import { cn } from '@/lib/utils'
@@ -23,14 +23,14 @@ const FULL_BAR_TOKENS = 0.75
  */
 const FULL_CADENCE_TOKENS = 48
 /**
- * Attack/release easing, the way a hardware VU meter behaves: a burst snaps to
- * its new height within a couple of frames, while a pause falls back with a
- * short tail so the strip does not cut to idle. The slow single constant used
- * in rc.87 read as lag — smooth, but the burst arrived noticeably after it
- * happened upstream.
+ * Easing time constant. It has to stay close to the progress-poll interval
+ * (150ms): a shorter constant reaches the target in two frames and then sits
+ * still until the next poll, and that "move, freeze, move" rhythm is what read
+ * as stutter in rc.88. Matching the interval keeps the strip moving
+ * continuously between updates while staying far more responsive than rc.87's
+ * 260ms constant against a 250ms poll.
  */
-const CADENCE_ATTACK_MS = 55
-const CADENCE_RELEASE_MS = 190
+const CADENCE_EASE_MS = 160
 /** A bar this close to its target is settled; the frame loop can stop. */
 const SETTLE_EPSILON_PX = 0.05
 const BAR_INDEXES = Array.from({ length: BAR_COUNT }, (_, index) => index)
@@ -58,8 +58,16 @@ function cadenceBarHeight(tokens: number): number {
  */
 function paintBarHeight(bar: HTMLSpanElement, height: number) {
   const clamped = Math.max(2, Math.min(BAR_TRACK_PX, height))
+  const scale = clamped / BAR_TRACK_PX
+  // Sub-quarter-pixel moves are invisible; skipping them keeps the frame loop
+  // from writing twelve transforms per row on every single frame.
+  if (bar.dataset.scale) {
+    const painted = Number(bar.dataset.scale)
+    if (Math.abs(painted - scale) < 0.002) return
+  }
+  bar.dataset.scale = scale.toFixed(4)
   bar.dataset.height = `${Math.round(clamped)}px`
-  bar.style.transform = `scaleY(${(clamped / BAR_TRACK_PX).toFixed(4)})`
+  bar.style.transform = `scaleY(${scale.toFixed(4)})`
 }
 
 function paintCadenceBars(
@@ -128,6 +136,18 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
   const hasCadence = streaming && cadence != null && cadence.length > 0
   const cadenceKey = hasCadence ? cadence.slice(-BAR_COUNT).join(',') : ''
 
+  // Stable per-index ref callbacks: an inline arrow would be a fresh function on
+  // every 150ms poll, and React would detach and re-attach all twelve refs on
+  // each re-render of every live row.
+  const barRefSetters = useMemo(
+    () =>
+      BAR_INDEXES.map((index) => (node: HTMLSpanElement | null) => {
+        barsRef.current[index] = node
+        node?.style.setProperty('--beat-i', String(index))
+      }),
+    []
+  )
+
   // The backend publishes a time-aligned window of real 100ms buckets. Retarget
   // every bar, then let the shared frame loop ease toward it: the whole strip
   // moves at the frame rate instead of restarting a CSS transition four times a
@@ -160,18 +180,17 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
     // The loop stops once every bar settles, so a new window has to restart it;
     // keeping one alive per idle row would burn the frame budget for nothing.
     let lastFrameAt = 0
+    let lastPaintAt = 0
     const unsubscribe = onFrame((now) => {
       const elapsed = lastFrameAt === 0 ? 16 : Math.min(now - lastFrameAt, 250)
       lastFrameAt = now
-      const attack = 1 - Math.exp(-elapsed / CADENCE_ATTACK_MS)
-      const release = 1 - Math.exp(-elapsed / CADENCE_RELEASE_MS)
+      const ease = 1 - Math.exp(-elapsed / CADENCE_EASE_MS)
       const levels = levelsRef.current
       const pending = targetsRef.current
       let unsettled = false
       for (const index of BAR_INDEXES) {
         const target = pending[index]
         const current = levels[index]
-        const ease = target > current ? attack : release
         let next = current + (target - current) * ease
         if (Math.abs(target - next) < SETTLE_EPSILON_PX) {
           next = target
@@ -180,8 +199,20 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
         }
         levels[index] = next
       }
-      paintCadenceBars(barsRef.current, levels)
-      if (!unsettled) unsubscribe()
+      // Repaint at ~30fps: the bars glide at a rate the eye reads as continuous,
+      // but twenty live rows stop writing twelve transforms on every single
+      // frame, which is what starves the compositor on a long mobile list.
+      if (!unsettled) {
+        // Settling must land on the exact target, even if the last tick was
+        // throttled, otherwise the strip would freeze a fraction short.
+        paintCadenceBars(barsRef.current, levels)
+        unsubscribe()
+        return
+      }
+      if (now - lastPaintAt >= 30) {
+        lastPaintAt = now
+        paintCadenceBars(barsRef.current, levels)
+      }
     })
 
     return unsubscribe
@@ -242,10 +273,7 @@ export function ConnectionBeatMeter(props: ConnectionBeatMeterProps) {
       {BAR_INDEXES.map((index) => (
         <span
           key={index}
-          ref={(node) => {
-            barsRef.current[index] = node
-            node?.style.setProperty('--beat-i', String(index))
-          }}
+          ref={barRefSetters[index]}
           className={cn(
             'connection-beat-bar w-0.5 rounded-full',
             dotColorMap[props.tone]
