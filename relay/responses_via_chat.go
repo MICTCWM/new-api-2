@@ -76,6 +76,12 @@ func responsesCompletionsViaChat(c *gin.Context, info *relaycommon.RelayInfo, ad
 			return nil, newAPIErrorFromParamOverride(err)
 		}
 	}
+
+	chatJSON, err = service.StripSimulatedCacheTTLForUpstream(chatJSON, info)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
+
 	logger.LogDebug(c, "responses->chat requestBody: %s", chatJSON)
 
 	body, closer, err := relaycommon.NewOutboundJSONBody(chatJSON)

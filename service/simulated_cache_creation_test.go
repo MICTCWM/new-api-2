@@ -307,6 +307,17 @@ func TestSimulatedCacheCreationTTLClassDetection(t *testing.T) {
 		assert.Equal(t, "1h", detectSimulatedCacheTTLClass(relay))
 	})
 
+	t.Run("Claude tools cache_control 1h", func(t *testing.T) {
+		relay := simTestRelay(7012, 8012, types.RelayFormatClaude, &dto.ClaudeRequest{
+			Tools: []any{map[string]any{
+				"name":          "lookup",
+				"cache_control": map[string]any{"type": "ephemeral", "ttl": "1h"},
+			}},
+			Messages: []dto.ClaudeMessage{{Role: "user", Content: "hi"}},
+		})
+		assert.Equal(t, "1h", detectSimulatedCacheTTLClass(relay))
+	})
+
 	t.Run("Claude 消息块 cache_control 1h", func(t *testing.T) {
 		relay := simTestRelay(7012, 8012, types.RelayFormatClaude, &dto.ClaudeRequest{
 			Messages: []dto.ClaudeMessage{{

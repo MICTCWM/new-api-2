@@ -28,8 +28,10 @@ type SimulatedCachePlan = relaycommon.SimulatedCachePlan
 // prompt cache 创建/命中行为：以「渠道 + 用户 + 模型」为维度，按文本多段前缀
 // 建链，TTL 内重复前缀计缓存命中（cache read），超出前缀的新增 token 计缓存创建。
 //
-// 本层只改写本地 billingUsage 的字段，不修改发往上游的请求体，也不伪造上游响应；
-// 上游已返回真实 cache 相关值时整体跳过模拟，以真实值为准。
+// 本层只在本地改写 billingUsage 与响应 usage，不伪造上游响应；开启模拟缓存时，
+// 请求侧会先读取客户端 TTL，再把 cache_control / prompt_cache_options 等 TTL
+// 承载字段从出站请求中剥离，避免上游按自己的 TTL 再建一次缓存。上游已返回
+// 真实 cache 相关值时整体跳过模拟，以真实值为准。
 //
 // 状态全部存放在 HybridCache 内，读-改-写按「Get → 计算 → SetWithTTL」覆盖写，
 // 不引入全局锁；并发下偶尔丢失一次段写入在模拟层可接受。
@@ -245,6 +247,51 @@ func promptCacheRetentionIs24h(raw json.RawMessage) bool {
 	return false
 }
 
+// jsonValueHas1hCacheTTL 递归检查任意嵌套对象里的 cache_control /
+// prompt_cache_options 是否声明 1h；用于 Claude tools 这类 any 字段。
+func jsonValueHas1hCacheTTL(v any) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		for _, key := range []string{"cache_control", "prompt_cache_options"} {
+			if obj, ok := x[key].(map[string]any); ok {
+				if ttl, _ := obj["ttl"].(string); ttl == simulatedCacheCreationTTLClass1h {
+					return true
+				}
+			}
+		}
+		if s, ok := x["prompt_cache_retention"].(string); ok && s == "24h" {
+			return true
+		}
+		for _, child := range x {
+			if jsonValueHas1hCacheTTL(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range x {
+			if jsonValueHas1hCacheTTL(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func claudeToolsHave1hTTL(tools any) bool {
+	if tools == nil {
+		return false
+	}
+	raw, err := json.Marshal(tools)
+	if err != nil || len(raw) == 0 {
+		return false
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false
+	}
+	return jsonValueHas1hCacheTTL(v)
+}
+
 // detectSimulatedCacheTTLClass 判定本次请求声明的缓存档位：显式 1 小时 → "1h"，
 // 其余/缺省/无法解析 → "5m"。
 func detectSimulatedCacheTTLClass(relayInfo *relaycommon.RelayInfo) string {
@@ -253,6 +300,9 @@ func detectSimulatedCacheTTLClass(relayInfo *relaycommon.RelayInfo) string {
 	}
 	switch req := relayInfo.Request.(type) {
 	case *dto.ClaudeRequest:
+		if claudeToolsHave1hTTL(req.Tools) {
+			return simulatedCacheCreationTTLClass1h
+		}
 		if rawCacheControlHas1hTTL(req.CacheControl) {
 			return simulatedCacheCreationTTLClass1h
 		}
