@@ -1,9 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -74,4 +80,45 @@ func TestStripSimulatedCacheTTLFromJSON_Noop(t *testing.T) {
 func TestStripSimulatedCacheTTLFromJSON_Invalid(t *testing.T) {
 	_, _, err := StripSimulatedCacheTTLFromJSON([]byte(`{"messages":[`))
 	require.Error(t, err)
+}
+
+func TestBuildSimulatedCachePassThroughBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	input := []byte(`{"model":"kimi-k3","prompt_cache_options":{"mode":"implicit","ttl":"1h"},"messages":[{"role":"user","content":"hi"}]}`)
+	newContext := func(t *testing.T) (*gin.Context, *relaycommon.RelayInfo) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(input))
+		storage, err := common.CreateBodyStorage(input)
+		require.NoError(t, err)
+		c.Set(common.KeyBodyStorage, storage)
+		t.Cleanup(func() { common.CleanupBodyStorage(c) })
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+		return c, info
+	}
+
+	t.Run("enabled strips TTL", func(t *testing.T) {
+		c, info := newContext(t)
+		info.ChannelOtherSettings.SimulatedCacheCreationEnabled = true
+		body, closer, err := BuildSimulatedCachePassThroughBody(c, info)
+		require.NoError(t, err)
+		if closer != nil {
+			defer closer()
+		}
+		out, err := io.ReadAll(body)
+		require.NoError(t, err)
+		assert.NotContains(t, string(out), "prompt_cache_options")
+		assert.Contains(t, string(out), `"model":"kimi-k3"`)
+	})
+
+	t.Run("disabled keeps original", func(t *testing.T) {
+		c, info := newContext(t)
+		body, closer, err := BuildSimulatedCachePassThroughBody(c, info)
+		require.NoError(t, err)
+		if closer != nil {
+			defer closer()
+		}
+		out, err := io.ReadAll(body)
+		require.NoError(t, err)
+		assert.JSONEq(t, string(input), string(out))
+	})
 }
