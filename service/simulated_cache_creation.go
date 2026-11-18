@@ -18,6 +18,10 @@ import (
 	"github.com/samber/hot"
 )
 
+// SimulatedCachePlan 与 relaycommon.SimulatedCachePlan 同构别名：类型定义放在
+// relay/common 以避免 service ↔ relay 循环依赖，service 包对外保留同名类型。
+type SimulatedCachePlan = relaycommon.SimulatedCachePlan
+
 // 模拟创建缓存（Simulated Cache Creation）
 //
 // 当渠道开启「模拟创建缓存」开关时，网关在本地计费与用量展示层面模拟上游的
@@ -422,68 +426,54 @@ func shouldApplySimulatedCacheCreation(relayInfo *relaycommon.RelayInfo) bool {
 	return isStationCacheTextFormat(relayInfo)
 }
 
-// applySimulatedCacheCreation 是 PostTextConsumeQuota 内的模拟创建缓存钩子，
-// 在 applyStationCache 之前调用。返回追加日志后的 extraContent、改写后的 usage，
-// 以及模拟层是否生效（生效时调用方应跳过站内缓存注入，避免两套前缀折扣叠加）。
-func applySimulatedCacheCreation(relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) ([]string, *dto.Usage, bool) {
-	return applySimulatedCacheCreationChecked(relayInfo, usage, extraContent, isSimulatedCacheCreationEnabled)
+// PlanSimulatedCacheCreation 是出站链路规划缓存创建的唯一入口：幂等（同一
+// RelayInfo 已有 plan 时直接返回旧值，绝不二次推进缓存段），开关关闭 / 非文本格式 /
+// 无消息 / billingInput <= 1024 / 任一真实 cache 值 > 0 时返回 nil。命中与创建的
+// 算法、clamp、段推进全部复用第 1 轮引擎；本函数是唯一推进缓存段的地方。
+//
+// billingInput：anthropic = upstream input_tokens；openai = prompt_tokens。
+// realCached / realCreationTotal / realCreation5m / realCreation1h 为上游真实
+// cache 分量，任一 > 0 整层跳过，以真实值为准。
+func PlanSimulatedCacheCreation(relayInfo *relaycommon.RelayInfo, billingInput, realCached, realCreationTotal, realCreation5m, realCreation1h int) *relaycommon.SimulatedCachePlan {
+	return planSimulatedCacheCreationChecked(relayInfo, isSimulatedCacheCreationEnabled, billingInput, realCached, realCreationTotal, realCreation5m, realCreation1h)
 }
 
-// applySimulatedCacheCreationChecked 是内部实现，允许测试注入渠道开关判定函数。
-func applySimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string, enabled func(*relaycommon.RelayInfo) bool) ([]string, *dto.Usage, bool) {
+// planSimulatedCacheCreationChecked 是内部实现，允许测试注入渠道开关判定函数。
+func planSimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, enabled func(*relaycommon.RelayInfo) bool,
+	billingInput, realCached, realCreationTotal, realCreation5m, realCreation1h int) *relaycommon.SimulatedCachePlan {
+
+	// 幂等：已有规划直接复用，不再推进缓存段、不重复计费。
+	if relayInfo != nil && relayInfo.SimulatedCachePlan != nil {
+		return relayInfo.SimulatedCachePlan
+	}
 	if !shouldApplySimulatedCacheCreation(relayInfo) {
-		return extraContent, usage, false
+		return nil
 	}
 	if enabled == nil || !enabled(relayInfo) {
-		return extraContent, usage, false
+		return nil
 	}
-	if usage == nil {
-		usage = &dto.Usage{
-			PromptTokens:     relayInfo.GetEstimatePromptTokens(),
-			CompletionTokens: 0,
-			TotalTokens:      relayInfo.GetEstimatePromptTokens(),
-		}
+	if billingInput <= simulatedCacheCreationMinBillingInput {
+		return nil
 	}
-
 	// 真实上游值优先：任一 cache 字段 > 0 整层跳过。
-	realCached := usage.PromptTokensDetails.CachedTokens
-	realCreationCached := usage.PromptTokensDetails.CachedCreationTokens
-	realCreationTotal := usage.PromptTokensDetails.CacheCreationTokensTotal()
-	if realCached > 0 || realCreationTotal > 0 ||
-		usage.ClaudeCacheCreation5mTokens > 0 || usage.ClaudeCacheCreation1hTokens > 0 {
-		return extraContent, usage, false
+	if realCached > 0 || realCreationTotal > 0 || realCreation5m > 0 || realCreation1h > 0 {
+		return nil
 	}
 
 	text, ok := simulatedCachePrefixText(relayInfo)
 	if !ok {
-		return extraContent, usage, false
+		return nil
 	}
 	// 超长 prompt（>1 MiB）跳过模拟，避免撑内存。
 	if len(text) > simulatedCacheCreationMaxBytes {
-		return extraContent, usage, false
-	}
-
-	semantic := usageSemanticFromUsage(relayInfo, usage)
-	var billingInput int
-	var realCacheComponent int
-	if semantic == "anthropic" {
-		// anthropic：PromptTokens 不含 cache read/creation，输入总量 = prompt + read + creation。
-		billingInput = usage.PromptTokens + realCached + realCreationCached
-		realCacheComponent = realCached + realCreationCached
-	} else {
-		// openai：prompt_tokens 已包含 cached 与 cache-write，直接取 PromptTokens。
-		billingInput = usage.PromptTokens
-		realCacheComponent = realCached + realCreationTotal
-	}
-	if billingInput <= simulatedCacheCreationMinBillingInput {
-		return extraContent, usage, false
+		return nil
 	}
 
 	ttlClass := detectSimulatedCacheTTLClass(relayInfo)
 	outcome := lookupAndUpdateSimulatedCache(relayInfo, text, ttlClass)
 
 	// clamp 到 available = billingInput − 真实 cache 分量；hit+creation 超限时 hit 优先。
-	available := billingInput - realCacheComponent
+	available := billingInput - realCached - realCreationTotal
 	if available < 0 {
 		available = 0
 	}
@@ -509,42 +499,159 @@ func applySimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, usage 
 	}
 
 	if hit <= 0 && creation <= 0 {
-		return extraContent, usage, false
+		return nil
 	}
 
-	switch semantic {
-	case "anthropic":
-		// anthropic 语义：注入的 hit+creation 必须从 PromptTokens 扣掉，否则重复计费。
-		remaining := usage.PromptTokens - hit - creation
+	plan := &relaycommon.SimulatedCachePlan{
+		Applied:      true,
+		BillingInput: billingInput,
+		HitTokens:    hit,
+		Creation5m:   creation5m,
+		Creation1h:   creation1h,
+		TTLClass:     ttlClass,
+	}
+	relayInfo.SimulatedCachePlan = plan
+	return plan
+}
+
+// ApplyPlanToClaudeUsage 按 plan 对 ClaudeUsage 做绝对赋值（anthropic 语义）：
+// InputTokens = max(0, BillingInput − hit − creation)；CacheReadInputTokens = hit；
+// CacheCreationInputTokens = creation；cache_creation.ephemeral_5m/1h 为拆分值
+// （两者之和 = 总量）。plan 或 usage 为 nil 时不改动。绝对赋值可重入、天然幂等。
+func ApplyPlanToClaudeUsage(plan *relaycommon.SimulatedCachePlan, usage *dto.ClaudeUsage) {
+	if plan == nil || usage == nil {
+		return
+	}
+	creation := plan.CreationTotal()
+	inputTokens := plan.BillingInput - plan.HitTokens - creation
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	usage.InputTokens = inputTokens
+	usage.CacheReadInputTokens = plan.HitTokens
+	usage.CacheCreationInputTokens = creation
+	usage.ClaudeCacheCreation5mTokens = plan.Creation5m
+	usage.ClaudeCacheCreation1hTokens = plan.Creation1h
+	if creation > 0 {
+		if usage.CacheCreation == nil {
+			usage.CacheCreation = &dto.ClaudeCacheCreationUsage{}
+		}
+		usage.CacheCreation.Ephemeral5mInputTokens = plan.Creation5m
+		usage.CacheCreation.Ephemeral1hInputTokens = plan.Creation1h
+	} else {
+		usage.CacheCreation = nil
+	}
+}
+
+// ApplyPlanToUsage 按 plan 对 dto.Usage 做绝对赋值，语义从 usage.UsageSemantic 判定
+// （为空时按 openai 兜底）。plan 或 usage 为 nil 时不改动。绝对赋值可重入、天然幂等。
+func ApplyPlanToUsage(plan *relaycommon.SimulatedCachePlan, usage *dto.Usage) {
+	ApplyPlanToUsageSemantic(plan, usage, usageSemanticFromUsage(nil, usage))
+}
+
+// ApplyPlanToUsageSemantic 与 ApplyPlanToUsage 相同，但显式传入已解析的语义
+// （anthropic / openai），供结算侧结合 relayInfo 格式判定空 semantic 的用法。
+func ApplyPlanToUsageSemantic(plan *relaycommon.SimulatedCachePlan, usage *dto.Usage, semantic string) {
+	if plan == nil || usage == nil {
+		return
+	}
+	creation := plan.CreationTotal()
+	semantic = strings.TrimSpace(semantic)
+	if semantic == "" {
+		semantic = dto.BillingUsageSemanticOpenAI
+	}
+
+	if semantic == dto.BillingUsageSemanticAnthropic {
+		remaining := plan.BillingInput - plan.HitTokens - creation
 		if remaining < 0 {
 			remaining = 0
 		}
 		usage.PromptTokens = remaining
-		usage.PromptTokensDetails.CachedTokens += hit
-		usage.PromptTokensDetails.CachedCreationTokens += creation
-		usage.ClaudeCacheCreation5mTokens += creation5m
-		usage.ClaudeCacheCreation1hTokens += creation1h
-	default:
+		usage.PromptTokensDetails.CachedTokens = plan.HitTokens
+		usage.PromptTokensDetails.CachedCreationTokens = creation
+	} else {
 		// openai 语义：不动 PromptTokens，text_quota.go 自动扣减 base。
-		usage.PromptTokensDetails.CachedTokens += hit
-		usage.PromptTokensDetails.CacheWriteTokens += creation
+		usage.PromptTokensDetails.CachedTokens = plan.HitTokens
+		usage.PromptTokensDetails.CacheWriteTokens = creation
 		// 同步 CachedCreationTokens（两者取大，不重复）。
-		if usage.PromptTokensDetails.CachedCreationTokens < usage.PromptTokensDetails.CacheWriteTokens {
-			usage.PromptTokensDetails.CachedCreationTokens = usage.PromptTokensDetails.CacheWriteTokens
+		if usage.PromptTokensDetails.CachedCreationTokens < creation {
+			usage.PromptTokensDetails.CachedCreationTokens = creation
 		}
-		usage.ClaudeCacheCreation5mTokens += creation5m
-		usage.ClaudeCacheCreation1hTokens += creation1h
 		// 标记 openai 语义，避免本地注入的 5m/1h 字段被误判为 legacy Claude-derived usage
 		// （legacy 检测器依赖空 source/semantic + Claude 拆分字段）。
 		if usage.UsageSemantic == "" {
 			usage.UsageSemantic = dto.BillingUsageSemanticOpenAI
 		}
 	}
+	usage.ClaudeCacheCreation5mTokens = plan.Creation5m
+	usage.ClaudeCacheCreation1hTokens = plan.Creation1h
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+}
 
+// applySimulatedCacheCreation 是 PostTextConsumeQuota 内的模拟创建缓存钩子，
+// 在 applyStationCache 之前调用。返回追加日志后的 extraContent、改写后的 usage，
+// 以及模拟层是否生效（生效时调用方应跳过站内缓存注入，避免两套前缀折扣叠加）。
+func applySimulatedCacheCreation(relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) ([]string, *dto.Usage, bool) {
+	return applySimulatedCacheCreationChecked(relayInfo, usage, extraContent, isSimulatedCacheCreationEnabled)
+}
+
+// applySimulatedCacheCreationChecked 是内部实现，允许测试注入渠道开关判定函数。
+func applySimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string, enabled func(*relaycommon.RelayInfo) bool) ([]string, *dto.Usage, bool) {
+	if !shouldApplySimulatedCacheCreation(relayInfo) {
+		return extraContent, usage, false
+	}
+	if enabled == nil || !enabled(relayInfo) {
+		return extraContent, usage, false
+	}
+	if usage == nil {
+		usage = &dto.Usage{
+			PromptTokens:     relayInfo.GetEstimatePromptTokens(),
+			CompletionTokens: 0,
+			TotalTokens:      relayInfo.GetEstimatePromptTokens(),
+		}
+	}
+
+	semantic := usageSemanticFromUsage(relayInfo, usage)
+
+	// 已有出站阶段算好的 plan：直接同源写回 usage，不再读缓存、不再推进段。
+	if relayInfo.SimulatedCachePlan != nil {
+		plan := relayInfo.SimulatedCachePlan
+		ApplyPlanToUsageSemantic(plan, usage, semantic)
+		extraContent = append(extraContent, fmt.Sprintf(
+			"模拟缓存创建 %d tokens（5m %d / 1h %d），模拟缓存命中 %d tokens",
+			plan.CreationTotal(), plan.Creation5m, plan.Creation1h, plan.HitTokens,
+		))
+		return extraContent, usage, true
+	}
+
+	// 真实上游值优先：任一 cache 字段 > 0 整层跳过。
+	realCached := usage.PromptTokensDetails.CachedTokens
+	realCreationCached := usage.PromptTokensDetails.CachedCreationTokens
+	realCreationTotal := usage.PromptTokensDetails.CacheCreationTokensTotal()
+	realCreation5m := usage.ClaudeCacheCreation5mTokens
+	realCreation1h := usage.ClaudeCacheCreation1hTokens
+	if realCached > 0 || realCreationTotal > 0 || realCreation5m > 0 || realCreation1h > 0 {
+		return extraContent, usage, false
+	}
+
+	var billingInput int
+	if semantic == "anthropic" {
+		// anthropic：PromptTokens 不含 cache read/creation，输入总量 = prompt + read + creation。
+		billingInput = usage.PromptTokens + realCached + realCreationCached
+	} else {
+		// openai：prompt_tokens 已包含 cached 与 cache-write，直接取 PromptTokens。
+		billingInput = usage.PromptTokens
+	}
+
+	plan := planSimulatedCacheCreationChecked(relayInfo, enabled, billingInput, realCached, realCreationTotal, realCreation5m, realCreation1h)
+	if plan == nil {
+		return extraContent, usage, false
+	}
+
+	ApplyPlanToUsageSemantic(plan, usage, semantic)
 	extraContent = append(extraContent, fmt.Sprintf(
 		"模拟缓存创建 %d tokens（5m %d / 1h %d），模拟缓存命中 %d tokens",
-		creation, creation5m, creation1h, hit,
+		plan.CreationTotal(), plan.Creation5m, plan.Creation1h, plan.HitTokens,
 	))
 	return extraContent, usage, true
 }

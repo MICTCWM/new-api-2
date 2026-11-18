@@ -81,6 +81,33 @@ type TokenCountMeta struct {
 	estimatePromptTokens int
 }
 
+// SimulatedCachePlan 是一次请求的模拟缓存创建规划：同一份 hit / creation
+// （含 5m / 1h 拆分）同时用于客户端响应 JSON 与 PostTextConsumeQuota 计费，
+// 保证展示与计费完全同源。类型放在 relay/common 以避免 service ↔ relay 循环依赖；
+// service 包通过类型别名对外暴露同名类型。nil 表示尚未规划或不适用。
+type SimulatedCachePlan struct {
+	// Applied 表示该规划是否真正生效（命中或创建 > 0）。
+	Applied bool
+	// BillingInput 是规划时使用的上游输入总量：anthropic = upstream input_tokens；
+	// openai = prompt_tokens。
+	BillingInput int
+	// HitTokens 为模拟缓存命中（cache read）token 数。
+	HitTokens int
+	// Creation5m / Creation1h 为本次新建段按档位拆分的 token 数。
+	Creation5m int
+	Creation1h int
+	// TTLClass 为本次新建段档位（"5m"/"1h"），仅日志/调试用。
+	TTLClass string
+}
+
+// CreationTotal 返回本次模拟创建的 token 总量（5m + 1h）。
+func (p *SimulatedCachePlan) CreationTotal() int {
+	if p == nil {
+		return 0
+	}
+	return p.Creation5m + p.Creation1h
+}
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -195,6 +222,10 @@ type RelayInfo struct {
 
 	// convOptions caches the converter settings snapshot (see ConvOptions).
 	convOptions *convmeta.Options
+
+	// SimulatedCachePlan 缓存创建规划，首个拿到上游 usage 的出站时刻一次性计算，
+	// 响应改写与结算计费都从这份 plan 读数；json:"-" 确保不参与任何序列化。
+	SimulatedCachePlan *SimulatedCachePlan `json:"-"`
 
 	ThinkingContentInfo
 	TokenCountMeta

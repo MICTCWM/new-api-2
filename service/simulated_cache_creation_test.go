@@ -204,11 +204,14 @@ func TestSimulatedCacheCreationTTLExpiryAndRenewal(t *testing.T) {
 	t.Cleanup(func() { simulatedCacheCreationNow = savedNow })
 
 	content := repeatWord("gamma", 40)
-	relay := simTestRelay(7009, 8009, types.RelayFormatOpenAI, simOpenAIMessage(content))
+	// 每次请求使用独立 RelayInfo：plan 按请求生命周期幂等，跨请求的段续期由引擎完成。
+	newRelay := func() *relaycommon.RelayInfo {
+		return simTestRelay(7009, 8009, types.RelayFormatOpenAI, simOpenAIMessage(content))
+	}
 
 	// 首次建链（5m 档）。
 	usage := &dto.Usage{PromptTokens: 3000}
-	_, _, applied := applySimulatedCacheCreationChecked(relay, usage, []string{}, simEnabledAlways)
+	_, _, applied := applySimulatedCacheCreationChecked(newRelay(), usage, []string{}, simEnabledAlways)
 	require.True(t, applied)
 
 	key := simulatedCacheKey(8009, 7009, simTestModel)
@@ -221,7 +224,7 @@ func TestSimulatedCacheCreationTTLExpiryAndRenewal(t *testing.T) {
 	// 4 分钟后再次请求：命中且续期，过期时间被刷新到 now+5m。
 	simulatedCacheCreationNow = func() time.Time { return base.Add(4 * time.Minute) }
 	usage2 := &dto.Usage{PromptTokens: 3000}
-	_, out2, applied2 := applySimulatedCacheCreationChecked(relay, usage2, []string{}, simEnabledAlways)
+	_, out2, applied2 := applySimulatedCacheCreationChecked(newRelay(), usage2, []string{}, simEnabledAlways)
 	require.True(t, applied2)
 	assert.Greater(t, out2.PromptTokensDetails.CachedTokens, 0, "未过期应命中")
 
@@ -233,14 +236,14 @@ func TestSimulatedCacheCreationTTLExpiryAndRenewal(t *testing.T) {
 	// 距首次 6 分钟（已过原始 5m），但距续期 2 分钟，仍在续期窗口内 → 继续命中。
 	simulatedCacheCreationNow = func() time.Time { return base.Add(6 * time.Minute) }
 	usage3 := &dto.Usage{PromptTokens: 3000}
-	_, out3, applied3 := applySimulatedCacheCreationChecked(relay, usage3, []string{}, simEnabledAlways)
+	_, out3, applied3 := applySimulatedCacheCreationChecked(newRelay(), usage3, []string{}, simEnabledAlways)
 	require.True(t, applied3)
 	assert.Greater(t, out3.PromptTokensDetails.CachedTokens, 0, "续期窗口内继续命中")
 
 	// 推进到第二次续期之后：5m 段过期，命中归零，整条重建。
 	simulatedCacheCreationNow = func() time.Time { return base.Add(4 * time.Minute).Add(8 * time.Minute) }
 	usage4 := &dto.Usage{PromptTokens: 3000}
-	_, out4, applied4 := applySimulatedCacheCreationChecked(relay, usage4, []string{}, simEnabledAlways)
+	_, out4, applied4 := applySimulatedCacheCreationChecked(newRelay(), usage4, []string{}, simEnabledAlways)
 	require.True(t, applied4)
 	assert.Equal(t, 0, out4.PromptTokensDetails.CachedTokens, "过期后命中归零")
 	assert.Greater(t, out4.PromptTokensDetails.CacheWriteTokens, 0, "过期后重新创建")

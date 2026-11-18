@@ -3833,6 +3833,46 @@ export function ChannelMutateDrawer({
                       </ChannelModelsSection>
                     </div>
 
+                    {/* ── Billing ── */}
+                    <div className={sideDrawerSectionClassName()}>
+                      <CardHeading
+                        title={t('Billing')}
+                        icon={<Settings className='h-4 w-4' />}
+                        iconTone='chart-3'
+                      />
+                      <fieldset
+                        disabled={sensitiveLocked}
+                        className='disabled:opacity-60'
+                      >
+                        <div className='divide-border divide-y border-y'>
+                          <FormField
+                            control={form.control}
+                            name='simulated_cache_creation_enabled'
+                            render={({ field }) => (
+                              <FormItem className='flex items-center justify-between px-4 py-3'>
+                                <div className='space-y-0.5'>
+                                  <FormLabel>
+                                    {t('Simulate cache creation')}
+                                  </FormLabel>
+                                  <FormDescription>
+                                    {t(
+                                      'Only affects local billing and usage display; no cache parameters are sent upstream.'
+                                    )}
+                                  </FormDescription>
+                                </div>
+                                <FormControl>
+                                  <Switch
+                                    checked={field.value}
+                                    onCheckedChange={field.onChange}
+                                  />
+                                </FormControl>
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+                      </fieldset>
+                    </div>
+
                     <div
                       id={CHANNEL_EDITOR_SECTION_IDS.advanced}
                       className='scroll-mt-4'
@@ -4953,31 +4993,6 @@ export function ChannelMutateDrawer({
                                       <FormDescription>
                                         {t(
                                           'Apply the gateway station cache billing discount to text requests on this channel'
-                                        )}
-                                      </FormDescription>
-                                    </div>
-                                    <FormControl>
-                                      <Switch
-                                        checked={field.value}
-                                        onCheckedChange={field.onChange}
-                                      />
-                                    </FormControl>
-                                  </FormItem>
-                                )}
-                              />
-
-                              <FormField
-                                control={form.control}
-                                name='simulated_cache_creation_enabled'
-                                render={({ field }) => (
-                                  <FormItem className='flex items-center justify-between px-4 py-3'>
-                                    <div className='space-y-0.5'>
-                                      <FormLabel>
-                                        {t('Simulate cache creation')}
-                                      </FormLabel>
-                                      <FormDescription>
-                                        {t(
-                                          'Only affects local billing and usage display; no cache parameters are sent upstream.'
                                         )}
                                       </FormDescription>
                                     </div>

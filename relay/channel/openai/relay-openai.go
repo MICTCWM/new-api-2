@@ -184,6 +184,24 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		logger.LogError(c, fmt.Sprintf("error handling last response: %s, lastStreamData: [%s]", err.Error(), lastStreamData))
 	}
 
+	// 规划模拟缓存创建（openai 语义）。规划生效时注入 usage；若最后一帧自带 usage，
+	// 同步重写该帧的 usage 字段；网关补发的 final usage 帧在 HandleFinalResponse 从
+	// 注入后的 usage 构造。不新增/删除帧，不改动帧顺序。
+	if service.ValidUsage(usage) {
+		plan := service.PlanSimulatedCacheCreation(info,
+			usage.PromptTokens,
+			usage.PromptTokensDetails.CachedTokens,
+			usage.PromptTokensDetails.CacheCreationTokensTotal(),
+			usage.ClaudeCacheCreation5mTokens,
+			usage.ClaudeCacheCreation1hTokens)
+		if plan != nil {
+			service.ApplyPlanToUsage(plan, usage)
+			if rewritten, rewriteErr := relaycommon.ReplaceTopLevelUsageRawJSON([]byte(lastStreamData), usage); rewriteErr == nil {
+				lastStreamData = string(rewritten)
+			}
+		}
+	}
+
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		if shouldSendLastResp {
 			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
@@ -302,8 +320,26 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
 
+	// 规划模拟缓存创建（openai 语义：prompt_tokens 已含 cached 与 cache-write），
+	// 生效时绝对赋值到 simpleResponse.Usage；规划不生效时上游原值保持不变。
+	plan := service.PlanSimulatedCacheCreation(info,
+		simpleResponse.Usage.PromptTokens,
+		simpleResponse.Usage.PromptTokensDetails.CachedTokens,
+		simpleResponse.Usage.PromptTokensDetails.CacheCreationTokensTotal(),
+		simpleResponse.Usage.ClaudeCacheCreation5mTokens,
+		simpleResponse.Usage.ClaudeCacheCreation1hTokens)
+	if plan != nil {
+		service.ApplyPlanToUsage(plan, &simpleResponse.Usage)
+	}
+
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
+		if plan != nil && !forceFormat && !usageModified {
+			// 只替换原始 JSON 的 usage 字段，其余字节保持不变。
+			if rewritten, rewriteErr := relaycommon.ReplaceTopLevelUsageRawJSON(responseBody, &simpleResponse.Usage); rewriteErr == nil {
+				responseBody = rewritten
+			}
+		}
 		if usageModified {
 			var bodyMap map[string]interface{}
 			err = common.Unmarshal(responseBody, &bodyMap)
