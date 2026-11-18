@@ -698,6 +698,80 @@ func ratioQuota(usage *dto.Usage, isClaudeSemantic bool, modelRatio, completionR
 	return f
 }
 
+func TestBuildTieredTokenParams_GPT_With1hCacheCreation(t *testing.T) {
+	// Production shape (log id 212216): Chat/OpenAI semantic response carries
+	// cache_write_tokens=3854 plus ClaudeCacheCreation1hTokens=3854. The
+	// expression prices cc and cc1h separately, so 1h must not also stay in cc.
+	usage := &dto.Usage{
+		PromptTokens:     3854,
+		CompletionTokens: 8,
+		UsageSemantic:    "openai",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedCreationTokens: 3854,
+			CacheWriteTokens:     3854,
+		},
+		ClaudeCacheCreation1hTokens: 3854,
+	}
+	expr := `tier("base", p * 20 + c * 100 + cr * 2 + cc * 20 + cc1h * 40)`
+	usedVars := billingexpr.UsedVars(expr)
+	params := BuildTieredTokenParams(usage, false, usedVars)
+
+	assert.Equal(t, float64(0), params.P, "1h creation must be removed from p")
+	assert.Equal(t, float64(0), params.CC, "1h creation must not remain in cc")
+	assert.Equal(t, float64(3854), params.CC1h)
+
+	cost, _, err := billingexpr.RunExpr(expr, params)
+	require.NoError(t, err)
+	assert.Equal(t, float64(154960), cost, "0*20 + 8*100 + 3854*40")
+
+	// End-to-end quota path: cost / 1e6 * 500000 * 0.43 = 33316.4.
+	assert.InDelta(t, 33316.4, tieredQuota(expr, usage, false, 0.43), 0.01)
+}
+
+func TestBuildTieredTokenParams_GPT_WithMixed5mAnd1hCacheCreation(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 0,
+		UsageSemantic:    "openai",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedCreationTokens: 1000,
+			CacheWriteTokens:     1000,
+		},
+		ClaudeCacheCreation1hTokens: 400,
+	}
+	expr := `tier("base", p * 2 + cc * 3 + cc1h * 6)`
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(expr))
+
+	assert.Equal(t, float64(0), params.P)
+	assert.Equal(t, float64(600), params.CC)
+	assert.Equal(t, float64(400), params.CC1h)
+
+	cost, _, err := billingexpr.RunExpr(expr, params)
+	require.NoError(t, err)
+	assert.Equal(t, float64(4200), cost, "600*3 + 400*6")
+}
+
+func TestBuildTieredTokenParams_GPT_1hWithoutCC1hVarKeepsLegacyCC(t *testing.T) {
+	// If the expression does not price cc1h, keep the old behavior: all
+	// creation tokens are charged through cc.
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 0,
+		UsageSemantic:    "openai",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedCreationTokens: 1000,
+			CacheWriteTokens:     1000,
+		},
+		ClaudeCacheCreation1hTokens: 400,
+	}
+	expr := `tier("base", p * 2 + cc * 3)`
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(expr))
+
+	assert.Equal(t, float64(0), params.P)
+	assert.Equal(t, float64(1000), params.CC)
+	assert.Equal(t, float64(0), params.CC1h)
+}
+
 func TestBuildTieredTokenParams_GPT_WithCache(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     1000,
@@ -901,6 +975,9 @@ func TestBuildTieredTokenParams_Len_Claude(t *testing.T) {
 	// Claude: P is not reduced (isClaudeUsageSemantic = true)
 	if params.P != 5000 {
 		t.Fatalf("P = %f, want 5000 (no subtraction for Claude)", params.P)
+	}
+	if params.CC != 1000 || params.CC1h != 500 {
+		t.Fatalf("CC = %f, CC1h = %f, want 1000/500", params.CC, params.CC1h)
 	}
 }
 

@@ -26,12 +26,35 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	p := float64(usage.PromptTokens)
 	c := float64(usage.CompletionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
-	cc5m := float64(usage.PromptTokensDetails.CacheCreationTokensTotal())
+	ccTotal := float64(usage.PromptTokensDetails.CacheCreationTokensTotal())
+	cc5m := ccTotal
 	cc1h := float64(0)
 
-	if usage.UsageSemantic == "anthropic" {
+	if isClaudeUsageSemantic || usage.UsageSemantic == "anthropic" {
 		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
 		cc5m = float64(usage.ClaudeCacheCreation5mTokens)
+		// Some Claude-shaped responses only expose the aggregate creation
+		// count. Keep charging it as 5m instead of silently dropping it.
+		if cc5m == 0 && cc1h == 0 {
+			cc5m = ccTotal
+		}
+	} else if usedVars["cc1h"] {
+		// OpenAI/Chat semantics usually expose creation as one aggregate
+		// (cached_creation_tokens / cache_write_tokens). The simulated-cache
+		// layer additionally splits 1h writes into ClaudeCacheCreation1hTokens.
+		// When the expression prices cc1h separately, remove that slice from
+		// cc so the same tokens are not charged as both 5m and 1h.
+		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
+		if cc1h < 0 {
+			cc1h = 0
+		}
+		if cc1h > 0 {
+			if cc1h >= cc5m {
+				cc5m = 0
+			} else {
+				cc5m -= cc1h
+			}
+		}
 	}
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)
