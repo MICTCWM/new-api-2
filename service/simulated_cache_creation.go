@@ -35,11 +35,13 @@ type SimulatedCachePlan = relaycommon.SimulatedCachePlan
 // 不引入全局锁；并发下偶尔丢失一次段写入在模拟层可接受。
 
 const (
-	simulatedCacheCreationNamespace       = "new-api:simulated_cache_creation:v1"
-	simulatedCacheCreationMemoryCapacity  = 50_000
-	simulatedCacheCreationMaxSegments     = 32
-	simulatedCacheCreationMaxBytes        = 1 << 20 // 1 MiB
-	simulatedCacheCreationMinBillingInput = 1024
+	simulatedCacheCreationNamespace      = "new-api:simulated_cache_creation:v1"
+	simulatedCacheCreationMemoryCapacity = 50_000
+	simulatedCacheCreationMaxSegments    = 32
+	simulatedCacheCreationMaxBytes       = 1 << 20 // 1 MiB
+	// 256 对齐 Kimi 自动缓存的门槛（上一请求 prompt >256 才缓存）；DeepSeek 为 64，
+	// Claude/OpenAI 为 1024，Gemini 为 2048/4096。这里取主要对接的 Kimi 档。
+	simulatedCacheCreationMinBillingInput = 256
 	simulatedCacheCreationTTLClass5m      = "5m"
 	simulatedCacheCreationTTLClass1h      = "1h"
 	simulatedCacheCreationTTL5m           = 5 * time.Minute
@@ -428,7 +430,7 @@ func shouldApplySimulatedCacheCreation(relayInfo *relaycommon.RelayInfo) bool {
 
 // PlanSimulatedCacheCreation 是出站链路规划缓存创建的唯一入口：幂等（同一
 // RelayInfo 已有 plan 时直接返回旧值，绝不二次推进缓存段），开关关闭 / 非文本格式 /
-// 无消息 / billingInput <= 1024 / 任一真实 cache 值 > 0 时返回 nil。命中与创建的
+// 无消息 / billingInput <= 256 / 任一真实 cache 值 > 0 时返回 nil。命中与创建的
 // 算法、clamp、段推进全部复用第 1 轮引擎；本函数是唯一推进缓存段的地方。
 //
 // billingInput：anthropic = upstream input_tokens；openai = prompt_tokens。

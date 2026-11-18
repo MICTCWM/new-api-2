@@ -64,12 +64,12 @@ func TestPlanSimulatedCacheCreationRealUpstreamValueWins(t *testing.T) {
 func TestPlanSimulatedCacheCreationBillingInputBoundary(t *testing.T) {
 	simCleanupCache(t)
 	relay := simTestRelay(7104, 8104, types.RelayFormatOpenAI, simOpenAIMessage("delta "+repeatWord("z", 300)))
-	assert.Nil(t, planSimulatedCacheCreationChecked(relay, simEnabledAlways, 1024, 0, 0, 0, 0))
+	assert.Nil(t, planSimulatedCacheCreationChecked(relay, simEnabledAlways, 256, 0, 0, 0, 0))
 
 	relay2 := simTestRelay(7105, 8105, types.RelayFormatOpenAI, simOpenAIMessage("epsilon "+repeatWord("z", 300)))
-	plan := planSimulatedCacheCreationChecked(relay2, simEnabledAlways, 1025, 0, 0, 0, 0)
+	plan := planSimulatedCacheCreationChecked(relay2, simEnabledAlways, 257, 0, 0, 0, 0)
 	require.NotNil(t, plan)
-	assert.Equal(t, 1025, plan.BillingInput)
+	assert.Equal(t, 257, plan.BillingInput)
 }
 
 func TestApplyPlanToClaudeUsageNumbers(t *testing.T) {

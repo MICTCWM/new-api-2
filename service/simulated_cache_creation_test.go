@@ -137,25 +137,25 @@ func TestSimulatedCacheCreationSkipsEmptyAndOversized(t *testing.T) {
 	})
 }
 
-// ---------- 1024 边界 ----------
+// ---------- 256 边界（对齐 Kimi 自动缓存 >256 token） ----------
 
 func TestSimulatedCacheCreationBillingInputBoundary(t *testing.T) {
 	simCleanupCache(t)
 
-	t.Run("1024 不创建", func(t *testing.T) {
+	t.Run("256 不创建", func(t *testing.T) {
 		relay := simTestRelay(7006, 8006, types.RelayFormatOpenAI, simOpenAIMessage("hello "+repeatWord("z", 300)))
-		usage := &dto.Usage{PromptTokens: 1024, CompletionTokens: 0}
+		usage := &dto.Usage{PromptTokens: 256, CompletionTokens: 0}
 		_, out, applied := applySimulatedCacheCreationChecked(relay, usage, []string{}, simEnabledAlways)
-		assert.False(t, applied, "billingInput == 1024 不触发")
-		assert.Equal(t, 1024, out.PromptTokens)
+		assert.False(t, applied, "billingInput == 256 不触发")
+		assert.Equal(t, 256, out.PromptTokens)
 		assert.Equal(t, 0, out.PromptTokensDetails.CachedTokens)
 	})
 
-	t.Run("1025 创建", func(t *testing.T) {
+	t.Run("257 创建", func(t *testing.T) {
 		relay := simTestRelay(7007, 8007, types.RelayFormatOpenAI, simOpenAIMessage("hello "+repeatWord("z", 300)))
-		usage := &dto.Usage{PromptTokens: 1025, CompletionTokens: 0}
+		usage := &dto.Usage{PromptTokens: 257, CompletionTokens: 0}
 		extra, out, applied := applySimulatedCacheCreationChecked(relay, usage, []string{}, simEnabledAlways)
-		assert.True(t, applied, "billingInput == 1025 触发")
+		assert.True(t, applied, "billingInput == 257 触发")
 		assert.Greater(t, out.PromptTokensDetails.CacheWriteTokens, 0)
 		assert.NotEmpty(t, extra)
 	})
