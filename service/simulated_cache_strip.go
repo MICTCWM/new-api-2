@@ -117,7 +117,7 @@ func marshalSimulatedCacheJSON(v any) (json.RawMessage, error) {
 // StripSimulatedCacheTTLForUpstream 只在渠道开启模拟缓存时剥离 TTL 字段。
 // info.Request 仍保留原始请求，供本地 TTL 判定与响应改写使用。
 func StripSimulatedCacheTTLForUpstream(jsonData []byte, info *relaycommon.RelayInfo) ([]byte, error) {
-	if info == nil || !info.ChannelOtherSettings.SimulatedCacheCreationEnabled {
+	if !simulatedCacheCreationRuntimeEnabled(info) {
 		return jsonData, nil
 	}
 	out, changed, err := StripSimulatedCacheTTLFromJSON(jsonData)
@@ -138,7 +138,7 @@ func BuildSimulatedCachePassThroughBody(c *gin.Context, info *relaycommon.RelayI
 	if err != nil {
 		return nil, nil, err
 	}
-	if info == nil || !info.ChannelOtherSettings.SimulatedCacheCreationEnabled {
+	if !simulatedCacheCreationRuntimeEnabled(info) {
 		return common.NewReplayableBodyReader(storage), nil, nil
 	}
 	raw, err := storage.Bytes()

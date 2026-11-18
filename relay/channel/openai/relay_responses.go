@@ -34,9 +34,6 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
-
 	// compute usage
 	usage := dto.Usage{}
 	if responsesResponse.Usage != nil {
@@ -45,8 +42,14 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		usage.TotalTokens = responsesResponse.Usage.TotalTokens
 		if responsesResponse.Usage.InputTokensDetails != nil {
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
+			usage.PromptTokensDetails.CachedCreationTokens = responsesResponse.Usage.InputTokensDetails.CachedCreationTokens
 			usage.PromptTokensDetails.CacheWriteTokens = responsesResponse.Usage.InputTokensDetails.CacheWriteTokens
+			usage.PromptTokensDetails.TextTokens = responsesResponse.Usage.InputTokensDetails.TextTokens
+			usage.PromptTokensDetails.AudioTokens = responsesResponse.Usage.InputTokensDetails.AudioTokens
+			usage.PromptTokensDetails.ImageTokens = responsesResponse.Usage.InputTokensDetails.ImageTokens
 		}
+		usage.ClaudeCacheCreation5mTokens = responsesResponse.Usage.ClaudeCacheCreation5mTokens
+		usage.ClaudeCacheCreation1hTokens = responsesResponse.Usage.ClaudeCacheCreation1hTokens
 	}
 	// Count actual tool invocations from Output (not tool declarations).
 	for _, output := range responsesResponse.Output {
@@ -68,6 +71,28 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	}
 	imageCounter.Commit(info)
+
+	// 规划模拟缓存创建（Responses 语义）。plan 与响应 usage、结算侧同源；
+	// 未生效时保留上游响应字节不变。
+	if service.ValidUsage(&usage) {
+		plan := service.PlanSimulatedCacheCreation(info,
+			usage.PromptTokens,
+			usage.PromptTokensDetails.CachedTokens,
+			usage.PromptTokensDetails.CacheCreationTokensTotal(),
+			usage.ClaudeCacheCreation5mTokens,
+			usage.ClaudeCacheCreation1hTokens)
+		if plan != nil {
+			service.ApplyPlanToResponsesUsage(plan, &usage)
+			if rewritten, rewriteErr := relaycommon.ReplaceResponsesUsageRawJSON(responseBody, &usage); rewriteErr == nil {
+				responseBody = rewritten
+			} else {
+				logger.LogError(c, "rewrite responses usage failed: "+rewriteErr.Error())
+			}
+		}
+	}
+
+	// 写入响应体必须在 usage 改写之后，保证客户端看到模拟缓存字段。
+	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return &usage, nil
 }
@@ -94,7 +119,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
-		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed", "response.done":
 			if streamResponse.Response != nil {
@@ -110,7 +134,29 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					}
 					if streamResponse.Response.Usage.InputTokensDetails != nil {
 						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
+						usage.PromptTokensDetails.CachedCreationTokens = streamResponse.Response.Usage.InputTokensDetails.CachedCreationTokens
 						usage.PromptTokensDetails.CacheWriteTokens = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokens
+						usage.PromptTokensDetails.TextTokens = streamResponse.Response.Usage.InputTokensDetails.TextTokens
+						usage.PromptTokensDetails.AudioTokens = streamResponse.Response.Usage.InputTokensDetails.AudioTokens
+						usage.PromptTokensDetails.ImageTokens = streamResponse.Response.Usage.InputTokensDetails.ImageTokens
+					}
+					usage.ClaudeCacheCreation5mTokens = streamResponse.Response.Usage.ClaudeCacheCreation5mTokens
+					usage.ClaudeCacheCreation1hTokens = streamResponse.Response.Usage.ClaudeCacheCreation1hTokens
+				}
+				if service.ValidUsage(usage) {
+					plan := service.PlanSimulatedCacheCreation(info,
+						usage.PromptTokens,
+						usage.PromptTokensDetails.CachedTokens,
+						usage.PromptTokensDetails.CacheCreationTokensTotal(),
+						usage.ClaudeCacheCreation5mTokens,
+						usage.ClaudeCacheCreation1hTokens)
+					if plan != nil {
+						service.ApplyPlanToResponsesUsage(plan, usage)
+						if rewritten, rewriteErr := relaycommon.ReplaceResponsesEventUsageRawJSON(data, usage); rewriteErr == nil {
+							data = rewritten
+						} else {
+							logger.LogError(c, "rewrite responses stream usage failed: "+rewriteErr.Error())
+						}
 					}
 				}
 				if !imageCommitted {
@@ -156,7 +202,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				}
 			}
 		}
+		// 在 completed usage 改写之后再发送，确保客户端收到模拟缓存字段。
+		sendResponsesStreamData(c, streamResponse, data)
 		service.UpdateConnectionOutputText(info.RequestId, responseTextBuilder.String(), info.UpstreamModelName, 0)
+
 	})
 
 	if usage.CompletionTokens == 0 {

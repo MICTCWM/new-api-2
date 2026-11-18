@@ -237,3 +237,23 @@ func TestOaiChatToResponsesBufferedStreamHandlerHidesCommandThinking(t *testing.
 func ptrString(s string) *string {
 	return &s
 }
+
+func TestOaiChatToResponsesHandlerCleansUsage(t *testing.T) {
+	c, recorder, resp, info := newCommandResponsesTestContext(t, commandThinkingChatJSON, false, false)
+	_, apiErr := OaiChatToResponsesHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	body := recorder.Body.String()
+	require.NotContains(t, body, "prompt_tokens")
+	require.NotContains(t, body, "billing_usage")
+	require.Contains(t, body, "input_tokens")
+}
+
+func TestOaiChatToResponsesBufferedHandlerCleansUsage(t *testing.T) {
+	c, recorder, resp, info := newCommandResponsesTestContext(t, commandThinkingChatSSE, false, false)
+	_, apiErr := OaiChatToResponsesBufferedStreamHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	body := recorder.Body.String()
+	require.NotContains(t, body, "prompt_tokens")
+	require.NotContains(t, body, "billing_usage")
+	require.Contains(t, body, "input_tokens")
+}

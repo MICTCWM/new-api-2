@@ -106,6 +106,18 @@ func simulatedCacheCreationEnabledFromJSON(otherSettings string) bool {
 	return settings.SimulatedCacheCreationEnabled
 }
 
+// simulatedCacheCreationRuntimeEnabled 是请求内的快速判定：渠道开关打开，且
+// 未禁用协议转换。协议转换关闭时，模拟缓存不参与请求剥离、响应注入与计费。
+func simulatedCacheCreationRuntimeEnabled(relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo == nil || relayInfo.ChannelMeta == nil {
+		return false
+	}
+	if !relayInfo.ChannelOtherSettings.SimulatedCacheCreationEnabled {
+		return false
+	}
+	return !relayInfo.ChannelOtherSettings.DisableProtocolConversion
+}
+
 // isSimulatedCacheCreationEnabled 读取渠道开关，非法 JSON / 渠道缺失视为关闭。
 func isSimulatedCacheCreationEnabled(relayInfo *relaycommon.RelayInfo) bool {
 	if relayInfo == nil {
@@ -119,7 +131,10 @@ func isSimulatedCacheCreationEnabled(relayInfo *relaycommon.RelayInfo) bool {
 	if err != nil || channel == nil {
 		return false
 	}
-	return simulatedCacheCreationEnabledFromJSON(channel.OtherSettings)
+	if !simulatedCacheCreationEnabledFromJSON(channel.OtherSettings) {
+		return false
+	}
+	return simulatedCacheCreationRuntimeEnabled(relayInfo)
 }
 
 // simulatedCacheKey 构建缓存键：channelId:userId:model，由命名空间统一加前缀。
@@ -189,8 +204,11 @@ func simulatedCachePrefixText(relayInfo *relaycommon.RelayInfo) (string, bool) {
 			parts = append(parts, toolsJSON)
 		}
 	case *dto.OpenAIResponsesRequest:
-		if len(req.Tools) > 0 {
-			parts = append(parts, string(req.Tools))
+		if toolsJSON := simulatedCacheToolsJSON(req.Tools); toolsJSON != "" {
+			parts = append(parts, toolsJSON)
+		}
+		if instructions := responsesInstructionsToText(req.Instructions); instructions != "" {
+			parts = append(parts, instructions)
 		}
 	}
 	parts = append(parts, strings.Join(msgs, "\n"))
@@ -599,6 +617,34 @@ func ApplyPlanToClaudeUsage(plan *relaycommon.SimulatedCachePlan, usage *dto.Cla
 // （为空时按 openai 兜底）。plan 或 usage 为 nil 时不改动。绝对赋值可重入、天然幂等。
 func ApplyPlanToUsage(plan *relaycommon.SimulatedCachePlan, usage *dto.Usage) {
 	ApplyPlanToUsageSemantic(plan, usage, usageSemanticFromUsage(nil, usage))
+}
+
+// ApplyPlanToResponsesUsage 将同一份 plan 写回 Responses 语义的 usage：
+// input_tokens 仍是含缓存的总量，input_tokens_details 补充 cached_tokens /
+// cache_write_tokens；同时保留 prompt_tokens_details，供后续 text_quota 结算复用。
+func ApplyPlanToResponsesUsage(plan *relaycommon.SimulatedCachePlan, usage *dto.Usage) {
+	if plan == nil || usage == nil {
+		return
+	}
+	ApplyPlanToUsageSemantic(plan, usage, dto.BillingUsageSemanticOpenAI)
+	if usage.InputTokens == 0 {
+		usage.InputTokens = plan.BillingInput
+	}
+	if usage.OutputTokens == 0 {
+		usage.OutputTokens = usage.CompletionTokens
+	}
+	if usage.InputTokensDetails == nil {
+		usage.InputTokensDetails = &dto.InputTokenDetails{}
+	}
+	usage.InputTokensDetails.CachedTokens = plan.HitTokens
+	usage.InputTokensDetails.CacheWriteTokens = plan.CreationTotal()
+	usage.InputTokensDetails.CachedCreationTokens = plan.CreationTotal()
+	usage.PromptTokensDetails.CachedTokens = plan.HitTokens
+	usage.PromptTokensDetails.CacheWriteTokens = plan.CreationTotal()
+	usage.PromptTokensDetails.CachedCreationTokens = plan.CreationTotal()
+	usage.ClaudeCacheCreation5mTokens = plan.Creation5m
+	usage.ClaudeCacheCreation1hTokens = plan.Creation1h
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 }
 
 // ApplyPlanToUsageSemantic 与 ApplyPlanToUsage 相同，但显式传入已解析的语义

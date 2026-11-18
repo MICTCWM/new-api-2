@@ -65,11 +65,23 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		text := service.ExtractOutputTextFromResponses(responsesResp)
 		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
 		responsesResp.Usage = relayconvert.UsageFromChatUsage(usage)
+	} else if plan := service.PlanSimulatedCacheCreation(info,
+		usage.PromptTokens,
+		usage.PromptTokensDetails.CachedTokens,
+		usage.PromptTokensDetails.CacheCreationTokensTotal(),
+		usage.ClaudeCacheCreation5mTokens,
+		usage.ClaudeCacheCreation1hTokens); plan != nil {
+		// Chat→Responses 转换路径：plan 写入 Responses usage 后再序列化响应。
+		service.ApplyPlanToResponsesUsage(plan, usage)
+		responsesResp.Usage = relayconvert.UsageFromChatUsage(usage)
 	}
 
 	responseBody, err := common.Marshal(responsesResp)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+	}
+	if cleaned, cleanErr := relaycommon.ReplaceResponsesUsageRawJSONClean(responseBody, usage); cleanErr == nil {
+		responseBody = cleaned
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
@@ -101,6 +113,20 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 			return false
+		}
+		// 转换器生成的 completed/incomplete 事件会把 dto.Usage 全量序列化，
+		// 从而带出 Chat 的 prompt_tokens 等字段。这里在发送前用干净的官方
+		// Responses usage 形态覆盖，避免客户端看到混合 schema。
+		switch event.Type {
+		case "response.completed", "response.incomplete", "response.done":
+			if event.Payload.Response != nil && event.Payload.Response.Usage != nil {
+				if cleaned, cleanErr := relaycommon.ReplaceResponsesEventUsageRawJSONClean(string(data), event.Payload.Response.Usage); cleanErr == nil {
+					data = []byte(cleaned)
+				} else {
+					streamErr = types.NewOpenAIError(cleanErr, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+					return false
+				}
+			}
 		}
 		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data))
 		streamBegan = true
@@ -168,6 +194,15 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	usage := state.Usage()
 	if usage == nil || usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		state.SetUsage(usage)
+	}
+	if plan := service.PlanSimulatedCacheCreation(info,
+		usage.PromptTokens,
+		usage.PromptTokensDetails.CachedTokens,
+		usage.PromptTokensDetails.CacheCreationTokensTotal(),
+		usage.ClaudeCacheCreation5mTokens,
+		usage.ClaudeCacheCreation1hTokens); plan != nil {
+		service.ApplyPlanToResponsesUsage(plan, usage)
 		state.SetUsage(usage)
 	}
 
@@ -345,6 +380,15 @@ func OaiChatToResponsesBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		state.SetUsage(usage)
 	}
+	if plan := service.PlanSimulatedCacheCreation(info,
+		usage.PromptTokens,
+		usage.PromptTokensDetails.CachedTokens,
+		usage.PromptTokensDetails.CacheCreationTokensTotal(),
+		usage.ClaudeCacheCreation5mTokens,
+		usage.ClaudeCacheCreation1hTokens); plan != nil {
+		service.ApplyPlanToResponsesUsage(plan, usage)
+		state.SetUsage(usage)
+	}
 
 	responsesResp := &dto.OpenAIResponsesResponse{
 		ID:        responseID,
@@ -360,6 +404,9 @@ func OaiChatToResponsesBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 	responseBody, err := common.Marshal(responsesResp)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+	}
+	if cleaned, cleanErr := relaycommon.ReplaceResponsesUsageRawJSONClean(responseBody, usage); cleanErr == nil {
+		responseBody = cleaned
 	}
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return usage, nil

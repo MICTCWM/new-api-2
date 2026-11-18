@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -67,6 +68,62 @@ func TestOaiResponsesHandlerCountsOutputCallsNotDeclarations(t *testing.T) {
 	require.Contains(t, info.ResponsesUsageInfo.BuiltInTools, "priced_fn")
 	assert.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools["priced_fn"].CallCount)
 	assert.NotContains(t, info.ResponsesUsageInfo.BuiltInTools, "unpriced_fn")
+}
+
+func TestOaiResponsesHandlerInjectsSimulatedCacheUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body, err := common.Marshal(dto.OpenAIResponsesResponse{
+		ID:     "resp_sim",
+		Object: "response",
+		Status: []byte(`"completed"`),
+		Usage: &dto.Usage{
+			InputTokens:  3000,
+			OutputTokens: 5,
+			TotalTokens:  3005,
+		},
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName:         "kimi-k3",
+		FinalRequestRelayFormat: types.RelayFormatOpenAIResponses,
+		ChannelMeta:             &relaycommon.ChannelMeta{ChannelId: 7},
+	}
+	info.ChannelOtherSettings.SimulatedCacheCreationEnabled = true
+	info.SimulatedCachePlan = &relaycommon.SimulatedCachePlan{
+		Applied:      true,
+		BillingInput: 3000,
+		HitTokens:    100,
+		Creation5m:   60,
+		Creation1h:   40,
+	}
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+	usage, apiErr := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 3000, usage.InputTokens)
+	assert.Equal(t, 100, usage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, 100, usage.InputTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 60, usage.ClaudeCacheCreation5mTokens)
+	assert.Equal(t, 40, usage.ClaudeCacheCreation1hTokens)
+
+	var got dto.OpenAIResponsesResponse
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &got))
+	require.NotNil(t, got.Usage)
+	require.NotNil(t, got.Usage.InputTokensDetails)
+	assert.Equal(t, 100, got.Usage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, 100, got.Usage.InputTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 3000, got.Usage.InputTokens)
+	assert.Equal(t, 5, got.Usage.OutputTokens)
+	assert.Equal(t, 3005, got.Usage.TotalTokens)
 }
 
 func TestOaiResponsesHandlerDeclaredToolsWithoutOutputCountZero(t *testing.T) {
@@ -192,6 +249,46 @@ func TestOaiResponsesHandlerIncompleteStatusCommitsZeroImageGeneration(t *testin
 	_, apiErr := OaiResponsesHandler(c, info, resp)
 	require.Nil(t, apiErr)
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
+}
+
+func TestOaiResponsesStreamHandlerInjectsSimulatedCacheUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	event := `{"type":"response.completed","response":{"id":"resp_sim","usage":{"input_tokens":3000,"output_tokens":5,"total_tokens":3005},"output":[]}}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Set(common.RequestIdKey, "responses-sim-cache-stream-test")
+	info := &relaycommon.RelayInfo{
+		OriginModelName:         "kimi-k3",
+		FinalRequestRelayFormat: types.RelayFormatOpenAIResponses,
+		DisablePing:             true,
+		ChannelMeta:             &relaycommon.ChannelMeta{ChannelId: 7, UpstreamModelName: "kimi-k3"},
+	}
+	info.ChannelOtherSettings.SimulatedCacheCreationEnabled = true
+	info.SimulatedCachePlan = &relaycommon.SimulatedCachePlan{
+		Applied:      true,
+		BillingInput: 3000,
+		HitTokens:    100,
+		Creation5m:   60,
+		Creation1h:   40,
+	}
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("data: " + event + "\n\ndata: [DONE]\n\n")),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 100, usage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, 100, usage.InputTokensDetails.CacheWriteTokens)
+	assert.Contains(t, w.Body.String(), `"cached_tokens":100`)
+	assert.Contains(t, w.Body.String(), `"cache_write_tokens":100`)
 }
 
 func runResponsesImageBillingStream(t *testing.T, events ...string) *relaycommon.RelayInfo {

@@ -95,7 +95,7 @@ type ChannelOtherSettings struct {
 	AllowIncludeObfuscation               bool                  `json:"allow_include_obfuscation,omitempty"`        // 是否允许 stream_options.include_obfuscation 透传（默认过滤以避免关闭流混淆保护）
 	DisableTaskPollingSleep               bool                  `json:"disable_task_polling_sleep,omitempty"`       // 是否跳过异步任务轮询间隔
 	StationCacheEnabled                   bool                  `json:"station_cache_enabled,omitempty"`            // 是否启用站内缓存（上游不提供 prompt 缓存时网关自建）
-	SimulatedCacheCreationEnabled         bool                  `json:"simulated_cache_creation_enabled,omitempty"` // 是否启用「模拟创建缓存」：仅在本地计费/用量展示上模拟上游缓存创建，不修改上游请求与响应
+	SimulatedCacheCreationEnabled         bool                  `json:"simulated_cache_creation_enabled,omitempty"` // 是否启用「模拟创建缓存」：网关读取 TTL 后从上游请求剥离，由本地模拟命中/创建并回写响应 usage 与计费
 	VideoFrameExtractionEnabled           bool                  `json:"video_frame_extraction_enabled,omitempty"`   // 是否将 Chat/Responses 视频输入抽帧为图片
 	DisableProtocolConversion             bool                  `json:"disable_protocol_conversion,omitempty"`      // 是否禁用 Chat/Responses 自动协议转换
 	AwsKeyType                            AwsKeyType            `json:"aws_key_type,omitempty"`

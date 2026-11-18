@@ -59,6 +59,16 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
 		chatResp.Usage = *usage
 	}
+	if plan := service.PlanSimulatedCacheCreation(info,
+		usage.PromptTokens,
+		usage.PromptTokensDetails.CachedTokens,
+		usage.PromptTokensDetails.CacheCreationTokensTotal(),
+		usage.ClaudeCacheCreation5mTokens,
+		usage.ClaudeCacheCreation1hTokens); plan != nil {
+		// Responses→Chat 转换路径：plan 写回 Chat usage 后再序列化响应。
+		service.ApplyPlanToUsage(plan, usage)
+		chatResp.Usage = *usage
+	}
 
 	responseValue := any(chatResp)
 	if info.RelayFormat != types.RelayFormatOpenAI {
@@ -165,6 +175,15 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 	if usage == nil || usage.TotalTokens == 0 {
 		text := service.ExtractOutputTextFromResponses(finalResponse)
 		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		chatResp.Usage = *usage
+	}
+	if plan := service.PlanSimulatedCacheCreation(info,
+		usage.PromptTokens,
+		usage.PromptTokensDetails.CachedTokens,
+		usage.PromptTokensDetails.CacheCreationTokensTotal(),
+		usage.ClaudeCacheCreation5mTokens,
+		usage.ClaudeCacheCreation1hTokens); plan != nil {
+		service.ApplyPlanToUsage(plan, usage)
 		chatResp.Usage = *usage
 	}
 
@@ -313,6 +332,15 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	usage := state.Usage()
 	if usage == nil || usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		state.SetUsage(usage)
+	}
+	if plan := service.PlanSimulatedCacheCreation(info,
+		usage.PromptTokens,
+		usage.PromptTokensDetails.CachedTokens,
+		usage.PromptTokensDetails.CacheCreationTokensTotal(),
+		usage.ClaudeCacheCreation5mTokens,
+		usage.ClaudeCacheCreation1hTokens); plan != nil {
+		service.ApplyPlanToUsage(plan, usage)
 		state.SetUsage(usage)
 	}
 

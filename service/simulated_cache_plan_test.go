@@ -1,10 +1,12 @@
 package service
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
@@ -61,6 +63,29 @@ func TestPlanSimulatedCacheCreationRealUpstreamValueWins(t *testing.T) {
 	}
 }
 
+func TestSimulatedCachePrefixIncludesResponsesInstructions(t *testing.T) {
+	req := &dto.OpenAIResponsesRequest{
+		Model:        simTestModel,
+		Input:        json.RawMessage(`"hi"`),
+		Instructions: json.RawMessage(`"SYSTEM-STABLE-PROMPT"`),
+	}
+	relay := simTestRelay(7110, 8110, types.RelayFormatOpenAIResponses, req)
+	text, ok := simulatedCachePrefixText(relay)
+	require.True(t, ok)
+	assert.Contains(t, text, "SYSTEM-STABLE-PROMPT")
+	assert.Contains(t, text, "hi")
+
+	req2 := &dto.OpenAIResponsesRequest{
+		Model:        simTestModel,
+		Input:        json.RawMessage(`"hi"`),
+		Instructions: json.RawMessage(`"OTHER-PROMPT"`),
+	}
+	relay2 := simTestRelay(7111, 8111, types.RelayFormatOpenAIResponses, req2)
+	text2, ok := simulatedCachePrefixText(relay2)
+	require.True(t, ok)
+	assert.NotEqual(t, text, text2)
+}
+
 func TestPlanSimulatedCacheCreationBillingInputBoundary(t *testing.T) {
 	simCleanupCache(t)
 	relay := simTestRelay(7104, 8104, types.RelayFormatOpenAI, simOpenAIMessage("delta "+repeatWord("z", 300)))
@@ -115,6 +140,44 @@ func TestApplyPlanToUsageAnthropicDeductsPrompt(t *testing.T) {
 	assert.Equal(t, 60, usage.ClaudeCacheCreation5mTokens)
 	assert.Equal(t, 40, usage.ClaudeCacheCreation1hTokens)
 	assert.Equal(t, 805, usage.TotalTokens)
+}
+
+func TestApplyPlanToResponsesUsageNumbers(t *testing.T) {
+	plan := &SimulatedCachePlan{BillingInput: 1000, HitTokens: 100, Creation5m: 60, Creation1h: 40}
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		InputTokens:      1000,
+		CompletionTokens: 5,
+		OutputTokens:     5,
+		InputTokensDetails: &dto.InputTokenDetails{
+			TextTokens: 900,
+		},
+	}
+
+	ApplyPlanToResponsesUsage(plan, usage)
+
+	assert.Equal(t, 1000, usage.InputTokens, "Responses input_tokens 仍是含缓存总量")
+	assert.Equal(t, 5, usage.OutputTokens)
+	assert.Equal(t, 1005, usage.TotalTokens)
+	require.NotNil(t, usage.InputTokensDetails)
+	assert.Equal(t, 100, usage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, 100, usage.InputTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 100, usage.InputTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 100, usage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 60, usage.ClaudeCacheCreation5mTokens)
+	assert.Equal(t, 40, usage.ClaudeCacheCreation1hTokens)
+}
+
+func TestSimulatedCacheRuntimeRespectsProtocolConversionSwitch(t *testing.T) {
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	info.ChannelOtherSettings.SimulatedCacheCreationEnabled = false
+	assert.False(t, simulatedCacheCreationRuntimeEnabled(info))
+
+	info.ChannelOtherSettings.SimulatedCacheCreationEnabled = true
+	assert.True(t, simulatedCacheCreationRuntimeEnabled(info))
+
+	info.ChannelOtherSettings.DisableProtocolConversion = true
+	assert.False(t, simulatedCacheCreationRuntimeEnabled(info))
 }
 
 // 展示=计费：响应侧按 plan 注入的字段，必须与结算 calculateTextQuotaSummary 读出的

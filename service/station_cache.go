@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -293,6 +294,31 @@ func responsesInputToText(in dto.Input) string {
 		role = "user"
 	}
 	return role + "\n" + content
+}
+
+// responsesInstructionsToText 将 Responses 请求的顶层 instructions 归一化为前缀文本。
+// instructions 是系统级前缀，必须参与缓存匹配，否则不同 system prompt 会错误命中同一条缓存。
+func responsesInstructionsToText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := common.Unmarshal(raw, &s); err == nil {
+		return strings.TrimSpace("system\n" + s)
+	}
+	var inputs []dto.Input
+	if err := common.Unmarshal(raw, &inputs); err == nil {
+		parts := make([]string, 0, len(inputs))
+		for _, in := range inputs {
+			if txt := responsesInputToText(in); txt != "" {
+				parts = append(parts, txt)
+			}
+		}
+		if len(parts) > 0 {
+			return "system\n" + strings.Join(parts, "\n")
+		}
+	}
+	return ""
 }
 
 // responsesToMessages 将 Responses 请求的 Input 拆成逐条消息的规范化文本。

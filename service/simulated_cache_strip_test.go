@@ -19,6 +19,8 @@ func TestStripSimulatedCacheTTLFromJSON_Chat(t *testing.T) {
 		"model":"kimi-k3",
 		"prompt_cache_options":{"mode":"implicit","ttl":"1h"},
 		"prompt_cache_retention":"24h",
+		"system":"outer-system",
+		"prompt":"outer-prompt",
 		"temperature":0.7,
 		"messages":[
 			{"role":"system","content":"stable"},
@@ -35,6 +37,8 @@ func TestStripSimulatedCacheTTLFromJSON_Chat(t *testing.T) {
 	assert.NotContains(t, body, "prompt_cache_options")
 	assert.NotContains(t, body, "prompt_cache_retention")
 	assert.Equal(t, "kimi-k3", body["model"])
+	assert.Equal(t, "outer-system", body["system"], "system prompt 必须保留")
+	assert.Equal(t, "outer-prompt", body["prompt"], "prompt 字段必须保留")
 	assert.Equal(t, 0.7, body["temperature"])
 
 	messages := body["messages"].([]any)
@@ -62,7 +66,9 @@ func TestStripSimulatedCacheTTLFromJSON_Claude(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(out, &body))
 	assert.NotContains(t, body, "cache_control")
-	assert.NotContains(t, body["system"].([]any)[0].(map[string]any), "cache_control")
+	assert.Equal(t, "stable", body["system"].([]any)[0].(map[string]any)["text"], "system 文本必须保留")
+	assert.Equal(t, "lookup", body["tools"].([]any)[0].(map[string]any)["name"], "tool 定义必须保留")
+	assert.Equal(t, "find", body["tools"].([]any)[0].(map[string]any)["description"])
 	assert.NotContains(t, body["tools"].([]any)[0].(map[string]any), "cache_control")
 	message := body["messages"].([]any)[0].(map[string]any)
 	assert.NotContains(t, message, "cache_control")
@@ -121,4 +127,33 @@ func TestBuildSimulatedCachePassThroughBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.JSONEq(t, string(input), string(out))
 	})
+
+	t.Run("protocol conversion disabled keeps TTL", func(t *testing.T) {
+		c, info := newContext(t)
+		info.ChannelOtherSettings.SimulatedCacheCreationEnabled = true
+		info.ChannelOtherSettings.DisableProtocolConversion = true
+		body, closer, err := BuildSimulatedCachePassThroughBody(c, info)
+		require.NoError(t, err)
+		if closer != nil {
+			defer closer()
+		}
+		out, err := io.ReadAll(body)
+		require.NoError(t, err)
+		assert.JSONEq(t, string(input), string(out), "协议转换关闭时不剥离")
+	})
+}
+
+func TestStripSimulatedCacheTTLForUpstream_BothTTLs(t *testing.T) {
+	for _, ttl := range []string{"5m", "1h"} {
+		t.Run(ttl, func(t *testing.T) {
+			input := []byte(`{"model":"kimi-k3","prompt_cache_options":{"mode":"implicit","ttl":"` + ttl + `"},"system":"stable","messages":[{"role":"user","content":"hi"}]}`)
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+			info.ChannelOtherSettings.SimulatedCacheCreationEnabled = true
+			out, err := StripSimulatedCacheTTLForUpstream(input, info)
+			require.NoError(t, err)
+			assert.NotContains(t, string(out), "prompt_cache_options")
+			assert.Contains(t, string(out), `"system":"stable"`)
+			assert.Contains(t, string(out), `"content":"hi"`)
+		})
+	}
 }
