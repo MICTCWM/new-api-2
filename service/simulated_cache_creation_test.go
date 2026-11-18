@@ -105,6 +105,27 @@ func TestSimulatedCacheCreationRealUpstreamValueWins(t *testing.T) {
 	}
 }
 
+func TestSimulatedCacheCreationRelabelsReal5mTo1h(t *testing.T) {
+	simCleanupCache(t)
+	relay := simTestRelay(7003, 8003, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{
+		Messages:           []dto.Message{{Role: "user", Content: "hello " + repeatWord("x", 300)}},
+		PromptCacheOptions: json.RawMessage(`{"ttl":"1h"}`),
+	})
+	usage := &dto.Usage{
+		PromptTokens: 1387,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedCreationTokens: 1362,
+			CacheWriteTokens:     1362,
+		},
+	}
+	_, out, applied := applySimulatedCacheCreationChecked(relay, usage, []string{}, simEnabledAlways)
+	require.True(t, applied, "1h 请求的既有创建量需要重分类")
+	assert.Equal(t, 1387, out.PromptTokens, "总量不变")
+	assert.Equal(t, 1362, out.ClaudeCacheCreation1hTokens, "创建量归入 1h")
+	assert.Equal(t, 0, out.ClaudeCacheCreation5mTokens, "不再留在 5m")
+	assert.Equal(t, 1362, out.PromptTokensDetails.CacheWriteTokens, "创建 token 不新增")
+}
+
 func TestSimulatedCacheCreationSkipsEmptyAndOversized(t *testing.T) {
 	t.Run("空消息", func(t *testing.T) {
 		simCleanupCache(t)
@@ -347,6 +368,30 @@ func TestSimulatedCacheCreationTTLClassDetection(t *testing.T) {
 		relay := simTestRelay(7015, 8015, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{
 			Messages:             []dto.Message{{Role: "user", Content: "hi"}},
 			PromptCacheRetention: json.RawMessage(`"24h"`),
+		})
+		assert.Equal(t, "1h", detectSimulatedCacheTTLClass(relay))
+	})
+
+	t.Run("OpenAI prompt_cache_retention 1h", func(t *testing.T) {
+		relay := simTestRelay(7020, 8020, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{
+			Messages:             []dto.Message{{Role: "user", Content: "hi"}},
+			PromptCacheRetention: json.RawMessage(`"1h"`),
+		})
+		assert.Equal(t, "1h", detectSimulatedCacheTTLClass(relay))
+	})
+
+	t.Run("OpenAI extra_body prompt_cache_options 1h", func(t *testing.T) {
+		relay := simTestRelay(7021, 8021, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{
+			Messages:  []dto.Message{{Role: "user", Content: "hi"}},
+			ExtraBody: json.RawMessage(`{"prompt_cache_options":{"ttl":"1h"}}`),
+		})
+		assert.Equal(t, "1h", detectSimulatedCacheTTLClass(relay))
+	})
+
+	t.Run("OpenAI request-level cache_control 1h", func(t *testing.T) {
+		relay := simTestRelay(7022, 8022, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{
+			Messages:     []dto.Message{{Role: "user", Content: "hi"}},
+			CacheControl: json.RawMessage(`{"ttl":"1h"}`),
 		})
 		assert.Equal(t, "1h", detectSimulatedCacheTTLClass(relay))
 	})

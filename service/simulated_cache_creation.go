@@ -246,23 +246,39 @@ func promptCacheOptionsTTLIs1h(raw json.RawMessage) bool {
 	return ttl == "1h" || ttl == "12h" || ttl == "24h"
 }
 
-// promptCacheRetentionIs24h 识别 OpenAI prompt_cache_retention == "24h"。
-func promptCacheRetentionIs24h(raw json.RawMessage) bool {
+// promptCacheRetentionIsLongLived 识别 OpenAI prompt_cache_retention 的长缓存档位。
+// 官方文档使用 "24h"，部分客户端会直接传 "1h" / "12h"；语义上都归入本地的 1h 档。
+func promptCacheRetentionIsLongLived(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return s == "24h"
+		return s == "1h" || s == "12h" || s == "24h"
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return false
 	}
-	if v, ok := obj["retention"].(string); ok {
-		return v == "24h"
+	v, _ := obj["retention"].(string)
+	return v == "1h" || v == "12h" || v == "24h"
+}
+
+// rawJSONHas1hCacheTTL 递归识别任意 JSON 中的 cache_control / prompt_cache_options /
+// prompt_cache_retention 是否声明长缓存；用于 extra_body 这类透传字段。
+func rawJSONHas1hCacheTTL(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
 	}
-	return false
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s == "1h" || s == "12h" || s == "24h"
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false
+	}
+	return jsonValueHas1hCacheTTL(v)
 }
 
 // jsonValueHas1hCacheTTL 递归检查任意嵌套对象里的 cache_control /
@@ -277,8 +293,15 @@ func jsonValueHas1hCacheTTL(v any) bool {
 				}
 			}
 		}
-		if s, ok := x["prompt_cache_retention"].(string); ok && s == "24h" {
-			return true
+		if s, ok := x["prompt_cache_retention"].(string); ok {
+			if s == "1h" || s == "12h" || s == "24h" {
+				return true
+			}
+		}
+		if obj, ok := x["prompt_cache_retention"].(map[string]any); ok {
+			if s, _ := obj["retention"].(string); s == "1h" || s == "12h" || s == "24h" {
+				return true
+			}
 		}
 		for _, child := range x {
 			if jsonValueHas1hCacheTTL(child) {
@@ -340,6 +363,9 @@ func detectSimulatedCacheTTLClass(relayInfo *relaycommon.RelayInfo) string {
 			}
 		}
 	case *dto.GeneralOpenAIRequest:
+		if rawCacheControlHas1hTTL(req.CacheControl) {
+			return simulatedCacheCreationTTLClass1h
+		}
 		for _, m := range req.Messages {
 			if rawCacheControlHas1hTTL(m.CacheControl) {
 				return simulatedCacheCreationTTLClass1h
@@ -353,14 +379,17 @@ func detectSimulatedCacheTTLClass(relayInfo *relaycommon.RelayInfo) string {
 		if promptCacheOptionsTTLIs1h(req.PromptCacheOptions) {
 			return simulatedCacheCreationTTLClass1h
 		}
-		if promptCacheRetentionIs24h(req.PromptCacheRetention) {
+		if promptCacheRetentionIsLongLived(req.PromptCacheRetention) {
+			return simulatedCacheCreationTTLClass1h
+		}
+		if rawJSONHas1hCacheTTL(req.ExtraBody) {
 			return simulatedCacheCreationTTLClass1h
 		}
 	case *dto.OpenAIResponsesRequest:
 		if promptCacheOptionsTTLIs1h(req.PromptCacheOptions) {
 			return simulatedCacheCreationTTLClass1h
 		}
-		if promptCacheRetentionIs24h(req.PromptCacheRetention) {
+		if promptCacheRetentionIsLongLived(req.PromptCacheRetention) {
 			return simulatedCacheCreationTTLClass1h
 		}
 	}
@@ -498,12 +527,14 @@ func shouldApplySimulatedCacheCreation(relayInfo *relaycommon.RelayInfo) bool {
 
 // PlanSimulatedCacheCreation 是出站链路规划缓存创建的唯一入口：幂等（同一
 // RelayInfo 已有 plan 时直接返回旧值，绝不二次推进缓存段），开关关闭 / 非文本格式 /
-// 无消息 / billingInput <= 256 / 任一真实 cache 值 > 0 时返回 nil。命中与创建的
-// 算法、clamp、段推进全部复用第 1 轮引擎；本函数是唯一推进缓存段的地方。
+// 无消息 / billingInput <= 256 时返回 nil。真实 cache 值通常跳过模拟，但 1h
+// 请求可对上游通用/5m 创建量做一次不增量的档位重分类。命中与创建的算法、
+// clamp、段推进全部复用第 1 轮引擎；本函数是唯一推进缓存段的地方。
 //
 // billingInput：anthropic = upstream input_tokens；openai = prompt_tokens。
 // realCached / realCreationTotal / realCreation5m / realCreation1h 为上游真实
-// cache 分量，任一 > 0 整层跳过，以真实值为准。
+// cache 分量。通常真实值优先并跳过模拟；唯一例外是客户端明确 1h、上游只回传
+// 通用或 5m 创建量，此时只把既有创建量重分类为 1h，不新增 token。
 func PlanSimulatedCacheCreation(relayInfo *relaycommon.RelayInfo, billingInput, realCached, realCreationTotal, realCreation5m, realCreation1h int) *relaycommon.SimulatedCachePlan {
 	return planSimulatedCacheCreationChecked(relayInfo, isSimulatedCacheCreationEnabled, billingInput, realCached, realCreationTotal, realCreation5m, realCreation1h)
 }
@@ -525,8 +556,23 @@ func planSimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, enabled
 	if billingInput <= simulatedCacheCreationMinBillingInput {
 		return nil
 	}
-	// 真实上游值优先：任一 cache 字段 > 0 整层跳过。
+	// 客户端明确声明 1h、但上游只回传通用 cache_write / 5m 创建量时，
+	// 不能把 1362 继续算成 5m。这里只重分类既有创建量，不新增 token，
+	// 也不推进本地缓存段，因此不会重复计费。
+	ttlClass := detectSimulatedCacheTTLClass(relayInfo)
 	if realCached > 0 || realCreationTotal > 0 || realCreation5m > 0 || realCreation1h > 0 {
+		if ttlClass == simulatedCacheCreationTTLClass1h && realCreation1h == 0 && realCreationTotal > 0 {
+			plan := &relaycommon.SimulatedCachePlan{
+				Applied:      true,
+				BillingInput: billingInput,
+				HitTokens:    realCached,
+				Creation1h:   realCreationTotal,
+				TTLClass:     simulatedCacheCreationTTLClass1h,
+			}
+			relayInfo.SimulatedCachePlan = plan
+			return plan
+		}
+		// 真实上游值优先：其他情况整层跳过。
 		return nil
 	}
 
@@ -539,7 +585,6 @@ func planSimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, enabled
 		return nil
 	}
 
-	ttlClass := detectSimulatedCacheTTLClass(relayInfo)
 	outcome := lookupAndUpdateSimulatedCache(relayInfo, text, ttlClass)
 
 	// clamp 到 available = billingInput − 真实 cache 分量；hit+creation 超限时 hit 优先。
@@ -722,15 +767,13 @@ func applySimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, usage 
 		return extraContent, usage, true
 	}
 
-	// 真实上游值优先：任一 cache 字段 > 0 整层跳过。
+	// 真实上游值优先由 planSimulatedCacheCreationChecked 统一判断：
+	// 1h 请求只重分类既有创建量，不新增 token；其他档位仍整层跳过。
 	realCached := usage.PromptTokensDetails.CachedTokens
 	realCreationCached := usage.PromptTokensDetails.CachedCreationTokens
 	realCreationTotal := usage.PromptTokensDetails.CacheCreationTokensTotal()
 	realCreation5m := usage.ClaudeCacheCreation5mTokens
 	realCreation1h := usage.ClaudeCacheCreation1hTokens
-	if realCached > 0 || realCreationTotal > 0 || realCreation5m > 0 || realCreation1h > 0 {
-		return extraContent, usage, false
-	}
 
 	var billingInput int
 	if semantic == "anthropic" {
