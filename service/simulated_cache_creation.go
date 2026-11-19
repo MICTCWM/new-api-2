@@ -24,14 +24,15 @@ type SimulatedCachePlan = relaycommon.SimulatedCachePlan
 
 // 模拟创建缓存（Simulated Cache Creation）
 //
-// 当渠道开启「模拟创建缓存」开关时，网关在本地计费与用量展示层面模拟上游的
-// prompt cache 创建/命中行为：以「渠道 + 用户 + 模型」为维度，按文本多段前缀
-// 建链，TTL 内重复前缀计缓存命中（cache read），超出前缀的新增 token 计缓存创建。
+// 当渠道开启「模拟创建缓存」开关时，网关在本地计费与用量展示层面只模拟
+// prompt cache 的「创建」部分：以「渠道 + 用户 + 模型」为维度，按文本多段前缀
+// 建链，超出此前已建前缀的新增 token 计缓存创建。缓存命中不本地伪造，始终只取
+// 上游真实 usage 的 cached_tokens / cache_read_input_tokens。
 //
 // 本层只在本地改写 billingUsage 与响应 usage，不伪造上游响应；开启模拟缓存时，
 // 请求侧会先读取客户端 TTL，再把 cache_control / prompt_cache_options 等 TTL
-// 承载字段从出站请求中剥离，避免上游按自己的 TTL 再建一次缓存。上游已返回
-// 真实 cache 相关值时整体跳过模拟，以真实值为准。
+// 承载字段从出站请求中剥离，避免上游按自己的 TTL 再建一次缓存。即使上游返回了
+// 真实 cache 创建值，本地模拟仍按自己的前缀链推进；上游创建量不覆盖本地口径。
 //
 // 状态全部存放在 HybridCache 内，读-改-写按「Get → 计算 → SetWithTTL」覆盖写，
 // 不引入全局锁；并发下偶尔丢失一次段写入在模拟层可接受。
@@ -397,8 +398,10 @@ func detectSimulatedCacheTTLClass(relayInfo *relaycommon.RelayInfo) string {
 }
 
 // simulatedCacheOutcome 是一次本地前缀匹配的计量结果。
+// MatchedTokens 是本地链匹配到的前缀 token 数，仅用于计算新增后缀；
+// 它不是 cache hit，不会写入响应或计费。
 type simulatedCacheOutcome struct {
-	HitTokens     int
+	MatchedTokens int
 	CreationTotal int
 	Creation5m    int
 	Creation1h    int
@@ -489,7 +492,7 @@ func lookupAndUpdateSimulatedCache(relayInfo *relaycommon.RelayInfo, text, ttlCl
 			TTLClass:  ttlClass,
 			ExpiresAt: nowMillis + simulatedCacheTTL(ttlClass).Milliseconds(),
 		}}
-		outcome.HitTokens = 0
+		outcome.MatchedTokens = 0
 		outcome.CreationTotal = fullTokens
 		outcome.Creation5m = 0
 		outcome.Creation1h = 0
@@ -499,7 +502,7 @@ func lookupAndUpdateSimulatedCache(relayInfo *relaycommon.RelayInfo, text, ttlCl
 			outcome.Creation5m = fullTokens
 		}
 	} else {
-		outcome.HitTokens = hitTokens
+		outcome.MatchedTokens = hitTokens
 	}
 
 	entryTTL := simulatedCacheCreationTTL5m
@@ -527,14 +530,13 @@ func shouldApplySimulatedCacheCreation(relayInfo *relaycommon.RelayInfo) bool {
 
 // PlanSimulatedCacheCreation 是出站链路规划缓存创建的唯一入口：幂等（同一
 // RelayInfo 已有 plan 时直接返回旧值，绝不二次推进缓存段），开关关闭 / 非文本格式 /
-// 无消息 / billingInput <= 256 时返回 nil。真实 cache 值通常跳过模拟，但 1h
-// 请求可对上游通用/5m 创建量做一次不增量的档位重分类。命中与创建的算法、
-// clamp、段推进全部复用第 1 轮引擎；本函数是唯一推进缓存段的地方。
+// 无消息 / billingInput <= 256 时返回 nil。命中只使用上游 realCached；本地前缀链
+// 只决定本次新增创建量，即使上游返回了创建值也不会跳过或覆盖本地创建。
 //
 // billingInput：anthropic = upstream input_tokens；openai = prompt_tokens。
 // realCached / realCreationTotal / realCreation5m / realCreation1h 为上游真实
-// cache 分量。通常真实值优先并跳过模拟；唯一例外是客户端明确 1h、上游只回传
-// 通用或 5m 创建量，此时只把既有创建量重分类为 1h，不新增 token。
+// cache 分量。命中取 realCached；上游创建分量只用于判断是否需要用零值 plan
+// 清掉上游旧账，不参与本地创建量计算。
 func PlanSimulatedCacheCreation(relayInfo *relaycommon.RelayInfo, billingInput, realCached, realCreationTotal, realCreation5m, realCreation1h int) *relaycommon.SimulatedCachePlan {
 	return planSimulatedCacheCreationChecked(relayInfo, isSimulatedCacheCreationEnabled, billingInput, realCached, realCreationTotal, realCreation5m, realCreation1h)
 }
@@ -556,26 +558,10 @@ func planSimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, enabled
 	if billingInput <= simulatedCacheCreationMinBillingInput {
 		return nil
 	}
-	// 客户端明确声明 1h、但上游只回传通用 cache_write / 5m 创建量时，
-	// 不能把 1362 继续算成 5m。这里只重分类既有创建量，不新增 token，
-	// 也不推进本地缓存段，因此不会重复计费。
+	// 命中只由上游回答决定；本地前缀链只用来判断本次请求新增了多少创建量。
+	// 即使上游返回了 cache 值，也不跳过本地创建：模拟开关打开后，创建量由本地
+	// 控制，上游的创建量不参与覆盖。
 	ttlClass := detectSimulatedCacheTTLClass(relayInfo)
-	if realCached > 0 || realCreationTotal > 0 || realCreation5m > 0 || realCreation1h > 0 {
-		if ttlClass == simulatedCacheCreationTTLClass1h && realCreation1h == 0 && realCreationTotal > 0 {
-			plan := &relaycommon.SimulatedCachePlan{
-				Applied:      true,
-				BillingInput: billingInput,
-				HitTokens:    realCached,
-				Creation1h:   realCreationTotal,
-				TTLClass:     simulatedCacheCreationTTLClass1h,
-			}
-			relayInfo.SimulatedCachePlan = plan
-			return plan
-		}
-		// 真实上游值优先：其他情况整层跳过。
-		return nil
-	}
-
 	text, ok := simulatedCachePrefixText(relayInfo)
 	if !ok {
 		return nil
@@ -587,23 +573,37 @@ func planSimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, enabled
 
 	outcome := lookupAndUpdateSimulatedCache(relayInfo, text, ttlClass)
 
-	// clamp 到 available = billingInput − 真实 cache 分量；hit+creation 超限时 hit 优先。
-	available := billingInput - realCached - realCreationTotal
+	// 上游 hit 是唯一命中来源；创建量 clamp 到 billingInput − 上游 hit。
+	// 若上游 hit 超过输入总量，按输入总量计，避免负数。
+	hit := realCached
+	if hit > billingInput {
+		hit = billingInput
+	}
+	available := billingInput - hit
 	if available < 0 {
 		available = 0
 	}
-	hit := outcome.HitTokens
 	creation := outcome.CreationTotal
-	if hit > available {
-		hit = available
+	if creation > available {
+		creation = available
 	}
-	creationBudget := available - hit
-	if creation > creationBudget {
-		creation = creationBudget
+	// 没有匹配到任何本地前缀时，本次请求的整段输入都是新建；创建量按上游输入
+	// token 总量（扣掉上游 hit）计，而不是按本地分词器的估算值，避免网关分词
+	// 与上游 tokenizer 不一致导致创建量明显偏低。有本地前缀时仍按新增后缀计。
+	freshPrefix := outcome.MatchedTokens == 0 && available > 0
+	if freshPrefix {
+		creation = available
 	}
 
 	creation5m, creation1h := outcome.Creation5m, outcome.Creation1h
-	if creation5m+creation1h > creation {
+	if freshPrefix {
+		creation5m, creation1h = 0, 0
+		if ttlClass == simulatedCacheCreationTTLClass1h {
+			creation1h = creation
+		} else {
+			creation5m = creation
+		}
+	} else if creation5m+creation1h > creation {
 		total := creation5m + creation1h
 		if total > 0 {
 			creation5m = creation5m * creation / total
@@ -613,7 +613,7 @@ func planSimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, enabled
 		}
 	}
 
-	if hit <= 0 && creation <= 0 {
+	if hit <= 0 && creation <= 0 && realCreationTotal <= 0 && realCreation5m <= 0 && realCreation1h <= 0 {
 		return nil
 	}
 
@@ -716,10 +716,9 @@ func ApplyPlanToUsageSemantic(plan *relaycommon.SimulatedCachePlan, usage *dto.U
 		// openai 语义：不动 PromptTokens，text_quota.go 自动扣减 base。
 		usage.PromptTokensDetails.CachedTokens = plan.HitTokens
 		usage.PromptTokensDetails.CacheWriteTokens = creation
-		// 同步 CachedCreationTokens（两者取大，不重复）。
-		if usage.PromptTokensDetails.CachedCreationTokens < creation {
-			usage.PromptTokensDetails.CachedCreationTokens = creation
-		}
+		// 绝对赋值：模拟开关打开时，本地创建量是唯一口径；上游旧值必须被清零/覆盖，
+		// 否则会出现“本地已经不创建，但响应仍显示上游创建量”的假账。
+		usage.PromptTokensDetails.CachedCreationTokens = creation
 		// 标记 openai 语义，避免本地注入的 5m/1h 字段被误判为 legacy Claude-derived usage
 		// （legacy 检测器依赖空 source/semantic + Claude 拆分字段）。
 		if usage.UsageSemantic == "" {
@@ -761,7 +760,7 @@ func applySimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, usage 
 		plan := relayInfo.SimulatedCachePlan
 		ApplyPlanToUsageSemantic(plan, usage, semantic)
 		extraContent = append(extraContent, fmt.Sprintf(
-			"模拟缓存创建 %d tokens（5m %d / 1h %d），模拟缓存命中 %d tokens",
+			"模拟缓存创建 %d tokens（5m %d / 1h %d），上游缓存命中 %d tokens",
 			plan.CreationTotal(), plan.Creation5m, plan.Creation1h, plan.HitTokens,
 		))
 		return extraContent, usage, true
@@ -791,7 +790,7 @@ func applySimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, usage 
 
 	ApplyPlanToUsageSemantic(plan, usage, semantic)
 	extraContent = append(extraContent, fmt.Sprintf(
-		"模拟缓存创建 %d tokens（5m %d / 1h %d），模拟缓存命中 %d tokens",
+		"模拟缓存创建 %d tokens（5m %d / 1h %d），上游缓存命中 %d tokens",
 		plan.CreationTotal(), plan.Creation5m, plan.Creation1h, plan.HitTokens,
 	))
 	return extraContent, usage, true

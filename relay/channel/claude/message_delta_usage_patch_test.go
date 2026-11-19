@@ -45,6 +45,24 @@ func TestPatchClaudeMessageDeltaUsageDataZeroValueChecks(t *testing.T) {
 	assert.False(t, gjson.Get(patchedData, "usage.cache_creation_input_tokens").Exists())
 }
 
+func TestPatchClaudeMessageDeltaUsageDataPlanSplitOverridesUpstream5m(t *testing.T) {
+	originalData := `{"type":"message_delta","usage":{"output_tokens":315,"cache_creation_input_tokens":1362,"cache_creation":{"ephemeral_5m_input_tokens":1362}}}`
+	usage := &dto.ClaudeUsage{
+		InputTokens:              25,
+		CacheCreationInputTokens: 1362,
+		CacheCreation: &dto.ClaudeCacheCreationUsage{
+			Ephemeral5mInputTokens: 0,
+			Ephemeral1hInputTokens: 1362,
+		},
+	}
+
+	patchedData := patchClaudeMessageDeltaUsageData(originalData, usage)
+
+	require.EqualValues(t, 1362, gjson.Get(patchedData, "usage.cache_creation_input_tokens").Int())
+	require.EqualValues(t, 0, gjson.Get(patchedData, "usage.cache_creation.ephemeral_5m_input_tokens").Int())
+	require.EqualValues(t, 1362, gjson.Get(patchedData, "usage.cache_creation.ephemeral_1h_input_tokens").Int())
+}
+
 func TestShouldSkipClaudeMessageDeltaUsagePatch(t *testing.T) {
 	originGlobalPassThrough := model_setting.GetGlobalSettings().PassThroughRequestEnabled
 	t.Cleanup(func() {

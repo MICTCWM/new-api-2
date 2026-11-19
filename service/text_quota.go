@@ -440,7 +440,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	// 两者都是前缀折扣机制，避免叠加；开关关闭时站内缓存行为不变。
 	var simulatedCacheApplied bool
 	extraContent, billingUsage, simulatedCacheApplied = applySimulatedCacheCreation(relayInfo, billingUsage, extraContent)
-	if !simulatedCacheApplied {
+	// 模拟缓存开关打开时，创建由本地控制、命中必须只来自上游。站内缓存会在本地
+	// 生成命中，因此在模拟缓存启用期间必须跳过，避免两套缓存折扣叠加和本地造命中。
+	if !simulatedCacheApplied && !simulatedCacheCreationRuntimeEnabled(relayInfo) {
 		// 站内缓存钩子：渠道开启且能提取消息时，计算命中并合并进 billingUsage 的 cached tokens，
 		// 使 calculateTextQuotaSummary 按现有 CacheRatio 自动打折。同时可能改写 extraContent 追加命中日志。
 		extraContent, billingUsage = applyStationCache(relayInfo, billingUsage, extraContent)

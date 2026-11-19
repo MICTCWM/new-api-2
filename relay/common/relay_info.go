@@ -83,15 +83,16 @@ type TokenCountMeta struct {
 
 // SimulatedCachePlan 是一次请求的模拟缓存创建规划：同一份 hit / creation
 // （含 5m / 1h 拆分）同时用于客户端响应 JSON 与 PostTextConsumeQuota 计费，
-// 保证展示与计费完全同源。类型放在 relay/common 以避免 service ↔ relay 循环依赖；
-// service 包通过类型别名对外暴露同名类型。nil 表示尚未规划或不适用。
+// 保证展示与计费完全同源。HitTokens 只来自上游，本地不模拟命中；本地只控制
+// 创建量。类型放在 relay/common 以避免 service ↔ relay 循环依赖；service 包
+// 通过类型别名对外暴露同名类型。nil 表示尚未规划或不适用。
 type SimulatedCachePlan struct {
-	// Applied 表示该规划是否真正生效（命中或创建 > 0）。
+	// Applied 表示该规划是否真正生效（命中、创建 > 0，或需要清掉上游创建旧值）。
 	Applied bool
 	// BillingInput 是规划时使用的上游输入总量：anthropic = upstream input_tokens；
 	// openai = prompt_tokens。
 	BillingInput int
-	// HitTokens 为模拟缓存命中（cache read）token 数。
+	// HitTokens 为上游返回的缓存命中（cache read）token 数，本地不修改来源。
 	HitTokens int
 	// Creation5m / Creation1h 为本次新建段按档位拆分的 token 数。
 	Creation5m int

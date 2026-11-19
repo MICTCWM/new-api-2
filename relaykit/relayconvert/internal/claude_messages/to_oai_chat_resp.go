@@ -305,8 +305,10 @@ func PatchClaudeMessageDeltaUsageData(data string, usage *dto.ClaudeUsage) strin
 	data = setMessageDeltaUsageInt(data, "usage.cache_creation_input_tokens", usage.CacheCreationInputTokens)
 
 	if usage.CacheCreation != nil {
-		data = setMessageDeltaUsageInt(data, "usage.cache_creation.ephemeral_5m_input_tokens", usage.CacheCreation.Ephemeral5mInputTokens)
-		data = setMessageDeltaUsageInt(data, "usage.cache_creation.ephemeral_1h_input_tokens", usage.CacheCreation.Ephemeral1hInputTokens)
+		// 拆分字段需要按本地 plan 绝对覆盖：上游 message_delta 可能只报 5m，
+		// 若这里保留上游非零值，会把本地 1h 创建量展示成 5m。
+		data = setMessageDeltaUsageIntForce(data, "usage.cache_creation.ephemeral_5m_input_tokens", usage.CacheCreation.Ephemeral5mInputTokens)
+		data = setMessageDeltaUsageIntForce(data, "usage.cache_creation.ephemeral_1h_input_tokens", usage.CacheCreation.Ephemeral1hInputTokens)
 	}
 
 	return data
@@ -322,6 +324,14 @@ func setMessageDeltaUsageInt(data string, path string, localValue int) string {
 		return data
 	}
 
+	patchedData, err := sjson.Set(data, path, localValue)
+	if err != nil {
+		return data
+	}
+	return patchedData
+}
+
+func setMessageDeltaUsageIntForce(data string, path string, localValue int) string {
 	patchedData, err := sjson.Set(data, path, localValue)
 	if err != nil {
 		return data

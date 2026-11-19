@@ -194,6 +194,32 @@ func TestHandleStreamResponseDataMessageStartPlanNilKeepsBytes(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "data: "+claudeMessageStartEvent)
 }
 
+// B3. 1h plan + 上游 message_delta 只报 5m：最终 message_delta 必须仍展示 1h，
+// 且把上游的 5m 拆分清除，不能出现“计费 1h、响应 5m”。
+func TestHandleStreamResponseDataDeltaUpstream5mKeepsPlan1h(t *testing.T) {
+	c, recorder, info, claudeInfo := newClaudePlanTestContext(t, types.RelayFormatClaude)
+	info.SimulatedCachePlan = &service.SimulatedCachePlan{
+		Applied:      true,
+		BillingInput: 1387,
+		Creation1h:   1362,
+		TTLClass:     "1h",
+	}
+
+	err := HandleStreamResponseData(c, info, claudeInfo, claudeMessageStartEvent)
+	require.Nil(t, err)
+
+	deltaEvent := `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":315,"cache_creation_input_tokens":1362,"cache_creation":{"ephemeral_5m_input_tokens":1362}}}`
+	err = HandleStreamResponseData(c, info, claudeInfo, deltaEvent)
+	require.Nil(t, err)
+
+	deltaData := lastDataFrame(recorder.Body.String())
+	assert.EqualValues(t, 1362, gjson.Get(deltaData, "usage.cache_creation_input_tokens").Int())
+	assert.EqualValues(t, 0, gjson.Get(deltaData, "usage.cache_creation.ephemeral_5m_input_tokens").Int())
+	assert.EqualValues(t, 1362, gjson.Get(deltaData, "usage.cache_creation.ephemeral_1h_input_tokens").Int())
+	assert.EqualValues(t, 1362, claudeInfo.Usage.ClaudeCacheCreation1hTokens)
+	assert.EqualValues(t, 0, claudeInfo.Usage.ClaudeCacheCreation5mTokens)
+}
+
 // C2. Chat 流式（Claude 上游）：message_start 后补发的 final usage 帧携带注入字段。
 func TestHandleStreamFinalResponseChatUsageFrameInjectsPlan(t *testing.T) {
 	c, recorder, info, claudeInfo := newClaudePlanTestContext(t, types.RelayFormatOpenAI)
@@ -212,4 +238,29 @@ func TestHandleStreamFinalResponseChatUsageFrameInjectsPlan(t *testing.T) {
 	assert.EqualValues(t, 100, gjson.Get(finalData, "usage.prompt_tokens_details.cache_write_tokens").Int())
 	assert.EqualValues(t, 60, gjson.Get(finalData, "usage.claude_cache_creation_5_m_tokens").Int())
 	assert.EqualValues(t, 40, gjson.Get(finalData, "usage.claude_cache_creation_1_h_tokens").Int())
+}
+
+// C3. Chat 流式（Claude 上游）+ 1h plan：上游 message_delta 只报 5m 时，
+// final usage 仍必须按本地 plan 展示 1h。
+func TestHandleStreamFinalResponseChatDeltaUpstream5mKeepsPlan1h(t *testing.T) {
+	c, recorder, info, claudeInfo := newClaudePlanTestContext(t, types.RelayFormatOpenAI)
+	info.SimulatedCachePlan = &service.SimulatedCachePlan{
+		Applied:      true,
+		BillingInput: 1387,
+		Creation1h:   1362,
+		TTLClass:     "1h",
+	}
+
+	err := HandleStreamResponseData(c, info, claudeInfo, claudeMessageStartEvent)
+	require.Nil(t, err)
+
+	deltaEvent := `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":315,"cache_creation_input_tokens":1362,"cache_creation":{"ephemeral_5m_input_tokens":1362}}}`
+	err = HandleStreamResponseData(c, info, claudeInfo, deltaEvent)
+	require.Nil(t, err)
+
+	HandleStreamFinalResponse(c, info, claudeInfo)
+	finalData := lastUsageFrame(recorder.Body.String())
+	assert.EqualValues(t, 1362, gjson.Get(finalData, "usage.prompt_tokens_details.cache_write_tokens").Int())
+	assert.EqualValues(t, 0, gjson.Get(finalData, "usage.claude_cache_creation_5_m_tokens").Int())
+	assert.EqualValues(t, 1362, gjson.Get(finalData, "usage.claude_cache_creation_1_h_tokens").Int())
 }

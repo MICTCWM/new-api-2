@@ -81,6 +81,23 @@ func planFromClaudeUsage(info *relaycommon.RelayInfo, usage *dto.ClaudeUsage) *s
 	return service.PlanSimulatedCacheCreation(info, billingInput, usage.CacheReadInputTokens, realCreationTotal, real5m, real1h)
 }
 
+// reapplySimulatedCachePlanToStream 在 message_delta 等后续事件上重新用本地
+// plan 覆盖 usage：FormatClaudeResponseInfo 会先用上游 message_delta 的 5m
+// 创建值更新 claudeInfo，如果不恢复，计费侧是 1h、响应侧却会退回 5m。
+func reapplySimulatedCachePlanToStream(info *relaycommon.RelayInfo, claudeResponse *dto.ClaudeResponse, claudeInfo *ClaudeResponseInfo) {
+	if info == nil || info.SimulatedCachePlan == nil {
+		return
+	}
+	if claudeInfo != nil && claudeInfo.Usage != nil {
+		service.ApplyPlanToUsage(info.SimulatedCachePlan, claudeInfo.Usage)
+	}
+	if claudeResponse != nil && claudeResponse.Type == "message_delta" && claudeResponse.Usage != nil {
+		injectedUsage := *claudeResponse.Usage
+		service.ApplyPlanToClaudeUsage(info.SimulatedCachePlan, &injectedUsage)
+		claudeResponse.Usage = &injectedUsage
+	}
+}
+
 func shouldSkipClaudeMessageDeltaUsagePatch(info *relaycommon.RelayInfo) bool {
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled {
 		return true
@@ -139,6 +156,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		} else if claudeResponse.Type == "message_delta" {
 			// 确保 message_delta 的 usage 包含完整的 input_tokens 和 cache 相关字段
 			// 解决 AWS Bedrock 等上游返回的 message_delta 缺少这些字段的问题
+			reapplySimulatedCachePlanToStream(info, &claudeResponse, claudeInfo)
 			if !shouldSkipClaudeMessageDeltaUsagePatch(info) {
 				data = patchClaudeMessageDeltaUsageData(data, buildMessageDeltaPatchUsage(&claudeResponse, claudeInfo))
 			}
@@ -159,6 +177,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				service.ApplyPlanToUsage(plan, claudeInfo.Usage)
 			}
 		}
+		// message_delta 的 FormatClaudeResponseInfo 可能把上游 5m 创建量写回
+		// claudeInfo；最终 OpenAI usage 必须继续以本地 plan 的 1h/5m 拆分为准。
+		reapplySimulatedCachePlanToStream(info, &claudeResponse, claudeInfo)
 
 		countClaudeStreamBillableTools(c, info, &claudeResponse)
 

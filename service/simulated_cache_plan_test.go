@@ -43,24 +43,72 @@ func TestPlanSimulatedCacheCreationDisabledReturnsNil(t *testing.T) {
 	assert.Nil(t, relay.SimulatedCachePlan)
 }
 
-func TestPlanSimulatedCacheCreationRealUpstreamValueWins(t *testing.T) {
+func TestPlanSimulatedCacheCreationClearsUpstreamCreationWithoutNewPrefix(t *testing.T) {
 	simCleanupCache(t)
-	cases := []struct {
-		name                            string
-		cached, creationTotal, c5m, c1h int
-	}{
-		{"cached", 5, 0, 0, 0},
-		{"creation_total", 0, 5, 0, 0},
-		{"creation_5m", 0, 0, 5, 0},
-		{"creation_1h", 0, 0, 0, 5},
+	content := "theta " + repeatWord("x", 200)
+	first := simTestRelay(7104, 8104, types.RelayFormatOpenAI, simOpenAIMessage(content))
+	require.NotNil(t, planSimulatedCacheCreationChecked(first, simEnabledAlways, 3000, 0, 0, 0, 0))
+
+	second := simTestRelay(7104, 8104, types.RelayFormatOpenAI, simOpenAIMessage(content))
+	plan := planSimulatedCacheCreationChecked(second, simEnabledAlways, 3000, 0, 50, 0, 0)
+	require.NotNil(t, plan, "上游有创建旧值时仍要生成 plan 以清零")
+	assert.Equal(t, 0, plan.HitTokens)
+	assert.Equal(t, 0, plan.CreationTotal(), "本地没有新增前缀，不应再创建")
+
+	usage := &dto.Usage{
+		PromptTokens: 3000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedCreationTokens: 50,
+			CacheWriteTokens:     50,
+		},
+		ClaudeCacheCreation5mTokens: 50,
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			relay := simTestRelay(7103, 8103, types.RelayFormatOpenAI, simOpenAIMessage("gamma "+repeatWord("x", 200)))
-			plan := planSimulatedCacheCreationChecked(relay, simEnabledAlways, 3000, tc.cached, tc.creationTotal, tc.c5m, tc.c1h)
-			assert.Nil(t, plan)
-		})
-	}
+	ApplyPlanToUsage(plan, usage)
+	assert.Equal(t, 0, usage.PromptTokensDetails.CacheWriteTokens, "上游创建量被清零")
+	assert.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 0, usage.ClaudeCacheCreation5mTokens)
+}
+
+func TestPlanSimulatedCacheCreationKeepsUpstreamHitOnly(t *testing.T) {
+	simCleanupCache(t)
+	content := "iota " + repeatWord("x", 200)
+	first := simTestRelay(7105, 8105, types.RelayFormatOpenAI, simOpenAIMessage(content))
+	require.NotNil(t, planSimulatedCacheCreationChecked(first, simEnabledAlways, 3000, 0, 0, 0, 0))
+
+	second := simTestRelay(7105, 8105, types.RelayFormatOpenAI, simOpenAIMessage(content))
+	plan := planSimulatedCacheCreationChecked(second, simEnabledAlways, 3000, 123, 50, 0, 0)
+	require.NotNil(t, plan)
+	assert.Equal(t, 123, plan.HitTokens, "命中只取上游")
+	assert.Equal(t, 0, plan.CreationTotal(), "无新增前缀不创建")
+
+	usage := &dto.Usage{PromptTokens: 3000}
+	ApplyPlanToUsage(plan, usage)
+	assert.Equal(t, 123, usage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 0, usage.PromptTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestPlanFreshPrefixCreationEqualsBillingInput(t *testing.T) {
+	simCleanupCache(t)
+	relay := simTestRelay(7127, 8127, types.RelayFormatOpenAI, simOpenAIMessage("kappa "+repeatWord("x", 300)))
+	plan := planSimulatedCacheCreationChecked(relay, simEnabledAlways, 1000, 0, 0, 0, 0)
+	require.NotNil(t, plan)
+	assert.Equal(t, 1000, plan.CreationTotal(), "首次请求整段输入都按创建计，不能按本地分词估算")
+	assert.Equal(t, 1000, plan.Creation5m)
+	assert.Equal(t, 0, plan.Creation1h)
+}
+
+func TestPlanSimulatedCacheCreationUsesLocalCreationAndUpstreamHit(t *testing.T) {
+	simCleanupCache(t)
+	relay := simTestRelay(7103, 8103, types.RelayFormatOpenAI, simOpenAIMessage("gamma "+repeatWord("x", 200)))
+
+	// 上游给了一个创建量和一个命中量：创建量必须被本地前缀链覆盖，
+	// 命中量必须原样保留。
+	plan := planSimulatedCacheCreationChecked(relay, simEnabledAlways, 3000, 77, 120, 40, 80)
+	require.NotNil(t, plan)
+	assert.Equal(t, 77, plan.HitTokens, "命中来自上游")
+	assert.Greater(t, plan.CreationTotal(), 0, "创建由本地生成")
+	assert.NotEqual(t, 120, plan.CreationTotal(), "上游创建量不覆盖本地创建")
 }
 
 func TestSimulatedCachePrefixIncludesResponsesInstructions(t *testing.T) {
@@ -188,7 +236,7 @@ func TestPlanDisplayEqualsBillingSummary(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 
 	content := repeatWord("zeta", 40)
-	relay := simTestRelay(7106, 8106, types.RelayFormatOpenAI, simOpenAIMessage(content))
+	relay := simTestRelay(7126, 8126, types.RelayFormatOpenAI, simOpenAIMessage(content))
 	relay.PriceData = simBillingPriceData()
 	relay.StartTime = time.Now()
 

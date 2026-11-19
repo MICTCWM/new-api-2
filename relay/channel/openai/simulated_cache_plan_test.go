@@ -221,3 +221,38 @@ func TestOpenaiHandlerToClaudeFormatInjectsPlan(t *testing.T) {
 	assert.Equal(t, 100, usage.PromptTokensDetails.CachedTokens)
 	assert.Equal(t, 100, usage.PromptTokensDetails.CacheWriteTokens)
 }
+
+const openaiStreamNoUsageBody = `data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}
+
+data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[]}
+
+data: [DONE]`
+
+// G. 上游流式没有 usage：本地估算 usage 后仍要注入 plan，否则响应没有创建字段，
+// 而结算阶段会按创建扣费。
+func TestOaiStreamHandlerNoUpstreamUsageInjectsPlan(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	c, recorder, resp, info := newOpenAIPlanTestContext(t, openaiStreamNoUsageBody, true, types.RelayFormatOpenAI)
+	info.SetEstimatePromptTokens(450)
+	info.SimulatedCachePlan = &service.SimulatedCachePlan{
+		Applied:      true,
+		BillingInput: 450,
+		Creation5m:   450,
+		TTLClass:     "5m",
+	}
+
+	usage, err := OaiStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+
+	finalData := openaiPlanLastUsageFrame(recorder.Body.String())
+	require.NotEmpty(t, finalData, "应补发带 plan 的 final usage 帧")
+	assert.EqualValues(t, 450, gjson.Get(finalData, "usage.prompt_tokens").Int())
+	assert.EqualValues(t, 0, gjson.Get(finalData, "usage.prompt_tokens_details.cached_tokens").Int())
+	assert.EqualValues(t, 450, gjson.Get(finalData, "usage.prompt_tokens_details.cache_write_tokens").Int())
+	assert.EqualValues(t, 450, gjson.Get(finalData, "usage.claude_cache_creation_5_m_tokens").Int())
+	assert.EqualValues(t, 0, gjson.Get(finalData, "usage.claude_cache_creation_1_h_tokens").Int())
+}

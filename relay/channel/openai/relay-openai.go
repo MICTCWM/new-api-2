@@ -214,6 +214,19 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
+	// 上游没有在流里返回 usage 时，上面的规划块不会执行；此时 usage 是本地估算的，
+	// 必须再规划一次，否则客户端 final usage 没有创建字段，而结算阶段仍会按创建扣费。
+	if !containStreamUsage && service.ValidUsage(usage) {
+		plan := service.PlanSimulatedCacheCreation(info,
+			usage.PromptTokens,
+			usage.PromptTokensDetails.CachedTokens,
+			usage.PromptTokensDetails.CacheCreationTokensTotal(),
+			usage.ClaudeCacheCreation5mTokens,
+			usage.ClaudeCacheCreation1hTokens)
+		if plan != nil {
+			service.ApplyPlanToUsage(plan, usage)
+		}
+	}
 
 	for _, name := range streamFunctionCallNames {
 		info.CountBillableToolCall(dto.BuildInCallFunctionCall, name)

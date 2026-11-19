@@ -77,37 +77,46 @@ func TestSimulatedCacheCreationDisabledSkipsInjection(t *testing.T) {
 	assert.Empty(t, extra)
 }
 
-func TestSimulatedCacheCreationRealUpstreamValueWins(t *testing.T) {
+func TestSimulatedCacheCreationLocalCreationOverridesUpstream(t *testing.T) {
 	simCleanupCache(t)
-	cases := []struct {
-		name   string
-		mutate func(u *dto.Usage)
-	}{
-		{"cached_tokens", func(u *dto.Usage) { u.PromptTokensDetails.CachedTokens = 5 }},
-		{"cached_creation_tokens", func(u *dto.Usage) { u.PromptTokensDetails.CachedCreationTokens = 5 }},
-		{"cache_write_tokens", func(u *dto.Usage) { u.PromptTokensDetails.CacheWriteTokens = 5 }},
-		{"claude_creation_5m", func(u *dto.Usage) { u.ClaudeCacheCreation5mTokens = 5 }},
-		{"claude_creation_1h", func(u *dto.Usage) { u.ClaudeCacheCreation1hTokens = 5 }},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			relay := simTestRelay(7002, 8002, types.RelayFormatOpenAI, simOpenAIMessage("hello world "+repeatWord("x", 200)))
-			usage := &dto.Usage{PromptTokens: 2000, CompletionTokens: 10}
-			tc.mutate(usage)
-			before := *usage
-			_, out, applied := applySimulatedCacheCreationChecked(relay, usage, []string{}, simEnabledAlways)
-			assert.False(t, applied, "真实上游 cache 值存在时整层跳过")
-			assert.Equal(t, 2000, out.PromptTokens)
-			assert.Equal(t, before.PromptTokensDetails, out.PromptTokensDetails, "上游 cache 字段保持原值不被覆盖")
-			assert.Equal(t, before.ClaudeCacheCreation5mTokens, out.ClaudeCacheCreation5mTokens)
-			assert.Equal(t, before.ClaudeCacheCreation1hTokens, out.ClaudeCacheCreation1hTokens)
-		})
-	}
+
+	t.Run("upstream cache write is replaced by local creation", func(t *testing.T) {
+		relay := simTestRelay(7002, 8002, types.RelayFormatOpenAI, simOpenAIMessage("hello world "+repeatWord("x", 200)))
+		usage := &dto.Usage{
+			PromptTokens:     2000,
+			CompletionTokens: 10,
+			PromptTokensDetails: dto.InputTokenDetails{
+				CachedCreationTokens: 5,
+				CacheWriteTokens:     5,
+			},
+		}
+		_, out, applied := applySimulatedCacheCreationChecked(relay, usage, []string{}, simEnabledAlways)
+		require.True(t, applied, "本地创建不受上游创建值制约")
+		assert.Equal(t, 0, out.PromptTokensDetails.CachedTokens, "命中不本地生成")
+		assert.Greater(t, out.PromptTokensDetails.CacheWriteTokens, 5, "创建量由本地前缀链决定")
+		assert.Equal(t, out.PromptTokensDetails.CacheWriteTokens, out.PromptTokensDetails.CachedCreationTokens, "两个创建字段同值")
+		assert.Greater(t, out.ClaudeCacheCreation5mTokens, 0, "默认 TTL 档位为 5m")
+	})
+
+	t.Run("upstream cache hit is the only hit source", func(t *testing.T) {
+		relay := simTestRelay(7003, 8003, types.RelayFormatOpenAI, simOpenAIMessage("hello world "+repeatWord("y", 200)))
+		usage := &dto.Usage{
+			PromptTokens:     2000,
+			CompletionTokens: 10,
+			PromptTokensDetails: dto.InputTokenDetails{
+				CachedTokens: 57,
+			},
+		}
+		_, out, applied := applySimulatedCacheCreationChecked(relay, usage, []string{}, simEnabledAlways)
+		require.True(t, applied, "有上游命中时仍可叠加本地创建")
+		assert.Equal(t, 57, out.PromptTokensDetails.CachedTokens, "命中只取上游值")
+		assert.Greater(t, out.PromptTokensDetails.CacheWriteTokens, 0, "同请求仍按本地前缀链创建")
+	})
 }
 
-func TestSimulatedCacheCreationRelabelsReal5mTo1h(t *testing.T) {
+func TestSimulatedCacheCreationUsesRequestedTTLNotUpstreamCreation(t *testing.T) {
 	simCleanupCache(t)
-	relay := simTestRelay(7003, 8003, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{
+	relay := simTestRelay(7004, 8004, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{
 		Messages:           []dto.Message{{Role: "user", Content: "hello " + repeatWord("x", 300)}},
 		PromptCacheOptions: json.RawMessage(`{"ttl":"1h"}`),
 	})
@@ -119,11 +128,11 @@ func TestSimulatedCacheCreationRelabelsReal5mTo1h(t *testing.T) {
 		},
 	}
 	_, out, applied := applySimulatedCacheCreationChecked(relay, usage, []string{}, simEnabledAlways)
-	require.True(t, applied, "1h 请求的既有创建量需要重分类")
+	require.True(t, applied, "1h 请求必须有本地创建")
 	assert.Equal(t, 1387, out.PromptTokens, "总量不变")
-	assert.Equal(t, 1362, out.ClaudeCacheCreation1hTokens, "创建量归入 1h")
+	assert.Greater(t, out.ClaudeCacheCreation1hTokens, 0, "本地创建按客户端 1h 档位")
 	assert.Equal(t, 0, out.ClaudeCacheCreation5mTokens, "不再留在 5m")
-	assert.Equal(t, 1362, out.PromptTokensDetails.CacheWriteTokens, "创建 token 不新增")
+	assert.Equal(t, out.PromptTokensDetails.CacheWriteTokens, out.ClaudeCacheCreation1hTokens, "创建字段与档位拆分一致")
 }
 
 func TestSimulatedCacheCreationSkipsEmptyAndOversized(t *testing.T) {
@@ -208,11 +217,28 @@ func TestSimulatedCacheCreationPrefixSplit(t *testing.T) {
 	require.Greater(t, expectedHit, 0)
 	require.Greater(t, expectedCreation, 0)
 
-	assert.Equal(t, expectedHit, outB.PromptTokensDetails.CachedTokens, "命中 = 前缀 A 的累计 token")
+	assert.Equal(t, 0, outB.PromptTokensDetails.CachedTokens, "本地不生成命中；上游没有返回命中")
 	assert.Equal(t, expectedCreation, outB.PromptTokensDetails.CacheWriteTokens, "创建只计新增后缀 B")
 	assert.Equal(t, expectedCreation, outB.PromptTokensDetails.CachedCreationTokens)
 	// openai 语义不动 PromptTokens
 	assert.Equal(t, 3000, outB.PromptTokens)
+
+	// 同一前缀链下，如果上游明确返回命中，命中值原样透传，不被本地改写。
+	// 用独立键先建好 contentA 前缀，再发 A+B，确保本地仍有新增后缀。
+	seedRelay := simTestRelay(7031, 8031, types.RelayFormatOpenAI, simOpenAIMessage(contentA))
+	_, _, seedApplied := applySimulatedCacheCreationChecked(seedRelay, &dto.Usage{PromptTokens: 3000}, []string{}, simEnabledAlways)
+	require.True(t, seedApplied)
+	usageBHit := &dto.Usage{
+		PromptTokens: 3000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 111,
+		},
+	}
+	relayBHit := simTestRelay(7031, 8031, types.RelayFormatOpenAI, simOpenAIMessage(contentA+" "+suffixB))
+	_, outBHit, appliedBHit := applySimulatedCacheCreationChecked(relayBHit, usageBHit, []string{}, simEnabledAlways)
+	require.True(t, appliedBHit)
+	assert.Equal(t, 111, outBHit.PromptTokensDetails.CachedTokens, "命中只取上游值")
+	assert.Equal(t, expectedCreation, outBHit.PromptTokensDetails.CacheWriteTokens, "创建仍由本地决定")
 }
 
 // ---------- TTL 过期与命中续期 ----------
@@ -242,31 +268,31 @@ func TestSimulatedCacheCreationTTLExpiryAndRenewal(t *testing.T) {
 	require.Len(t, entry.Segments, 1)
 	originalExpires := entry.Segments[0].ExpiresAt
 
-	// 4 分钟后再次请求：命中且续期，过期时间被刷新到 now+5m。
+	// 4 分钟后再次请求：本地前缀仍匹配，不产生新创建；TTL 续期。
 	simulatedCacheCreationNow = func() time.Time { return base.Add(4 * time.Minute) }
 	usage2 := &dto.Usage{PromptTokens: 3000}
 	_, out2, applied2 := applySimulatedCacheCreationChecked(newRelay(), usage2, []string{}, simEnabledAlways)
-	require.True(t, applied2)
-	assert.Greater(t, out2.PromptTokensDetails.CachedTokens, 0, "未过期应命中")
+	assert.False(t, applied2, "无新创建、上游无命中时不生成命中")
+	assert.Equal(t, 0, out2.PromptTokensDetails.CachedTokens, "本地不生成命中")
 
 	entry, found, err = getSimulatedCacheCreationCache().Get(key)
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Greater(t, entry.Segments[0].ExpiresAt, originalExpires, "命中后续期，过期时间刷新")
+	assert.Greater(t, entry.Segments[0].ExpiresAt, originalExpires, "前缀匹配后续期，过期时间刷新")
 
-	// 距首次 6 分钟（已过原始 5m），但距续期 2 分钟，仍在续期窗口内 → 继续命中。
+	// 距首次 6 分钟（已过原始 5m），但距续期 2 分钟，仍在续期窗口内 → 仍无新创建。
 	simulatedCacheCreationNow = func() time.Time { return base.Add(6 * time.Minute) }
 	usage3 := &dto.Usage{PromptTokens: 3000}
 	_, out3, applied3 := applySimulatedCacheCreationChecked(newRelay(), usage3, []string{}, simEnabledAlways)
-	require.True(t, applied3)
-	assert.Greater(t, out3.PromptTokensDetails.CachedTokens, 0, "续期窗口内继续命中")
+	assert.False(t, applied3, "续期窗口内前缀仍命中本地链")
+	assert.Equal(t, 0, out3.PromptTokensDetails.CachedTokens, "命中不由本地生成")
 
-	// 推进到第二次续期之后：5m 段过期，命中归零，整条重建。
+	// 推进到第二次续期之后：5m 段过期，本地链重建，产生新创建。
 	simulatedCacheCreationNow = func() time.Time { return base.Add(4 * time.Minute).Add(8 * time.Minute) }
 	usage4 := &dto.Usage{PromptTokens: 3000}
 	_, out4, applied4 := applySimulatedCacheCreationChecked(newRelay(), usage4, []string{}, simEnabledAlways)
 	require.True(t, applied4)
-	assert.Equal(t, 0, out4.PromptTokensDetails.CachedTokens, "过期后命中归零")
+	assert.Equal(t, 0, out4.PromptTokensDetails.CachedTokens, "过期后仍无本地命中")
 	assert.Greater(t, out4.PromptTokensDetails.CacheWriteTokens, 0, "过期后重新创建")
 }
 
@@ -302,7 +328,7 @@ func TestSimulatedCacheCreationSegmentCapDiscardsEntry(t *testing.T) {
 	require.NoError(t, getSimulatedCacheCreationCache().SetWithTTL(key, SimulatedCacheEntry{Segments: segments, TotalChars: len(text)}, time.Hour))
 
 	outcome := lookupAndUpdateSimulatedCache(relay, text, simulatedCacheCreationTTLClass5m)
-	assert.Equal(t, 0, outcome.HitTokens, "超上限整条丢弃，命中归零")
+	assert.Equal(t, 0, outcome.MatchedTokens, "超上限整条丢弃，命中归零")
 	assert.Greater(t, outcome.CreationTotal, 0)
 
 	entry, found, err := getSimulatedCacheCreationCache().Get(key)
@@ -442,8 +468,8 @@ func TestSimulatedCacheCreationAnthropicSemanticDeductsPrompt(t *testing.T) {
 	// anthropic 语义：hit+creation 必须从 PromptTokens 扣掉，避免重复计费。
 	expectedRemaining := 3000 - outB.PromptTokensDetails.CachedTokens - outB.PromptTokensDetails.CachedCreationTokens
 	assert.Equal(t, expectedRemaining, outB.PromptTokens)
-	assert.Greater(t, outB.PromptTokensDetails.CachedTokens, 0)
-	assert.Greater(t, outB.PromptTokensDetails.CachedCreationTokens, 0)
+	assert.Equal(t, 0, outB.PromptTokensDetails.CachedTokens, "命中不本地生成")
+	assert.Greater(t, outB.PromptTokensDetails.CachedCreationTokens, 0, "只计新增后缀")
 	assert.Equal(t, outB.PromptTokens+outB.CompletionTokens, outB.TotalTokens)
 }
 
@@ -463,8 +489,8 @@ func TestSimulatedCacheCreationOpenAISemanticKeepsPrompt(t *testing.T) {
 	require.True(t, appliedB)
 
 	assert.Equal(t, 3000, outB.PromptTokens, "openai 语义不动 PromptTokens")
-	assert.Greater(t, outB.PromptTokensDetails.CachedTokens, 0)
-	assert.Greater(t, outB.PromptTokensDetails.CacheWriteTokens, 0)
+	assert.Equal(t, 0, outB.PromptTokensDetails.CachedTokens, "命中不本地生成")
+	assert.Greater(t, outB.PromptTokensDetails.CacheWriteTokens, 0, "只计新增后缀")
 	assert.Equal(t, outB.PromptTokensDetails.CachedCreationTokens, outB.PromptTokensDetails.CacheWriteTokens)
 	assert.Equal(t, dto.BillingUsageSemanticOpenAI, outB.UsageSemantic, "注入后标记 openai 语义，避免被误判 legacy")
 }
