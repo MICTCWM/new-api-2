@@ -1,6 +1,7 @@
 package oaichat
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -101,6 +102,33 @@ func TestBuildClaudeUsageFromOpenAICacheWriteUsage(t *testing.T) {
 	require.NotNil(t, usage.BillingUsage.OpenAIUsage)
 	assert.Equal(t, dto.BillingUsageSemanticOpenAI, usage.BillingUsage.Semantic)
 	assert.Equal(t, 3616, usage.BillingUsage.OpenAIUsage.PromptTokensDetails.CacheWriteTokens)
+}
+
+func TestBuildClaudeUsageFromOpenAI1hCacheWriteKeepsTopLevelSplit(t *testing.T) {
+	usage := buildClaudeUsageFromOpenAIUsage(&dto.Usage{
+		PromptTokens:     1387,
+		CompletionTokens: 315,
+		TotalTokens:      1702,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedCreationTokens: 1362,
+			CacheWriteTokens:     1362,
+		},
+		ClaudeCacheCreation5mTokens: 0,
+		ClaudeCacheCreation1hTokens: 1362,
+	})
+
+	require.NotNil(t, usage)
+	assert.Equal(t, 1362, usage.CacheCreationInputTokens)
+	assert.Equal(t, 0, usage.ClaudeCacheCreation5mTokens)
+	assert.Equal(t, 1362, usage.ClaudeCacheCreation1hTokens)
+	require.NotNil(t, usage.CacheCreation)
+	assert.Equal(t, 0, usage.CacheCreation.Ephemeral5mInputTokens)
+	assert.Equal(t, 1362, usage.CacheCreation.Ephemeral1hInputTokens)
+
+	raw, err := json.Marshal(usage)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"claude_cache_creation_1_h_tokens":1362`)
+	assert.Contains(t, string(raw), `"cache_creation":{"ephemeral_1h_input_tokens":1362}`)
 }
 
 func TestStreamResponseOpenAI2ClaudeClosesTextThinkingAndToolBlocks(t *testing.T) {

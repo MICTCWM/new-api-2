@@ -70,11 +70,13 @@ func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 		}
 	}
 	usage := &dto.ClaudeUsage{
-		InputTokens:              inputTokens,
-		OutputTokens:             oaiUsage.CompletionTokens,
-		CacheCreationInputTokens: cacheCreationTokens,
-		CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
-		BillingUsage:             billingUsage,
+		InputTokens:                 inputTokens,
+		OutputTokens:                oaiUsage.CompletionTokens,
+		CacheCreationInputTokens:    cacheCreationTokens,
+		CacheReadInputTokens:        oaiUsage.PromptTokensDetails.CachedTokens,
+		ClaudeCacheCreation5mTokens: cacheCreation5m,
+		ClaudeCacheCreation1hTokens: cacheCreation1h,
+		BillingUsage:                billingUsage,
 	}
 	if cacheCreation5m > 0 || cacheCreation1h > 0 {
 		usage.CacheCreation = &dto.ClaudeCacheCreationUsage{
