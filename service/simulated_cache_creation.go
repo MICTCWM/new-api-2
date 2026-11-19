@@ -760,7 +760,7 @@ func applySimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, usage 
 		plan := relayInfo.SimulatedCachePlan
 		ApplyPlanToUsageSemantic(plan, usage, semantic)
 		extraContent = append(extraContent, fmt.Sprintf(
-			"模拟缓存创建 %d tokens（5m %d / 1h %d），上游缓存命中 %d tokens",
+			"缓存创建 %d tokens（5m %d / 1h %d），上游缓存命中 %d tokens",
 			plan.CreationTotal(), plan.Creation5m, plan.Creation1h, plan.HitTokens,
 		))
 		return extraContent, usage, true
@@ -790,7 +790,7 @@ func applySimulatedCacheCreationChecked(relayInfo *relaycommon.RelayInfo, usage 
 
 	ApplyPlanToUsageSemantic(plan, usage, semantic)
 	extraContent = append(extraContent, fmt.Sprintf(
-		"模拟缓存创建 %d tokens（5m %d / 1h %d），上游缓存命中 %d tokens",
+		"缓存创建 %d tokens（5m %d / 1h %d），上游缓存命中 %d tokens",
 		plan.CreationTotal(), plan.Creation5m, plan.Creation1h, plan.HitTokens,
 	))
 	return extraContent, usage, true
