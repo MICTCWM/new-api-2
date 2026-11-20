@@ -321,7 +321,7 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "RelayInfo{ ")
 	fmt.Fprintf(b, "RelayFormat: %s, ", info.RelayFormat)
 	fmt.Fprintf(b, "RelayMode: %d, ", info.RelayMode)
-	fmt.Fprintf(b, "IsStream: %t, ", info.IsStream)
+	fmt.Fprintf(b, "IsStream: %t, FakeNonStream: %t, ", info.IsStream, info.FakeNonStream)
 	fmt.Fprintf(b, "IsPlayground: %t, ", info.IsPlayground)
 	fmt.Fprintf(b, "RequestURLPath: %q, ", info.RequestURLPath)
 	fmt.Fprintf(b, "OriginModelName: %q, ", info.OriginModelName)

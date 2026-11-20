@@ -73,6 +73,17 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		}
 	}
 
+	// 假飞流必须拿到上游 usage 才能保证计费字段不被重算；不支持
+	// stream_options.include_usage 的渠道直接拒绝，避免静默按本地估算计费。
+	if info.FakeNonStream && !info.SupportStreamOptions {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("fake non-stream requires a channel that supports stream_options.include_usage"),
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+
 	includeUsage := true
 	// 判断用户是否需要返回使用情况
 	if request.StreamOptions != nil {

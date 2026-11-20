@@ -3,6 +3,7 @@ package claude
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+var errClaudeSSEComplete = errors.New("fake non-stream claude sse complete")
 
 func readClaudeSSEData(body io.Reader, onData func([]byte) error) error {
 	scanner := bufio.NewScanner(body)
@@ -51,6 +54,21 @@ func readClaudeSSEData(body io.Reader, onData func([]byte) error) error {
 	return flush()
 }
 
+func closeClaudeBodyWhenRequestDone(c *gin.Context, body io.ReadCloser) func() {
+	if c == nil || c.Request == nil || body == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-c.Request.Context().Done():
+			_ = body.Close()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
 func fakeClaudeJSONResponse(resp *http.Response, body []byte) *http.Response {
 	clone := *resp
 	clone.Header = resp.Header.Clone()
@@ -76,6 +94,7 @@ func ClaudeBufferedStreamHandler(c *gin.Context, resp *http.Response, info *rela
 		return nil, types.NewError(fmt.Errorf("empty upstream response"), types.ErrorCodeBadResponseBody)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
+	defer closeClaudeBodyWhenRequestDone(c, resp.Body)()
 
 	var (
 		responseID    string
@@ -84,7 +103,6 @@ func ClaudeBufferedStreamHandler(c *gin.Context, resp *http.Response, info *rela
 		stopReason    string
 		startUsage    dto.ClaudeUsage
 		deltaUsage    dto.ClaudeUsage
-		hasStartUsage bool
 		hasDeltaUsage bool
 		blocks        = make(map[int]*fakeClaudeBlock)
 	)
@@ -97,7 +115,7 @@ func ClaudeBufferedStreamHandler(c *gin.Context, resp *http.Response, info *rela
 			return fmt.Errorf("parse claude stream event: %w", err)
 		}
 		if claudeErr := event.GetClaudeError(); claudeErr != nil && claudeErr.Type != "" {
-			return types.WithClaudeError(*claudeErr, http.StatusBadGateway)
+			return types.WithClaudeError(*claudeErr, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 		}
 		switch event.Type {
 		case "message_start":
@@ -112,7 +130,6 @@ func ClaudeBufferedStreamHandler(c *gin.Context, resp *http.Response, info *rela
 				}
 				if event.Message.Usage != nil {
 					startUsage = *event.Message.Usage
-					hasStartUsage = true
 				}
 			}
 		case "content_block_start":
@@ -174,15 +191,16 @@ func ClaudeBufferedStreamHandler(c *gin.Context, resp *http.Response, info *rela
 			}
 		case "message_stop":
 			// 结束标记；聚合已完成，无需额外字段。
+			return errClaudeSSEComplete
 		case "error":
 			if claudeErr := event.GetClaudeError(); claudeErr != nil && claudeErr.Type != "" {
-				return types.WithClaudeError(*claudeErr, http.StatusBadGateway)
+				return types.WithClaudeError(*claudeErr, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 			}
 			return fmt.Errorf("upstream claude stream failed")
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, errClaudeSSEComplete) {
 		if apiErr, ok := err.(*types.NewAPIError); ok {
 			return nil, apiErr
 		}
@@ -239,9 +257,16 @@ func ClaudeBufferedStreamHandler(c *gin.Context, resp *http.Response, info *rela
 			finalUsage.ServerToolUse = deltaUsage.ServerToolUse
 		}
 	}
-	if !hasStartUsage && !hasDeltaUsage {
-		// 没有 usage 时交给 ClaudeHandler 按文本估算，保持与原非流式路径一致。
-		finalUsage = dto.ClaudeUsage{}
+	if finalUsage.InputTokens == 0 && finalUsage.OutputTokens == 0 && finalUsage.GetCacheCreationTotalTokens() == 0 {
+		// 上游没有返回任何 usage 时，按文本估算兜底；否则 ClaudeHandler 会判为
+		// 无账单用量并整单退款。正常路径仍使用上游 usage。
+		var text strings.Builder
+		for _, block := range content {
+			text.WriteString(block.GetText())
+		}
+		estimated := service.ResponseText2Usage(c, text.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		finalUsage.InputTokens = estimated.PromptTokens
+		finalUsage.OutputTokens = estimated.CompletionTokens
 	}
 
 	final := dto.ClaudeResponse{

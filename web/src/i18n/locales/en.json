@@ -5714,8 +5714,8 @@
     "Simulate cache creation": "Simulate cache creation",
     "Only affects local billing and usage display; no cache parameters are sent upstream.": "Only affects local billing and usage display; cache creation is simulated locally and cache hits come from upstream.",
     "Create cache ratio (1 hour)": "Create cache ratio (1 hour)",
-    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio)."
-  },
-  "Fake non-stream": "Fake non-stream",
-  "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged."
+    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).",
+    "Fake non-stream": "Fake non-stream",
+    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged."
+  }
 }

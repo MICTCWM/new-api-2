@@ -5714,8 +5714,8 @@
     "Simulate cache creation": "模拟创建缓存",
     "Only affects local billing and usage display; no cache parameters are sent upstream.": "只影响本站计费与用量展示；缓存创建由本地模拟，缓存命中仍来自上游。",
     "Create cache ratio (1 hour)": "1 小时缓存创建倍率",
-    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "按模型配置的 1 小时缓存创建倍率；留空则使用默认倍率（5 分钟倍率 × 1.6）。"
-  },
-  "Fake non-stream": "假飞流（上游流式）",
-  "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "客户端收到一个非流式 JSON 响应；网关以流式请求上游并聚合完整 SSE。计费字段保持不变。"
+    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "按模型配置的 1 小时缓存创建倍率；留空则使用默认倍率（5 分钟倍率 × 1.6）。",
+    "Fake non-stream": "假飞流（上游流式）",
+    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "客户端收到一个非流式 JSON 响应；网关以流式请求上游并聚合完整 SSE。计费字段保持不变。"
+  }
 }

@@ -46,3 +46,6 @@ go.work.sum
 docker/xray/xray
 docker/xray/*.zip
 docker/xray/*.dat
+
+# Xray runtime binary must not be committed
+xray

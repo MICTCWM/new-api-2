@@ -3,6 +3,7 @@ package openai
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
@@ -20,6 +22,8 @@ import (
 
 // readSSEData 按 SSE 规范把 data: 行拼成一条完整消息。Chat 流式上游通常
 // 一帧只有一行 data，但代理/合规层可能把同一帧拆成多行，这里统一处理。
+var errFakeSSEComplete = errors.New("fake non-stream sse complete")
+
 func readSSEData(body io.Reader, onData func([]byte) error) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
@@ -51,6 +55,21 @@ func readSSEData(body io.Reader, onData func([]byte) error) error {
 		return err
 	}
 	return flush()
+}
+
+func closeBodyWhenRequestDone(c *gin.Context, body io.ReadCloser) func() {
+	if c == nil || c.Request == nil || body == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-c.Request.Context().Done():
+			_ = body.Close()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
 }
 
 func fakeNonStreamJSONResponse(resp *http.Response, body []byte) *http.Response {
@@ -91,6 +110,36 @@ func mergeBufferedChatUsage(dst *dto.Usage, src *dto.Usage, hasPrevious bool) {
 	if src.OutputTokens != 0 {
 		dst.OutputTokens = src.OutputTokens
 	}
+	if src.InputTokens != 0 {
+		dst.InputTokens = src.InputTokens
+	}
+	if src.PromptCacheHitTokens != 0 {
+		dst.PromptCacheHitTokens = src.PromptCacheHitTokens
+	}
+	if src.PromptTokensDetails.TextTokens != 0 {
+		dst.PromptTokensDetails.TextTokens = src.PromptTokensDetails.TextTokens
+	}
+	if src.PromptTokensDetails.AudioTokens != 0 {
+		dst.PromptTokensDetails.AudioTokens = src.PromptTokensDetails.AudioTokens
+	}
+	if src.PromptTokensDetails.ImageTokens != 0 {
+		dst.PromptTokensDetails.ImageTokens = src.PromptTokensDetails.ImageTokens
+	}
+	if src.CompletionTokenDetails.TextTokens != 0 {
+		dst.CompletionTokenDetails.TextTokens = src.CompletionTokenDetails.TextTokens
+	}
+	if src.CompletionTokenDetails.AudioTokens != 0 {
+		dst.CompletionTokenDetails.AudioTokens = src.CompletionTokenDetails.AudioTokens
+	}
+	if src.CompletionTokenDetails.ImageTokens != 0 {
+		dst.CompletionTokenDetails.ImageTokens = src.CompletionTokenDetails.ImageTokens
+	}
+	if src.CompletionTokenDetails.ReasoningTokens != 0 {
+		dst.CompletionTokenDetails.ReasoningTokens = src.CompletionTokenDetails.ReasoningTokens
+	}
+	if dst.PromptTokens+dst.CompletionTokens > 0 {
+		dst.TotalTokens = dst.PromptTokens + dst.CompletionTokens
+	}
 	if src.PromptTokensDetails.CachedTokens != 0 {
 		dst.PromptTokensDetails.CachedTokens = src.PromptTokensDetails.CachedTokens
 	}
@@ -119,6 +168,7 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		return nil, types.NewOpenAIError(fmt.Errorf("empty upstream response"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
+	defer closeBodyWhenRequestDone(c, resp.Body)()
 
 	choices := make(map[int]*fakeChatChoice)
 	var responseID, model string
@@ -129,7 +179,7 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 
 	err := readSSEData(resp.Body, func(data []byte) error {
 		if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
-			return nil
+			return errFakeSSEComplete
 		}
 		var chunk dto.ChatCompletionsStreamResponse
 		if err := common.Unmarshal(data, &chunk); err != nil {
@@ -183,7 +233,9 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 				if call.Type != nil {
 					existing.Type = call.Type
 				}
-				existing.Function.Name += call.Function.Name
+				if call.Function.Name != "" {
+					existing.Function.Name = call.Function.Name
+				}
 				existing.Function.Arguments += call.Function.Arguments
 			}
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
@@ -192,12 +244,12 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	if err != nil && !errors.Is(err, errFakeSSEComplete) {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 	}
 
 	if len(choices) == 0 {
-		return nil, types.NewOpenAIError(fmt.Errorf("upstream chat stream contained no choices"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		return nil, types.NewOpenAIError(fmt.Errorf("upstream chat stream contained no choices"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 	}
 	if model == "" {
 		model = info.UpstreamModelName
@@ -282,41 +334,50 @@ func OaiResponsesBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayIn
 		return nil, types.NewOpenAIError(fmt.Errorf("empty upstream response"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
+	defer closeBodyWhenRequestDone(c, resp.Body)()
 
 	var completed *dto.OpenAIResponsesResponse
+	accumulator := relayconvert.NewResponsesBufferedAccumulator()
 	err := readSSEData(resp.Body, func(data []byte) error {
 		if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
-			return nil
+			return errFakeSSEComplete
 		}
 		var event dto.ResponsesStreamResponse
 		if err := common.Unmarshal(data, &event); err != nil {
 			return fmt.Errorf("parse responses stream event: %w", err)
 		}
-		if event.Response == nil {
-			return nil
-		}
+		accumulator.ProcessEvent(&event)
 		switch event.Type {
 		case "response.completed", "response.done", "response.incomplete":
-			completed = event.Response
-		case "response.failed", "error":
-			if event.Response == nil {
-				return fmt.Errorf("upstream responses stream failed")
+			if event.Response != nil {
+				completed = event.Response
 			}
-			if oaiErr := event.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-				return types.WithOpenAIError(*oaiErr, http.StatusBadGateway)
+			return errFakeSSEComplete
+		case "response.failed", "response.error", "response.cancelled":
+			if event.Response != nil {
+				if oaiErr := event.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
+					return types.WithOpenAIError(*oaiErr, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+				}
 			}
-			return fmt.Errorf("upstream responses stream failed")
+			return fmt.Errorf("upstream responses stream failed: %s", event.Type)
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, errFakeSSEComplete) {
 		if apiErr, ok := err.(*types.NewAPIError); ok {
 			return nil, apiErr
 		}
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 	}
 	if completed == nil {
-		return nil, types.NewOpenAIError(fmt.Errorf("upstream responses stream contained no completed response"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		return nil, types.NewOpenAIError(fmt.Errorf("upstream responses stream contained no completed response"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+	}
+	if len(completed.Output) == 0 {
+		accumulator.SupplementResponseOutput(completed)
+	}
+	if completed.Usage == nil || (completed.Usage.InputTokens == 0 && completed.Usage.OutputTokens == 0 && completed.Usage.TotalTokens == 0) {
+		estimated := service.ResponseText2Usage(c, service.ExtractOutputTextFromResponses(completed), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		completed.Usage = &dto.Usage{InputTokens: estimated.PromptTokens, OutputTokens: estimated.CompletionTokens, TotalTokens: estimated.TotalTokens}
 	}
 	body, err := common.Marshal(completed)
 	if err != nil {

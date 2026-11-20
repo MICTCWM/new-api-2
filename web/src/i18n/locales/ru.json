@@ -2232,7 +2232,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Для частных развертываний, формат: https://fastgpt.run/api/openapi",
     "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.": "В целях безопасности существующие токены доступа нельзя просмотреть повторно. Создавайте новый токен только при необходимости.",
@@ -5714,6 +5714,8 @@
     "Simulate cache creation": "Simulate cache creation",
     "Only affects local billing and usage display; no cache parameters are sent upstream.": "Only affects local billing and usage display; no cache parameters are sent upstream.",
     "Create cache ratio (1 hour)": "Create cache ratio (1 hour)",
-    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio)."
+    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).",
+    "Fake non-stream": "Псевдо-непотоковый режим",
+    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Клиент получает один JSON-ответ без потока; шлюз вызывает upstream с stream=true и агрегирует SSE. Поля тарификации не меняются."
   }
 }

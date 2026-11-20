@@ -2232,7 +2232,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
     "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.": "セキュリティ上、既存のアクセストークンは再表示できません。新しいトークンが必要な場合のみ再生成してください。",
@@ -5714,6 +5714,8 @@
     "Simulate cache creation": "Simulate cache creation",
     "Only affects local billing and usage display; no cache parameters are sent upstream.": "Only affects local billing and usage display; no cache parameters are sent upstream.",
     "Create cache ratio (1 hour)": "Create cache ratio (1 hour)",
-    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio)."
+    "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).",
+    "Fake non-stream": "疑似非ストリーム",
+    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "クライアントには非ストリームの JSON を 1 件返し、ゲートウェイは upstream を stream=true で呼び出して SSE を集約します。課金フィールドは変更されません。"
   }
 }

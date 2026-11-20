@@ -61,3 +61,29 @@ data: {"type":"message_stop"}
 	assert.Equal(t, int64(100), gjson.GetBytes(body, "usage.cache_creation.ephemeral_1h_input_tokens").Int())
 	assert.Equal(t, int64(25), gjson.GetBytes(body, "usage.output_tokens").Int())
 }
+
+func TestClaudeBufferedStreamHandlerEstimatesWhenUsageMissing(t *testing.T) {
+	c, recorder, info, _ := newClaudePlanTestContext(t, types.RelayFormatClaude)
+	info.FakeNonStream = true
+	info.IsStream = true
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(`data: {"type":"message_start","message":{"id":"msg_no_usage","type":"message","role":"assistant","model":"claude-test","content":[]}}
+
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello world"}}
+
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}
+
+data: {"type":"message_stop"}
+
+`)),
+	}
+	usage, apiErr := ClaudeBufferedStreamHandler(c, resp, info)
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Greater(t, usage.CompletionTokens, 0)
+	assert.NotEmpty(t, recorder.Body.Bytes())
+}
