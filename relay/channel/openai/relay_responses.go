@@ -72,6 +72,8 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 	imageCounter.Commit(info)
 
+	// 上游 Msh 分档头优先于 body 的聚合创建量；模拟缓存开启时该调用自动跳过。
+	mshApplied := service.ApplyUpstreamMshCacheUsage(info, &usage)
 	// 规划模拟缓存创建（Responses 语义）。plan 与响应 usage、结算侧同源；
 	// 未生效时保留上游响应字节不变。
 	if service.ValidUsage(&usage) {
@@ -83,6 +85,12 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			usage.ClaudeCacheCreation1hTokens)
 		if plan != nil {
 			service.ApplyPlanToResponsesUsage(plan, &usage)
+			if rewritten, rewriteErr := relaycommon.ReplaceResponsesUsageRawJSON(responseBody, &usage); rewriteErr == nil {
+				responseBody = rewritten
+			} else {
+				logger.LogError(c, "rewrite responses usage failed: "+rewriteErr.Error())
+			}
+		} else if mshApplied {
 			if rewritten, rewriteErr := relaycommon.ReplaceResponsesUsageRawJSON(responseBody, &usage); rewriteErr == nil {
 				responseBody = rewritten
 			} else {
@@ -142,20 +150,28 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					}
 					usage.ClaudeCacheCreation5mTokens = streamResponse.Response.Usage.ClaudeCacheCreation5mTokens
 					usage.ClaudeCacheCreation1hTokens = streamResponse.Response.Usage.ClaudeCacheCreation1hTokens
-				}
-				if service.ValidUsage(usage) {
-					plan := service.PlanSimulatedCacheCreation(info,
-						usage.PromptTokens,
-						usage.PromptTokensDetails.CachedTokens,
-						usage.PromptTokensDetails.CacheCreationTokensTotal(),
-						usage.ClaudeCacheCreation5mTokens,
-						usage.ClaudeCacheCreation1hTokens)
-					if plan != nil {
-						service.ApplyPlanToResponsesUsage(plan, usage)
-						if rewritten, rewriteErr := relaycommon.ReplaceResponsesEventUsageRawJSON(data, usage); rewriteErr == nil {
-							data = rewritten
-						} else {
-							logger.LogError(c, "rewrite responses stream usage failed: "+rewriteErr.Error())
+					// 上游 Msh 分档头优先于 completed 事件里的聚合创建量。
+					mshApplied := service.ApplyUpstreamMshCacheUsage(info, usage)
+					if service.ValidUsage(usage) {
+						plan := service.PlanSimulatedCacheCreation(info,
+							usage.PromptTokens,
+							usage.PromptTokensDetails.CachedTokens,
+							usage.PromptTokensDetails.CacheCreationTokensTotal(),
+							usage.ClaudeCacheCreation5mTokens,
+							usage.ClaudeCacheCreation1hTokens)
+						if plan != nil {
+							service.ApplyPlanToResponsesUsage(plan, usage)
+							if rewritten, rewriteErr := relaycommon.ReplaceResponsesEventUsageRawJSON(data, usage); rewriteErr == nil {
+								data = rewritten
+							} else {
+								logger.LogError(c, "rewrite responses stream usage failed: "+rewriteErr.Error())
+							}
+						} else if mshApplied {
+							if rewritten, rewriteErr := relaycommon.ReplaceResponsesEventUsageRawJSON(data, usage); rewriteErr == nil {
+								data = rewritten
+							} else {
+								logger.LogError(c, "rewrite responses stream usage failed: "+rewriteErr.Error())
+							}
 						}
 					}
 				}

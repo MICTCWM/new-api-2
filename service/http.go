@@ -64,6 +64,10 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 			if !ShouldCopyUpstreamHeader(c, k, v) {
 				continue
 			}
+			if strings.EqualFold(k, "Access-Control-Expose-Headers") {
+				mergeExposeHeaderValues(c.Writer.Header(), v)
+				continue
+			}
 			c.Writer.Header().Set(k, v[0])
 		}
 	}

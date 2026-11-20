@@ -428,6 +428,11 @@ func settleChannelTPMUsage(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, p
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
+	// 上游 Msh 分档头是真实创建量的权威来源；模拟缓存开启时该函数直接跳过，
+	// 由后续 applySimulatedCacheCreation 保持本地 plan 的唯一口径。
+	if billingUsage != nil {
+		ApplyUpstreamMshCacheUsage(relayInfo, billingUsage)
+	}
 	if usage == nil {
 		extraContent = append(extraContent, "上游无计费信息")
 	}

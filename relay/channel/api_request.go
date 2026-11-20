@@ -584,6 +584,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
 		c.Set(common2.UpstreamRequestIdKey, upID)
 	}
+	service.CaptureUpstreamMshCacheHeaders(c, info, resp)
 
 	_ = req.Body.Close()
 	_ = c.Request.Body.Close()

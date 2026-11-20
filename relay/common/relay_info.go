@@ -228,6 +228,14 @@ type RelayInfo struct {
 	// 响应改写与结算计费都从这份 plan 读数；json:"-" 确保不参与任何序列化。
 	SimulatedCachePlan *SimulatedCachePlan `json:"-"`
 
+	// MshCacheWriteHeadersPresent 表示本次上游响应带有 Msh-Usage-Cache-Write-Tokens-*
+	// 分档头。MshCacheWrite5mTokens / 1h 为解析后的上游真实值；这些值只在
+	// simulated_cache_creation_enabled=false 时生效，开启模拟缓存时本地 plan 是
+	// 创建量的唯一口径，上游头会被忽略并从下游响应中移除。
+	MshCacheWriteHeadersPresent bool
+	MshCacheWrite5mTokens       int
+	MshCacheWrite1hTokens       int
+
 	ThinkingContentInfo
 	TokenCountMeta
 	*ClaudeConvertInfo

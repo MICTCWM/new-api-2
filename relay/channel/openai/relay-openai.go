@@ -188,6 +188,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	// 同步重写该帧的 usage 字段；网关补发的 final usage 帧在 HandleFinalResponse 从
 	// 注入后的 usage 构造。不新增/删除帧，不改动帧顺序。
 	if service.ValidUsage(usage) {
+		mshApplied := service.ApplyUpstreamMshCacheUsage(info, usage)
 		plan := service.PlanSimulatedCacheCreation(info,
 			usage.PromptTokens,
 			usage.PromptTokensDetails.CachedTokens,
@@ -196,6 +197,10 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			usage.ClaudeCacheCreation1hTokens)
 		if plan != nil {
 			service.ApplyPlanToUsage(plan, usage)
+			if rewritten, rewriteErr := relaycommon.ReplaceTopLevelUsageRawJSON([]byte(lastStreamData), usage); rewriteErr == nil {
+				lastStreamData = string(rewritten)
+			}
+		} else if mshApplied {
 			if rewritten, rewriteErr := relaycommon.ReplaceTopLevelUsageRawJSON([]byte(lastStreamData), usage); rewriteErr == nil {
 				lastStreamData = string(rewritten)
 			}
@@ -217,6 +222,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	// 上游没有在流里返回 usage 时，上面的规划块不会执行；此时 usage 是本地估算的，
 	// 必须再规划一次，否则客户端 final usage 没有创建字段，而结算阶段仍会按创建扣费。
 	if !containStreamUsage && service.ValidUsage(usage) {
+		service.ApplyUpstreamMshCacheUsage(info, usage)
 		plan := service.PlanSimulatedCacheCreation(info,
 			usage.PromptTokens,
 			usage.PromptTokensDetails.CachedTokens,
@@ -333,6 +339,10 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
 
+	// 上游 Msh 分档头优先于 body 的聚合写入量；模拟缓存开启时该调用自动跳过，
+	// 仍由下面的本地 plan 接管。
+	mshApplied := service.ApplyUpstreamMshCacheUsage(info, &simpleResponse.Usage)
+
 	// 规划模拟缓存创建（openai 语义：prompt_tokens 已含 cached 与 cache-write），
 	// 生效时绝对赋值到 simpleResponse.Usage；规划不生效时上游原值保持不变。
 	plan := service.PlanSimulatedCacheCreation(info,
@@ -347,7 +357,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		if plan != nil && !forceFormat && !usageModified {
+		if (plan != nil || mshApplied) && !forceFormat && !usageModified {
 			// 只替换原始 JSON 的 usage 字段，其余字节保持不变。
 			if rewritten, rewriteErr := relaycommon.ReplaceTopLevelUsageRawJSON(responseBody, &simpleResponse.Usage); rewriteErr == nil {
 				responseBody = rewritten

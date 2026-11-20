@@ -108,6 +108,24 @@ func shouldSkipClaudeMessageDeltaUsagePatch(info *relaycommon.RelayInfo) bool {
 	return info.ChannelSetting.PassThroughBodyEnabled
 }
 
+// applyUpstreamMshCacheToClaudeStream 把上游 Msh 分档头同步到 Claude 流式
+// 事件的嵌套/顶层 usage。模拟缓存 plan 存在时函数内部会自动跳过。
+func applyUpstreamMshCacheToClaudeStream(info *relaycommon.RelayInfo, claudeResponse *dto.ClaudeResponse, claudeInfo *ClaudeResponseInfo) bool {
+	if claudeInfo == nil || claudeInfo.Usage == nil {
+		return false
+	}
+	applied := service.ApplyUpstreamMshCacheUsage(info, claudeInfo.Usage)
+	if claudeResponse != nil {
+		if claudeResponse.Usage != nil {
+			service.ApplyUpstreamMshCacheToClaudeUsage(info, claudeResponse.Usage)
+		}
+		if claudeResponse.Message != nil && claudeResponse.Message.Usage != nil {
+			service.ApplyUpstreamMshCacheToClaudeUsage(info, claudeResponse.Message.Usage)
+		}
+	}
+	return applied
+}
+
 func patchClaudeMessageDeltaUsageData(data string, usage *dto.ClaudeUsage) string {
 	return relayconvert.PatchClaudeMessageDeltaUsageData(data, usage)
 }
@@ -140,6 +158,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			if claudeResponse.Message != nil {
 				info.UpstreamModelName = claudeResponse.Message.Model
 			}
+			// 上游 Msh 分档头先落到 message_start usage；模拟缓存开启时该调用跳过，
+			// 下面的 plan 仍是创建量的唯一口径。
+			mshApplied := applyUpstreamMshCacheToClaudeStream(info, &claudeResponse, claudeInfo)
 			// 规划模拟缓存创建：替换事件内 message.usage，并同步 claudeInfo.Usage，
 			// 保证后续 message_delta 的 patch 不会把注入的 cache 字段归零。
 			if claudeResponse.Message != nil && claudeResponse.Message.Usage != nil {
@@ -151,11 +172,16 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 						data = rewritten
 					}
 					claudeResponse.Message.Usage = &injectedUsage
+				} else if mshApplied {
+					if rewritten, err := relaycommon.ReplaceClaudeMessageStartUsageRawJSON(data, claudeResponse.Message.Usage); err == nil {
+						data = rewritten
+					}
 				}
 			}
 		} else if claudeResponse.Type == "message_delta" {
 			// 确保 message_delta 的 usage 包含完整的 input_tokens 和 cache 相关字段
 			// 解决 AWS Bedrock 等上游返回的 message_delta 缺少这些字段的问题
+			applyUpstreamMshCacheToClaudeStream(info, &claudeResponse, claudeInfo)
 			reapplySimulatedCachePlanToStream(info, &claudeResponse, claudeInfo)
 			if !shouldSkipClaudeMessageDeltaUsagePatch(info) {
 				data = patchClaudeMessageDeltaUsageData(data, buildMessageDeltaPatchUsage(&claudeResponse, claudeInfo))
@@ -169,6 +195,8 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		if !FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
 			return nil
 		}
+		// 上游 Msh 分档头先落到 claudeInfo；模拟缓存开启时该调用跳过。
+		service.ApplyUpstreamMshCacheUsage(info, claudeInfo.Usage)
 
 		// message_start 拿到上游 usage 后规划；注入 claudeInfo.Usage，流式末帧
 		// （HandleStreamFinalResponse 补发）与结算都从同一份 plan 读数。
@@ -288,6 +316,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage = &dto.Usage{}
 	}
 	var plan *service.SimulatedCachePlan
+	var mshApplied bool
 	if claudeResponse.Usage != nil {
 		claudeInfo.Usage.PromptTokens = claudeResponse.Usage.InputTokens
 		claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
@@ -298,6 +327,11 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
 		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
 		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
+		// 上游 Msh 分档头优先于 body 的聚合创建量；模拟缓存开启时该调用自动跳过。
+		mshApplied = service.ApplyUpstreamMshCacheUsage(info, claudeInfo.Usage)
+		if mshApplied {
+			service.ApplyUpstreamMshCacheToClaudeUsage(info, claudeResponse.Usage)
+		}
 		// 规划模拟缓存创建并注入 claudeInfo.Usage（anthropic 语义），Chat 侧 builder
 		// 与结算都从这份 plan 读数；规划不生效时保持上游原值不变。
 		plan = planFromClaudeUsage(info, claudeResponse.Usage)
@@ -319,6 +353,12 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			injectedUsage := *claudeResponse.Usage
 			service.ApplyPlanToClaudeUsage(plan, &injectedUsage)
 			if rewritten, rewriteErr := relaycommon.ReplaceTopLevelUsageRawJSON(data, &injectedUsage); rewriteErr == nil {
+				responseData = rewritten
+			} else {
+				responseData = data
+			}
+		} else if mshApplied && claudeResponse.Usage != nil {
+			if rewritten, rewriteErr := relaycommon.ReplaceTopLevelUsageRawJSON(data, claudeResponse.Usage); rewriteErr == nil {
 				responseData = rewritten
 			} else {
 				responseData = data
