@@ -5716,6 +5716,8 @@
     "Create cache ratio (1 hour)": "Create cache ratio (1 hour)",
     "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).",
     "Fake non-stream": "Giả phi luồng",
-    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Máy khách nhận một phản hồi JSON không luồng; gateway gọi upstream với stream=true và tổng hợp SSE. Các trường tính phí không thay đổi."
+    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Máy khách nhận một phản hồi JSON không luồng; gateway gọi upstream với stream=true và tổng hợp SSE. Các trường tính phí không thay đổi.",
+    "Fallback Retry": "Thử lại khi dự phòng",
+    "When this channel is used as a fallback and the request fails, retry on this channel according to Channel Retry before moving to the next fallback.": "Khi kênh này được dùng làm kênh dự phòng và yêu cầu thất bại, hãy thử lại trên kênh này theo “Thử lại kênh” trước khi chuyển sang kênh dự phòng tiếp theo."
   }
 }

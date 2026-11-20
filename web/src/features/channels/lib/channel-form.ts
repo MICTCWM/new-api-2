@@ -300,6 +300,7 @@ export const channelFormSchema = z
     // Type-specific settings (stored in settings JSON)
     channel_concurrency_limit: z.number().int().min(0).max(10000).optional(),
     channel_retry_times: z.number().int().min(0).max(5).optional(),
+    fallback_retry_enabled: z.boolean().optional(),
     channel_tpm_limit: z.number().int().min(0).max(100_000_000).optional(),
     channel_tpm_buffer: z.number().int().min(0).max(100_000_000).optional(),
     channel_limit_mode: z.enum(['', 'reject', 'queue']).optional(),
@@ -566,6 +567,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   // Type-specific settings
   channel_concurrency_limit: 0,
   channel_retry_times: 0,
+  fallback_retry_enabled: false,
   channel_tpm_limit: 0,
   channel_tpm_buffer: 500_000,
   channel_limit_mode: 'reject',
@@ -670,6 +672,7 @@ export function transformChannelToFormDefaults(
   let speedProtectionEnabled = false
   let speedProtectionGroups: string[] = []
   let channelRetryTimes = 0
+  let fallbackRetryEnabled = false
   let advancedCustom = ''
 
   if (channel.settings) {
@@ -696,6 +699,7 @@ export function transformChannelToFormDefaults(
         parsedRetryTimes <= 5
           ? parsedRetryTimes
           : 0
+      fallbackRetryEnabled = parsed.fallback_retry_enabled === true
       const parsedTPMLimit = parsed.channel_tpm_limit
       channelTPMLimit =
         typeof parsedTPMLimit === 'number' &&
@@ -794,6 +798,7 @@ export function transformChannelToFormDefaults(
     // Type-specific settings
     channel_concurrency_limit: channelConcurrencyLimit,
     channel_retry_times: channelRetryTimes,
+    fallback_retry_enabled: fallbackRetryEnabled,
     channel_tpm_limit: channelTPMLimit,
     channel_tpm_buffer: channelTPMBuffer,
     channel_limit_mode: channelLimitMode,
@@ -991,10 +996,13 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.channel_limit_mode =
       formData.channel_limit_mode === 'queue' ? 'queue' : 'reject'
   }
-  settingsObj.channel_retry_times = Math.min(
+  const normalizedChannelRetryTimes = Math.min(
     5,
     Math.max(0, Math.trunc(formData.channel_retry_times || 0))
   )
+  settingsObj.channel_retry_times = normalizedChannelRetryTimes
+  settingsObj.fallback_retry_enabled =
+    normalizedChannelRetryTimes > 0 && formData.fallback_retry_enabled === true
   settingsObj.rewrite_upstream_429 = formData.rewrite_upstream_429 === true
 
   // Upstream model update settings (for model-fetchable channel types)

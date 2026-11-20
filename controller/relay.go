@@ -527,12 +527,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		// ── 同渠道自动重试（Channel Retry）──
-		// 渠道配置了重试次数时，任意上游错误都先在原渠道按 1s、2s、3s… 退避重试；
+		// 常规渠道按自身设置重试；兜底渠道只有在 fallback_retry_enabled 开启时
+		// 才保留重试预算，失败后先在本渠道按 1s、2s、3s… 退避，再切下一个兜底。
 		// 重试不消耗跨渠道重试预算，也不会在 use_channel 里重复记录同一渠道。
-		if !retryParam.InFallback && !isCodeProviderChannel &&
+		if !isCodeProviderChannel &&
 			!types.IsSkipRetryError(newAPIError) &&
 			(c.Request == nil || c.Request.Context().Err() == nil) {
-			if delay, ok := retryParam.TryStartChannelRetry(channel, model.GetChannelRetryTimes(channel)); ok {
+			retryTimes := model.GetChannelRetryTimes(channel)
+			if retryParam.InFallback {
+				retryTimes = model.GetFallbackChannelRetryTimes(channel)
+			}
+			if delay, ok := retryParam.TryStartChannelRetry(channel, retryTimes); ok {
 				// Publish the count before the wait: a successful retry returns
 				// early and the log is written from this context value.
 				c.Set(service.ChannelRetryCountContextKey, retryParam.ChannelRetryCount())

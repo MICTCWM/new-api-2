@@ -74,6 +74,9 @@ type ChannelOtherSettings struct {
 	// ChannelRetryTimes retries the same channel on any upstream error before
 	// failing over, waiting 1s, 2s, 3s... between attempts. Zero disables it.
 	ChannelRetryTimes int `json:"channel_retry_times,omitempty"`
+	// FallbackRetryEnabled lets ChannelRetryTimes apply when this channel is
+	// serving as a fallback. It has no effect unless ChannelRetryTimes > 0.
+	FallbackRetryEnabled bool `json:"fallback_retry_enabled,omitempty"`
 	// ChannelTPMLimit caps the total tokens this channel may push per minute.
 	// Zero means unlimited. ChannelTPMBuffer is headroom subtracted from the
 	// limit before enforcement so bursts end before hitting the upstream cap.

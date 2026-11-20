@@ -5716,6 +5716,8 @@
     "Create cache ratio (1 hour)": "Create cache ratio (1 hour)",
     "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).",
     "Fake non-stream": "疑似非ストリーム",
-    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "クライアントには非ストリームの JSON を 1 件返し、ゲートウェイは upstream を stream=true で呼び出して SSE を集約します。課金フィールドは変更されません。"
+    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "クライアントには非ストリームの JSON を 1 件返し、ゲートウェイは upstream を stream=true で呼び出して SSE を集約します。課金フィールドは変更されません。",
+    "Fallback Retry": "フォールバックリトライ",
+    "When this channel is used as a fallback and the request fails, retry on this channel according to Channel Retry before moving to the next fallback.": "このチャネルがフォールバックとして使用され、リクエストが失敗した場合、次のフォールバックに移る前に「チャネルリトライ」の回数だけこのチャネルで再試行します。"
   }
 }

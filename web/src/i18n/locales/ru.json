@@ -5716,6 +5716,8 @@
     "Create cache ratio (1 hour)": "Create cache ratio (1 hour)",
     "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).",
     "Fake non-stream": "Псевдо-непотоковый режим",
-    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Клиент получает один JSON-ответ без потока; шлюз вызывает upstream с stream=true и агрегирует SSE. Поля тарификации не меняются."
+    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Клиент получает один JSON-ответ без потока; шлюз вызывает upstream с stream=true и агрегирует SSE. Поля тарификации не меняются.",
+    "Fallback Retry": "Повтор при резервировании",
+    "When this channel is used as a fallback and the request fails, retry on this channel according to Channel Retry before moving to the next fallback.": "Если этот канал используется как резервный и запрос завершается ошибкой, повторите запрос на этом канале в соответствии с «Повтор канала», прежде чем перейти к следующему резервному каналу."
   }
 }

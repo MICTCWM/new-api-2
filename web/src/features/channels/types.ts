@@ -85,6 +85,9 @@ export interface ChannelOtherSettings {
   channel_rpm_limit?: number
   // Same-channel retries after an upstream error, with 1s, 2s, 3s... backoff.
   channel_retry_times?: number
+  // Keep the channel-retry budget active while this channel is serving as a
+  // fallback; only meaningful when channel_retry_times > 0.
+  fallback_retry_enabled?: boolean
   // Per-channel TPM throttle: total tokens per minute, minus the buffer
   // headroom before enforcement; "" / reject / queue switches the mode.
   channel_tpm_limit?: number

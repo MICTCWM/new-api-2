@@ -4177,6 +4177,16 @@ export function ChannelMutateDrawer({
                                             ? nextValue[0]
                                             : nextValue
                                           field.onChange(firstValue)
+                                          if (firstValue <= 0) {
+                                            form.setValue(
+                                              'fallback_retry_enabled',
+                                              false,
+                                              {
+                                                shouldDirty: true,
+                                                shouldTouch: true,
+                                              }
+                                            )
+                                          }
                                         }}
                                       />
                                       <span className='text-muted-foreground w-14 shrink-0 text-right text-xs tabular-nums'>
@@ -4196,6 +4206,31 @@ export function ChannelMutateDrawer({
                                 </FormItem>
                               )}
                             />
+
+                            {(currentChannelRetryTimes ?? 0) > 0 && (
+                              <FormField
+                                control={form.control}
+                                name='fallback_retry_enabled'
+                                render={({ field }) => (
+                                  <FormItem className='flex items-center justify-between gap-4 rounded-md border px-3 py-2.5'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>{t('Fallback Retry')}</FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'When this channel is used as a fallback and the request fails, retry on this channel according to Channel Retry before moving to the next fallback.'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value === true}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+                            )}
                           </div>
 
                           <div

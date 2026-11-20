@@ -5716,6 +5716,8 @@
     "Create cache ratio (1 hour)": "1 小時緩存建立倍率",
     "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "按模型配置的 1 小時緩存建立倍率；留空則使用默認倍率（5 分鐘倍率 × 1.6）。",
     "Fake non-stream": "假飛流（上游流式）",
-    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "客戶端收到一個非流式 JSON 響應；閘道以流式請求上游並聚合完整 SSE。計費欄位保持不變。"
+    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "客戶端收到一個非流式 JSON 響應；閘道以流式請求上游並聚合完整 SSE。計費欄位保持不變。",
+    "Fallback Retry": "兜底重試",
+    "When this channel is used as a fallback and the request fails, retry on this channel according to Channel Retry before moving to the next fallback.": "當該頻道作為兜底頻道且請求失敗時，先依「頻道重試」次數在目前頻道重試，再切換到下一個兜底頻道。"
   }
 }

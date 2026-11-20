@@ -286,3 +286,22 @@ func TestSettleChannelTPMUsageSkipsChannelsWithoutTPMLimit(t *testing.T) {
 	require.Equal(t, int64(0), getChannelTokensUsed(t, codeChannel.Id))
 	require.Equal(t, int64(0), getChannelTokensUsed(t, plainChannel.Id))
 }
+
+func TestGetFallbackChannelRetryTimesRequiresOptIn(t *testing.T) {
+	channel := &Channel{Id: 207}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelRetryTimes:    3,
+		FallbackRetryEnabled: true,
+	})
+	require.Equal(t, 3, GetFallbackChannelRetryTimes(channel))
+
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ChannelRetryTimes: 3})
+	require.Equal(t, 3, GetChannelRetryTimes(channel))
+	require.Equal(t, 0, GetFallbackChannelRetryTimes(channel))
+
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelRetryTimes:    9,
+		FallbackRetryEnabled: true,
+	})
+	require.Equal(t, MaxChannelRetryTimes, GetFallbackChannelRetryTimes(channel))
+}

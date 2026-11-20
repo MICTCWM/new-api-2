@@ -341,7 +341,25 @@ func GetChannelRetryTimes(channel *Channel) int {
 	if channel == nil {
 		return 0
 	}
-	times := channel.GetOtherSettings().ChannelRetryTimes
+	return normalizeChannelRetryTimes(channel.GetOtherSettings().ChannelRetryTimes)
+}
+
+// GetFallbackChannelRetryTimes returns the retry budget for a channel that is
+// currently serving as a fallback. The channel must explicitly opt in through
+// fallback_retry_enabled; otherwise its retry setting keeps the historical
+// behavior of being ignored while in fallback mode.
+func GetFallbackChannelRetryTimes(channel *Channel) int {
+	if channel == nil {
+		return 0
+	}
+	settings := channel.GetOtherSettings()
+	if !settings.FallbackRetryEnabled {
+		return 0
+	}
+	return normalizeChannelRetryTimes(settings.ChannelRetryTimes)
+}
+
+func normalizeChannelRetryTimes(times int) int {
 	if times < 0 {
 		return 0
 	}

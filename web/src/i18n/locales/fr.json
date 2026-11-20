@@ -5716,6 +5716,8 @@
     "Create cache ratio (1 hour)": "Create cache ratio (1 hour)",
     "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).",
     "Fake non-stream": "Faux non-stream",
-    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Le client reçoit une réponse JSON non-stream ; la passerelle appelle l'amont avec stream=true et agrège le SSE. Les champs de facturation restent inchangés."
+    "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Le client reçoit une réponse JSON non-stream ; la passerelle appelle l'amont avec stream=true et agrège le SSE. Les champs de facturation restent inchangés.",
+    "Fallback Retry": "Relance en secours",
+    "When this channel is used as a fallback and the request fails, retry on this channel according to Channel Retry before moving to the next fallback.": "Lorsque ce canal sert de secours et que la requête échoue, réessayez sur ce canal selon « Relance du canal » avant de passer au secours suivant."
   }
 }
