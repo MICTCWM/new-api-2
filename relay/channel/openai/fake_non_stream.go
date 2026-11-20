@@ -75,6 +75,42 @@ type fakeChatChoice struct {
 	finishReason string
 }
 
+// mergeBufferedChatUsage 合并流式 usage，避免末尾仅带 completion_tokens
+// 或空 usage 的帧把前面已拿到的 prompt/cache 字段覆盖成 0。
+func mergeBufferedChatUsage(dst *dto.Usage, src *dto.Usage, hasPrevious bool) {
+	if src == nil {
+		return
+	}
+	if !hasPrevious || src.PromptTokens != 0 || src.TotalTokens != 0 {
+		*dst = *src
+		return
+	}
+	if src.CompletionTokens != 0 {
+		dst.CompletionTokens = src.CompletionTokens
+	}
+	if src.OutputTokens != 0 {
+		dst.OutputTokens = src.OutputTokens
+	}
+	if src.PromptTokensDetails.CachedTokens != 0 {
+		dst.PromptTokensDetails.CachedTokens = src.PromptTokensDetails.CachedTokens
+	}
+	if src.PromptTokensDetails.CachedCreationTokens != 0 {
+		dst.PromptTokensDetails.CachedCreationTokens = src.PromptTokensDetails.CachedCreationTokens
+	}
+	if src.PromptTokensDetails.CacheWriteTokens != 0 {
+		dst.PromptTokensDetails.CacheWriteTokens = src.PromptTokensDetails.CacheWriteTokens
+	}
+	if src.ClaudeCacheCreation5mTokens != 0 {
+		dst.ClaudeCacheCreation5mTokens = src.ClaudeCacheCreation5mTokens
+	}
+	if src.ClaudeCacheCreation1hTokens != 0 {
+		dst.ClaudeCacheCreation1hTokens = src.ClaudeCacheCreation1hTokens
+	}
+	if src.BillingUsage != nil {
+		dst.BillingUsage = src.BillingUsage
+	}
+}
+
 // OaiChatBufferedStreamHandler 接收上游 Chat SSE，聚合成一个普通
 // chat.completion JSON，再复用 OpenaiHandler 完成 usage 归一化、Msh 头、
 // 模拟缓存、协议转换和结算。计费字段完全沿用上游最后一帧 usage。
@@ -112,7 +148,7 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 			systemFingerprint = *chunk.SystemFingerprint
 		}
 		if chunk.Usage != nil {
-			usage = *chunk.Usage
+			mergeBufferedChatUsage(&usage, chunk.Usage, hasUsage)
 			hasUsage = true
 		}
 		for _, choice := range chunk.Choices {
@@ -263,6 +299,9 @@ func OaiResponsesBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayIn
 		case "response.completed", "response.done", "response.incomplete":
 			completed = event.Response
 		case "response.failed", "error":
+			if event.Response == nil {
+				return fmt.Errorf("upstream responses stream failed")
+			}
 			if oaiErr := event.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
 				return types.WithOpenAIError(*oaiErr, http.StatusBadGateway)
 			}

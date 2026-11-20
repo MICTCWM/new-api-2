@@ -652,7 +652,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		usage, err = common_handler.RerankHandler(c, info, resp)
 	case relayconstant.RelayModeResponses:
 		if info.FakeNonStream && resp != nil && resp.Header != nil &&
-			strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+			strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			usage, err = OaiResponsesBufferedStreamHandler(c, info, resp)
 		} else if info.IsStream {
 			usage, err = OaiResponsesStreamHandler(c, info, resp)
