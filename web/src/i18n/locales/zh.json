@@ -2232,7 +2232,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.": "出于安全考虑，现有访问令牌无法再次显示。仅在需要新令牌时重新生成。",
@@ -5715,5 +5715,7 @@
     "Only affects local billing and usage display; no cache parameters are sent upstream.": "只影响本站计费与用量展示；缓存创建由本地模拟，缓存命中仍来自上游。",
     "Create cache ratio (1 hour)": "1 小时缓存创建倍率",
     "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "按模型配置的 1 小时缓存创建倍率；留空则使用默认倍率（5 分钟倍率 × 1.6）。"
-  }
+  },
+  "Fake non-stream": "假飞流（上游流式）",
+  "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "客户端收到一个非流式 JSON 响应；网关以流式请求上游并聚合完整 SSE。计费字段保持不变。"
 }

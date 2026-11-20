@@ -96,6 +96,7 @@ type ChannelOtherSettings struct {
 	DisableTaskPollingSleep               bool                  `json:"disable_task_polling_sleep,omitempty"`       // 是否跳过异步任务轮询间隔
 	StationCacheEnabled                   bool                  `json:"station_cache_enabled,omitempty"`            // 是否启用站内缓存（上游不提供 prompt 缓存时网关自建）
 	SimulatedCacheCreationEnabled         bool                  `json:"simulated_cache_creation_enabled,omitempty"` // 是否启用「模拟创建缓存」：网关读取 TTL 后从上游请求剥离，由本地模拟创建并回写响应 usage 与计费；命中始终取上游
+	FakeNonStreamEnabled                  bool                  `json:"fake_non_stream_enabled,omitempty"`          // 假飞流：客户端非流式请求改为上游流式，接收完整 SSE 后聚合为非流式 JSON 返回
 	VideoFrameExtractionEnabled           bool                  `json:"video_frame_extraction_enabled,omitempty"`   // 是否将 Chat/Responses 视频输入抽帧为图片
 	DisableProtocolConversion             bool                  `json:"disable_protocol_conversion,omitempty"`      // 是否禁用 Chat/Responses 自动协议转换
 	AwsKeyType                            AwsKeyType            `json:"aws_key_type,omitempty"`

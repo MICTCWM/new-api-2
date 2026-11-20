@@ -107,6 +107,7 @@ export interface ChannelOtherSettings {
   disable_task_polling_sleep?: boolean
   station_cache_enabled?: boolean
   simulated_cache_creation_enabled?: boolean
+  fake_non_stream_enabled?: boolean
   video_frame_extraction_enabled?: boolean
   disable_protocol_conversion?: boolean
   upstream_model_update_check_enabled?: boolean

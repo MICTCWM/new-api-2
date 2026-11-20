@@ -62,6 +62,17 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	// 假飞流：客户端要非流式，但上游按流式请求；响应阶段由对应 adaptor
+	// 聚合成完整 JSON 后再交给正常非流式 handler。只改上游请求形态，不改
+	// 计费字段或下游响应协议。
+	if info.ChannelOtherSettings.FakeNonStreamEnabled && !lo.FromPtrOr(request.Stream, false) {
+		info.FakeNonStream = true
+		request.Stream = lo.ToPtr(true)
+		if request.StreamOptions == nil {
+			request.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
+		}
+	}
+
 	includeUsage := true
 	// 判断用户是否需要返回使用情况
 	if request.StreamOptions != nil {

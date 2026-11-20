@@ -2232,7 +2232,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.": "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.",
@@ -5715,5 +5715,7 @@
     "Only affects local billing and usage display; no cache parameters are sent upstream.": "Only affects local billing and usage display; cache creation is simulated locally and cache hits come from upstream.",
     "Create cache ratio (1 hour)": "Create cache ratio (1 hour)",
     "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio).": "Optional per-model ratio for 1-hour cache creation. Leave empty to use the default (1.6× the 5-minute ratio)."
-  }
+  },
+  "Fake non-stream": "Fake non-stream",
+  "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.": "Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged."
 }

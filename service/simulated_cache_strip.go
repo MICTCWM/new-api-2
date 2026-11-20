@@ -138,23 +138,81 @@ func BuildSimulatedCachePassThroughBody(c *gin.Context, info *relaycommon.RelayI
 	if err != nil {
 		return nil, nil, err
 	}
-	if !simulatedCacheCreationRuntimeEnabled(info) {
+	if !simulatedCacheCreationRuntimeEnabled(info) && !info.FakeNonStream {
 		return common.NewReplayableBodyReader(storage), nil, nil
 	}
 	raw, err := storage.Bytes()
 	if err != nil {
 		return nil, nil, err
 	}
-	stripped, changed, err := StripSimulatedCacheTTLFromJSON(raw)
-	if err != nil {
-		return nil, nil, err
+	out := raw
+	changed := false
+	if simulatedCacheCreationRuntimeEnabled(info) {
+		stripped, stripChanged, err := StripSimulatedCacheTTLFromJSON(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = stripped
+		changed = stripChanged
+	}
+	if info.FakeNonStream {
+		rewritten, fakeChanged, err := ForceStreamTrueJSON(out, info.FakeNonStreamIncludeUsage())
+		if err != nil {
+			return nil, nil, err
+		}
+		out = rewritten
+		changed = changed || fakeChanged
 	}
 	if !changed {
 		return common.NewReplayableBodyReader(storage), nil, nil
 	}
-	newStorage, err := common.CreateBodyStorage(stripped)
+	newStorage, err := common.CreateBodyStorage(out)
 	if err != nil {
 		return nil, nil, err
 	}
 	return common.NewReplayableBodyReader(newStorage), func() { _ = newStorage.Close() }, nil
+}
+
+// ForceStreamTrueJSON 把透传请求体中的 stream 强制改为 true；必要时注入
+// stream_options.include_usage，保证上游流式末帧带回 usage。只处理顶层对象，
+// 非 JSON 请求（如 multipart）原样返回。
+func ForceStreamTrueJSON(raw []byte, includeUsage bool) ([]byte, bool, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return raw, false, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return raw, false, nil
+	}
+	changed := false
+	if string(bytes.TrimSpace(obj["stream"])) != "true" {
+		obj["stream"] = json.RawMessage("true")
+		changed = true
+	}
+	if includeUsage {
+		var streamOptions map[string]json.RawMessage
+		if existing, ok := obj["stream_options"]; ok {
+			_ = json.Unmarshal(existing, &streamOptions)
+		}
+		if streamOptions == nil {
+			streamOptions = map[string]json.RawMessage{}
+		}
+		if string(bytes.TrimSpace(streamOptions["include_usage"])) != "true" {
+			streamOptions["include_usage"] = json.RawMessage("true")
+			encoded, err := marshalSimulatedCacheJSON(streamOptions)
+			if err != nil {
+				return nil, false, err
+			}
+			obj["stream_options"] = encoded
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, false, nil
+	}
+	out, err := marshalSimulatedCacheJSON(obj)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
 }

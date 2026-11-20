@@ -3869,6 +3869,28 @@ export function ChannelMutateDrawer({
                               </FormItem>
                             )}
                           />
+                          <FormField
+                            control={form.control}
+                            name='fake_non_stream_enabled'
+                            render={({ field }) => (
+                              <FormItem className='flex items-center justify-between px-4 py-3'>
+                                <div className='space-y-0.5'>
+                                  <FormLabel>{t('Fake non-stream')}</FormLabel>
+                                  <FormDescription>
+                                    {t(
+                                      'Client receives one non-stream JSON response; the gateway calls upstream with stream=true and aggregates the SSE. Billing fields stay unchanged.'
+                                    )}
+                                  </FormDescription>
+                                </div>
+                                <FormControl>
+                                  <Switch
+                                    checked={field.value}
+                                    onCheckedChange={field.onChange}
+                                  />
+                                </FormControl>
+                              </FormItem>
+                            )}
+                          />
                         </div>
                       </fieldset>
                     </div>

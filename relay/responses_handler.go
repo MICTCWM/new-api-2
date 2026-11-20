@@ -78,6 +78,15 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	// 假飞流：仅对标准 /v1/responses 生效；客户端非流式时把上游请求改为
+	// stream=true，由 Responses adaptor 聚合完整 SSE 后返回普通 JSON。
+	if info.ChannelOtherSettings.FakeNonStreamEnabled &&
+		info.RelayMode == relayconstant.RelayModeResponses &&
+		!(request.Stream != nil && *request.Stream) {
+		info.FakeNonStream = true
+		request.Stream = common.GetPointer[bool](true)
+	}
+
 	adaptor := GetAdaptorForChannel(info.ApiType, info.ChannelType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())

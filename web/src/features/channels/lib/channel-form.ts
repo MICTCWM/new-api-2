@@ -321,6 +321,7 @@ export const channelFormSchema = z
     disable_task_polling_sleep: z.boolean().optional(),
     station_cache_enabled: z.boolean().optional(), // Gateway station cache billing discount
     simulated_cache_creation_enabled: z.boolean().optional(), // Locally simulate upstream cache creation for billing display only
+    fake_non_stream_enabled: z.boolean().optional(), // Client gets non-stream JSON while upstream is called with stream=true
     video_frame_extraction_enabled: z.boolean().optional(), // Extract Chat/Responses video input into image frames
     disable_protocol_conversion: z.boolean().optional(), // Keep Chat/Responses requests in their original protocol
     // Upstream model update settings (stored in settings JSON)
@@ -584,6 +585,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   disable_task_polling_sleep: false,
   station_cache_enabled: false,
   simulated_cache_creation_enabled: false,
+  fake_non_stream_enabled: false,
   video_frame_extraction_enabled: false,
   disable_protocol_conversion: false,
   upstream_model_update_check_enabled: false,
@@ -659,6 +661,7 @@ export function transformChannelToFormDefaults(
   let disableTaskPollingSleep = false
   let stationCacheEnabled = false
   let simulatedCacheCreationEnabled = false
+  let fakeNonStreamEnabled = false
   let videoFrameExtractionEnabled = false
   let disableProtocolConversion = false
   let upstreamModelUpdateCheckEnabled = false
@@ -723,6 +726,7 @@ export function transformChannelToFormDefaults(
       stationCacheEnabled = parsed.station_cache_enabled === true
       simulatedCacheCreationEnabled =
         parsed.simulated_cache_creation_enabled === true
+      fakeNonStreamEnabled = parsed.fake_non_stream_enabled === true
       videoFrameExtractionEnabled =
         parsed.video_frame_extraction_enabled === true
       disableProtocolConversion = parsed.disable_protocol_conversion === true
@@ -807,6 +811,7 @@ export function transformChannelToFormDefaults(
     disable_task_polling_sleep: disableTaskPollingSleep,
     station_cache_enabled: stationCacheEnabled,
     simulated_cache_creation_enabled: simulatedCacheCreationEnabled,
+    fake_non_stream_enabled: fakeNonStreamEnabled,
     video_frame_extraction_enabled: videoFrameExtractionEnabled,
     disable_protocol_conversion: disableProtocolConversion,
     allow_safety_identifier: allowSafetyIdentifier,
@@ -948,6 +953,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   settingsObj.station_cache_enabled = formData.station_cache_enabled === true
   settingsObj.simulated_cache_creation_enabled =
     formData.simulated_cache_creation_enabled === true
+  settingsObj.fake_non_stream_enabled = formData.fake_non_stream_enabled === true
   settingsObj.video_frame_extraction_enabled =
     formData.video_frame_extraction_enabled === true
   settingsObj.disable_protocol_conversion =

@@ -41,6 +41,13 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	// 假飞流：客户端非流式，转为上游流式请求；响应侧由 Claude adaptor
+	// 聚合完整 SSE 后再走正常非流式结算。
+	if info.ChannelOtherSettings.FakeNonStreamEnabled && !(request.Stream != nil && *request.Stream) {
+		info.FakeNonStream = true
+		request.Stream = common.GetPointer[bool](true)
+	}
+
 	adaptor := GetAdaptorForChannel(info.ApiType, info.ChannelType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())

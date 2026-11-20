@@ -121,7 +121,11 @@ type RelayInfo struct {
 	FirstResponseTime time.Time
 	isFirstResponse   bool
 	//SendLastReasoningResponse bool
-	IsStream               bool
+	IsStream bool
+	// FakeNonStream 表示客户端要的是非流式响应，但网关向上游发起流式请求，
+	// 待上游流结束后把完整结果聚合为单个非流式 JSON 返回客户端。
+	// 该标志只影响上游请求与响应聚合，不改变计费口径。
+	FakeNonStream          bool
 	IsGeminiBatchEmbedding bool
 	IsPlayground           bool
 	UsePrice               bool
@@ -802,6 +806,15 @@ func (info *RelayInfo) GetChannelType() int {
 
 func (info *RelayInfo) GetIsStream() bool {
 	return info != nil && info.IsStream
+}
+
+// FakeNonStreamIncludeUsage 决定透传改流式时是否注入 OpenAI Chat 的
+// stream_options.include_usage；Responses/Claude 的请求体不接受该字段。
+func (info *RelayInfo) FakeNonStreamIncludeUsage() bool {
+	if info == nil || !info.FakeNonStream {
+		return false
+	}
+	return info.RelayFormat != types.RelayFormatClaude && info.RelayMode != relayconstant.RelayModeResponses
 }
 
 func (info *RelayInfo) GetReasoningEffort() string {
