@@ -45,6 +45,11 @@ func sweepExpiredSessions(now time.Time) {
 	sessionStore.Range(func(key, value any) bool {
 		if s, ok := value.(sessionEntry); ok && !now.Before(s.expiresAt) {
 			sessionStore.Delete(key)
+			// Mirror the prototype: when a session expires, drop its
+			// fingerprint state too so the store does not grow forever.
+			if accountKey, ok := key.(string); ok {
+				ResetFingerprintState(accountKey)
+			}
 		}
 		return true
 	})
@@ -64,6 +69,9 @@ func ensureSession(accountKey string) string {
 			return s.sessionID
 		}
 		sessionStore.Delete(accountKey)
+		// Rotating in place bypasses the periodic sweep; clear the fingerprint
+		// state here too so it cannot outlive the session it belongs to.
+		ResetFingerprintState(accountKey)
 	}
 	sweepExpiredSessions(now)
 
@@ -74,6 +82,8 @@ func ensureSession(accountKey string) string {
 		if now.Before(s.expiresAt) {
 			return s.sessionID
 		}
+		sessionStore.Delete(accountKey)
+		ResetFingerprintState(accountKey)
 	}
 	jitter := time.Duration(0)
 	if sessionJitter > 0 {

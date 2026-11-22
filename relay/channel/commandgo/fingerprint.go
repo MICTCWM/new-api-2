@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 // Device profile and fingerprint derivation ported from the Command Code Go
@@ -14,11 +15,36 @@ import (
 // deterministically from the upstream account key so the same account always
 // presents the same machine to the upstream, across restarts and instances.
 const (
-	fingerprintSalt = "command-code:device-fingerprint:v1"
-	devicePlatform  = "win32"
-	deviceArch      = "x64"
-	deviceOSRelease = "10.0.22631"
+	// fingerprintSignalSalt is the CLI's fixed root salt used to hash individual
+	// machine signals (fingerprint.mjs FP_SALT). It is NOT the derivation salt.
+	fingerprintSignalSalt = "command-code:device-fingerprint:v1"
+	devicePlatform        = "win32"
+	deviceArch            = "x64"
+	deviceOSRelease       = "10.0.22631"
 )
+
+// fingerprintDerivationSalt mirrors CFG.fingerprintSalt in the prototype: it
+// only affects *which* forged machine a key maps to, never the signal hashes.
+// Defaults to empty like the prototype. Configure it once at startup.
+var fingerprintDerivationSalt atomic.Value // string
+
+func init() {
+	fingerprintDerivationSalt.Store("")
+}
+
+func currentFingerprintDerivationSalt() string {
+	return fingerprintDerivationSalt.Load().(string)
+}
+
+// SetFingerprintDerivationSalt lets callers override the derivation salt
+// without touching the signal-hash salt. An empty value restores the default.
+// Intended for startup/test use only: cached fingerprints are derived from the
+// active salt, so rotating at runtime is unsupported. This drops every cached
+// fingerprint so the next use re-derives with the new salt.
+func SetFingerprintDerivationSalt(salt string) {
+	fingerprintDerivationSalt.Store(salt)
+	clearFingerprintStates()
+}
 
 var fingerprintCPUModels = []string{
 	"12th Gen Intel(R) Core(TM) i7-12650H",
@@ -60,37 +86,44 @@ type DeviceProfile struct {
 	ProjectDir string
 }
 
-// Fingerprint mirrors the CLI device fingerprint shape.
+// Fingerprint mirrors the CLI device fingerprint shape reported to
+// POST /alpha/fingerprint/record. JSON tags match the prototype payload.
 type Fingerprint struct {
-	Thumbmark  string
-	Components FingerprintComponents
+	Thumbmark  string                `json:"thumbmark"`
+	Components FingerprintComponents `json:"components"`
 }
 
-// FingerprintComponents carries the hashed machine signals.
+// FingerprintComponents carries the hashed machine signals. Field names match
+// the upstream report body exactly. Hash fields are effectively always non-empty
+// for a real key (machine id/hostname/git email are key-derived); omitempty only
+// mirrors the prototype's "undefined" fields in the degenerate empty case.
+// IsContainer is intentionally NOT omitempty: the prototype always sends
+// isContainer=false.
 type FingerprintComponents struct {
-	MachineIDHash string
-	MACHashes     []string
-	OSUserHash    string
-	HostnameHash  string
-	GitEmailHash  string
-	Platform      string
-	Arch          string
-	OSRelease     string
-	CPUModel      string
-	CPUCount      int
-	MemGiB        int
-	IsContainer   bool
-	Timezone      string
-	Runtime       string
-	CollectorVers int
+	MachineIDHash string   `json:"machineIdHash,omitempty"`
+	MACHashes     []string `json:"macHashes,omitempty"`
+	OSUserHash    string   `json:"osUserHash,omitempty"`
+	HostnameHash  string   `json:"hostnameHash,omitempty"`
+	GitEmailHash  string   `json:"gitEmailHash,omitempty"`
+	Platform      string   `json:"platform"`
+	Arch          string   `json:"arch"`
+	OSRelease     string   `json:"osRelease"`
+	CPUModel      string   `json:"cpuModel"`
+	CPUCount      int      `json:"cpuCount"`
+	MemGiB        int      `json:"memGiB"`
+	IsContainer   bool     `json:"isContainer"`
+	Timezone      string   `json:"timezone"`
+	Runtime       string   `json:"runtime"`
+	CollectorVers int      `json:"collectorVersion"`
 }
 
 // ProfileForAccount returns the deterministic forged device profile for an
 // account key.
 //
-// TODO: the prototype also records the fingerprint via
-// /alpha/fingerprint/record; this adaptor only needs the derived working
-// directory and x-project-slug, so reporting is intentionally not wired yet.
+// The prototype keeps a single global projectDir for the whole process. Here it
+// is derived per key on purpose: it must stay on the same forged machine as
+// osUser (which also comes from the key), so every account presents one
+// self-consistent machine rather than sharing a process-wide identity.
 func ProfileForAccount(apiKey string) DeviceProfile {
 	osUser := fingerprintOSUsers[fpPickIndex(apiKey, "osUser", len(fingerprintOSUsers), func(i int) string {
 		return fingerprintOSUsers[i]
@@ -107,10 +140,12 @@ func ProfileForAccount(apiKey string) DeviceProfile {
 }
 
 // GenerateFingerprint derives the deterministic device fingerprint for an
-// account key.
+// account key. It mirrors generateFingerprint in fingerprint.mjs field for
+// field, including the CPU candidate label ("model|cores") and the thumbmark
+// seed construction.
 func GenerateFingerprint(apiKey string) Fingerprint {
 	cpuIdx := fpPickIndex(apiKey, "cpu", len(fingerprintCPUModels), func(i int) string {
-		return fingerprintCPUModels[i]
+		return fingerprintCPUModels[i] + "|" + strconv.Itoa(fingerprintCPUCores[i])
 	})
 	memIdx := fpPickIndex(apiKey, "mem", len(fingerprintMemGiB), func(i int) string {
 		return strconv.Itoa(fingerprintMemGiB[i])
@@ -133,13 +168,32 @@ func GenerateFingerprint(apiKey string) Fingerprint {
 	for i := 0; i < fingerprintMACCounts[macCountIdx]; i++ {
 		macs = append(macs, formatMAC(fpDigest(apiKey, "mac"+strconv.Itoa(i))[:6]))
 	}
+	// JS Array.prototype.sort on MAC strings is lexicographic (code unit order),
+	// which matches Go's sort.Strings for lowercase hex.
 	sort.Strings(macs)
 
 	hostname := "DESKTOP-" + strings.ToUpper(hexOf(apiKey, "hostname", 4))
 	gitEmail := fingerprintOSUsers[osUserIdx] + "." + hexOf(apiKey, "gitEmail", 3) + "@" + fingerprintMailDomains[mailIdx]
 
-	thumbSeed := []string{machineID, strings.Join(macs, ",")}
-	thumbmark := sha256Hex(fingerprintSalt + "\x00machine\x00" + strings.Join(thumbSeed, "|"))
+	// thumbmark seed: [machineId, macs.join(",")] and, only when machineId is
+	// empty, hostname then cpuModel. Empty seed falls back to "unknown".
+	trimmedMachineID := strings.TrimSpace(machineID)
+	seedParts := make([]string, 0, 4)
+	seedParts = append(seedParts, trimmedMachineID, strings.Join(macs, ","))
+	if trimmedMachineID == "" {
+		seedParts = append(seedParts, hostname, fingerprintCPUModels[cpuIdx])
+	}
+	seed := "unknown"
+	nonEmptyParts := seedParts[:0]
+	for _, part := range seedParts {
+		if strings.TrimSpace(part) != "" {
+			nonEmptyParts = append(nonEmptyParts, part)
+		}
+	}
+	if joined := strings.Join(nonEmptyParts, "|"); joined != "" {
+		seed = joined
+	}
+	thumbmark := sha256Hex(fingerprintSignalSalt + "\x00machine\x00" + seed)
 
 	return Fingerprint{
 		Thumbmark: thumbmark,
@@ -187,8 +241,11 @@ func SlugifyProjectPath(path string) string {
 	return slug
 }
 
+// fpDigest is the derivation digest used to pick forged machine signals. It
+// uses the configurable derivation salt (default empty), NOT the CLI signal
+// salt — matching prototype fpDigest.
 func fpDigest(apiKey, field string) []byte {
-	sum := sha256.Sum256([]byte(fingerprintSalt + "\x00" + apiKey + "\x00" + field))
+	sum := sha256.Sum256([]byte(currentFingerprintDerivationSalt() + "\x00" + apiKey + "\x00" + field))
 	return sum[:]
 }
 
@@ -207,12 +264,14 @@ func fpPickIndex(apiKey, field string, length int, labelOf func(int) string) int
 	return bestIdx
 }
 
+// fingerprintHash is the CLI hashSignal: sha256(FP_SALT + "\0" + value lowered
+// and trimmed); empty values yield "" (omitted from the report like undefined).
 func fingerprintHash(value string) string {
 	v := strings.TrimSpace(value)
 	if v == "" {
 		return ""
 	}
-	return sha256Hex(fingerprintSalt + "\x00" + strings.ToLower(v))
+	return sha256Hex(fingerprintSignalSalt + "\x00" + strings.ToLower(v))
 }
 
 func fingerprintHashes(values []string) []string {

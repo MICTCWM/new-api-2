@@ -98,6 +98,7 @@ func TestSweepExpiredSessionsDropsStaleEntries(t *testing.T) {
 	sessionStore.Store("user_live00001", sessionEntry{sessionID: "live", expiresAt: now.Add(time.Hour)})
 
 	sessionReadCount.Store(sessionSweepInterval - 1)
+	t.Cleanup(func() { sessionReadCount.Store(0) })
 	sweepExpiredSessions(now)
 
 	_, staleFound := sessionStore.Load("user_stale0001")

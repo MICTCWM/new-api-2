@@ -3,6 +3,7 @@ package commandgo
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
@@ -189,11 +190,45 @@ func TestBuildEnvelopeAllowsTextResponseFormat(t *testing.T) {
 func stringPtr(v string) *string { return &v }
 func boolPtr(v bool) *bool       { return &v }
 
-func TestBuildEnvelopeOmitsEmptyTools(t *testing.T) {
+func TestBuildEnvelopeAlwaysSendsTools(t *testing.T) {
 	req := &dto.GeneralOpenAIRequest{Messages: []dto.Message{{Role: "user", Content: "hi"}}}
 	envelope := buildTestEnvelope(t, req)
 	params := envelope["params"].(map[string]any)
-	assert.NotContains(t, params, "tools")
+	tools, ok := params["tools"].([]any)
+	require.True(t, ok, "tools must be present as an array, got %T", params["tools"])
+	assert.Empty(t, tools)
+
+	raw, err := common.Marshal(envelope)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"tools":[]`)
+}
+
+func TestBuildEnvelopeGitConfigFields(t *testing.T) {
+	req := &dto.GeneralOpenAIRequest{Messages: []dto.Message{{Role: "user", Content: "hi"}}}
+	envelope := buildTestEnvelope(t, req)
+
+	raw, err := common.Marshal(envelope)
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, common.Unmarshal(raw, &decoded))
+	cfg, ok := decoded["config"].(map[string]any)
+	require.True(t, ok)
+
+	assert.Equal(t, "", cfg["currentBranch"])
+	assert.Equal(t, "", cfg["mainBranch"])
+	assert.Equal(t, "", cfg["gitStatus"])
+	commits, ok := cfg["recentCommits"].([]any)
+	require.True(t, ok, "recentCommits must be an array, got %T", cfg["recentCommits"])
+	assert.Empty(t, commits)
+	structure, ok := cfg["structure"].([]any)
+	require.True(t, ok, "structure must be an array, got %T", cfg["structure"])
+	assert.Empty(t, structure)
+
+	// Empty slices must serialize as [] rather than null so upstream validation
+	// accepting only arrays does not reject the envelope.
+	assert.Contains(t, string(raw), `"recentCommits":[]`)
+	assert.Contains(t, string(raw), `"structure":[]`)
 }
 
 func TestBuildEnvelopeToolNameAliases(t *testing.T) {

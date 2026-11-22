@@ -57,6 +57,18 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 		return types.NewErrorWithStatusCode(errors.New("command go channel: API key is required"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
 
+	// Report the account fingerprint/lifecycle out of band. Detached and
+	// throttled per key; failures never affect the relay request itself. The
+	// reports use the canonical BaseURL (never a channel override) and the
+	// channel's proxy-aware client so they follow the same route as the relay.
+	// Client construction is deferred until a report is actually due, and a
+	// build failure abandons the report instead of falling back to the default
+	// client (which would bypass the channel proxy).
+	// Channel tests must not mutate the account's report lifecycle.
+	if info.HasChannelMeta() && !info.IsChannelTest {
+		EnsureInitializedWithProxySettings(BaseURL, accountKey, info.ChannelSetting.Proxy, info.ChannelSetting)
+	}
+
 	sessionID := ""
 	if c != nil {
 		sessionID = strings.TrimSpace(c.GetString(sessionIDContextKey))

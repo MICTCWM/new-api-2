@@ -69,9 +69,9 @@ func BuildEnvelope(request *dto.GeneralOpenAIRequest, model, threadID, workingDi
 	if effort := strings.TrimSpace(request.ReasoningEffort); effort != "" {
 		params["reasoning_effort"] = effort
 	}
-	if len(request.Tools) > 0 {
-		params["tools"] = buildTools(request.Tools)
-	}
+	// The CLI always sends tools, using an empty array when none are declared;
+	// an absent key is observably different on the wire.
+	params["tools"] = buildTools(request.Tools)
 	if choice := buildToolChoice(request.ToolChoice); choice != nil {
 		params["tool_choice"] = choice
 	}
@@ -80,11 +80,15 @@ func BuildEnvelope(request *dto.GeneralOpenAIRequest, model, threadID, workingDi
 	}
 
 	cfg := map[string]any{
-		"workingDir":  workingDir,
-		"date":        time.Now().UTC().Format("2006-01-02"),
-		"environment": devicePlatform,
-		"structure":   []any{},
-		"isGitRepo":   false,
+		"workingDir":    workingDir,
+		"date":          time.Now().UTC().Format("2006-01-02"),
+		"environment":   devicePlatform,
+		"structure":     []any{},
+		"isGitRepo":     false,
+		"currentBranch": "",
+		"mainBranch":    "",
+		"gitStatus":     "",
+		"recentCommits": []any{},
 	}
 	envelope := map[string]any{
 		"config":         cfg,
