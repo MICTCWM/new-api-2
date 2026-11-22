@@ -157,7 +157,7 @@ func commandChannelServesModel(channel *Channel, targetModel string) bool {
 // commandChannelUsesSplitPools 报告渠道是否启用模型分池：渠道可以服务
 // v4-pro 或 v4.1-flash（可独立启用，也可与 v4-flash 组合）时，按模型拆分额度池。
 func commandChannelUsesSplitPools(channel *Channel) bool {
-	if channel == nil || channel.Type != constant.ChannelTypeCommand {
+	if channel == nil || (channel.Type != constant.ChannelTypeCommand && channel.Type != constant.ChannelTypeCommandGo) {
 		return false
 	}
 	return commandChannelServesModel(channel, CommandProModel) ||
@@ -278,6 +278,23 @@ func CommandChannelHasQuotaCapacityForModel(channel *Channel, modelName string, 
 		return false, errors.New("command channel is missing")
 	}
 	return commandChannelHasQuotaCapacity(channel, channel.Id, modelName, now)
+}
+
+// CommandGoChannelHasConcurrencyCapacity reports whether a Command Go (type
+// 63) channel still has concurrency headroom. Command Go channels no longer
+// participate in the Command channel-level rolling quota windows or pools, so
+// only concurrency is considered here. Pool-account quota is tracked
+// separately by the command-go account pool.
+func CommandGoChannelHasConcurrencyCapacity(channel *Channel, now int64) (bool, error) {
+	if channel == nil {
+		return false, errors.New("command go channel is missing")
+	}
+	usage, err := getOrCreateCommandChannelUsage(channel.Id, now)
+	if err != nil {
+		return false, err
+	}
+	resetCommandChannelWindows(usage, now)
+	return usage.ConcurrencyCount < operation_setting.GetOpencodeConcurrencyLimit(), nil
 }
 
 func commandChannelHasCapacity(channel *Channel, channelID int, modelName string, now int64) (bool, error) {
@@ -415,25 +432,39 @@ func SettleCommandCostForModel(channelID int, modelName string, costMicroUSD int
 	if costMicroUSD == 0 {
 		return nil
 	}
+	// Fast path: Command Go (63) and unknown channels have no channel-level
+	// quota windows. Check without a lock first so the per-request 63 settlement
+	// never opens a write transaction on the channel row. The transaction below
+	// re-checks to stay correct if the channel type changes concurrently.
+	prefetched, found, err := getCommandChannel(channelID)
+	if err != nil {
+		return err
+	}
+	if !found || prefetched.Type != constant.ChannelTypeCommand {
+		return nil
+	}
 	ts := now.Unix()
 	return DB.Transaction(func(tx *gorm.DB) error {
 		channel, found, err := getCommandChannelTx(tx, channelID)
 		if err != nil {
 			return err
 		}
-		if found {
-			if err := ensureCommandPoolUsageRowsTx(tx, channel, ts); err != nil {
-				return err
-			}
+		// Only confirmed Command channels (type 62) have channel-level quota
+		// windows/pools. Command Go (63) is fully excluded, and an unknown type
+		// (for example a channel row deleted concurrently) must not be guessed:
+		// writing here would leave orphan channel-level rows behind for 63.
+		// User billing and logs are unaffected.
+		if !found || channel.Type != constant.ChannelTypeCommand {
+			return nil
+		}
+		if err := ensureCommandPoolUsageRowsTx(tx, channel, ts); err != nil {
+			return err
 		}
 		channelUsage, err := getOrCreateCommandChannelUsageTx(tx, channelID, ts)
 		if err != nil {
 			return err
 		}
-		poolKey, poolLimit := CommandPoolKey(channelID), CommandCombinedPoolLimitMicroUSD
-		if found {
-			poolKey, poolLimit = commandPoolForModel(channel, modelName)
-		}
+		poolKey, poolLimit := commandPoolForModel(channel, modelName)
 		poolUsage, err := getOrCreateCommandPoolUsageByKeyTx(tx, poolKey, ts)
 		if err != nil {
 			return err

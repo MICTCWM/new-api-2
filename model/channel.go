@@ -522,6 +522,10 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 			tx.Rollback()
 			return 0, err
 		}
+		if err := deleteCommandGoAccountsForChannels(tx, chunk); err != nil {
+			tx.Rollback()
+			return 0, err
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return 0, err
@@ -613,6 +617,24 @@ func (channel *Channel) Insert() error {
 	return err
 }
 
+// InsertWithCommandGoAccounts creates the channel and its abilities and copies
+// the Command Go pool accounts from sourceChannelID in one transaction, so a
+// failed account copy does not leave a partially cloned channel behind.
+func (channel *Channel) InsertWithCommandGoAccounts(sourceChannelID int) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(channel).Error; err != nil {
+			return err
+		}
+		if err := channel.AddAbilities(tx); err != nil {
+			return err
+		}
+		if channel.Type != constant.ChannelTypeCommandGo {
+			return nil
+		}
+		return copyCommandGoAccountsTx(tx, sourceChannelID, channel.Id)
+	})
+}
+
 func (channel *Channel) Update() error {
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
@@ -683,13 +705,15 @@ func (channel *Channel) UpdateBalance(balance float64) {
 }
 
 func (channel *Channel) Delete() error {
-	var err error
-	err = DB.Delete(channel).Error
-	if err != nil {
-		return err
-	}
-	err = channel.DeleteAbilities()
-	return err
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(channel).Error; err != nil {
+			return err
+		}
+		if err := deleteCommandGoAccountsForChannels(tx, []int{channel.Id}); err != nil {
+			return err
+		}
+		return tx.Where("channel_id = ?", channel.Id).Delete(&Ability{}).Error
+	})
 }
 
 var channelStatusLock sync.Mutex
@@ -982,6 +1006,9 @@ func DeleteChannelByStatus(status int64) (int64, error) {
 	if result.Error != nil {
 		return 0, result.Error
 	}
+	if err := deleteCommandGoAccountsForChannels(DB, ids); err != nil {
+		return result.RowsAffected, err
+	}
 	for _, id := range ids {
 		if err := CleanupFallbackSequenceReferences(id); err != nil {
 			common.SysError(fmt.Sprintf("failed to clean up fallback sequence references: channel_id=%d, error=%v", id, err))
@@ -1000,6 +1027,9 @@ func DeleteDisabledChannel() (int64, error) {
 	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
 	if result.Error != nil {
 		return 0, result.Error
+	}
+	if err := deleteCommandGoAccountsForChannels(DB, ids); err != nil {
+		return result.RowsAffected, err
 	}
 	for _, id := range ids {
 		if err := CleanupFallbackSequenceReferences(id); err != nil {

@@ -41,5 +41,6 @@ const (
 	APITypeNewAPI
 	APITypeOpencode
 	APITypeCommand
+	APITypeCommandGo
 	APITypeDummy // this one is only for count, do not add any channel after this
 )

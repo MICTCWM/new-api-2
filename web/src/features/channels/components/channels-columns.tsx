@@ -17,6 +17,10 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { BadgeListCell } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { ProviderBadge } from '@/components/provider-badge'
+import {
+  QUOTA_RING_CRITICAL_PERCENT,
+  QUOTA_RING_WARNING_PERCENT,
+} from '@/components/quota-ring'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { TruncatedText } from '@/components/truncated-text'
@@ -44,13 +48,16 @@ import {
   getCommandUsage,
   getChannelConcurrencyUsage,
   getOpencodeUsage,
+  refreshAllCommandGoAccounts,
   updateChannelBalance,
   type CommandcodeQuotaResponse,
 } from '../api'
 import {
   CHANNEL_STATUS_CONFIG,
   CHANNEL_TYPE_COMMAND,
+  CHANNEL_TYPE_COMMAND_GO,
   MODEL_FETCHABLE_TYPES,
+  isCommandFamilyChannelType,
   isFixedCodeChannelType,
 } from '../constants'
 import {
@@ -60,6 +67,8 @@ import {
   getChannelTypeIcon,
   getChannelTypeLabel,
   getResponseTimeConfig,
+  getApiErrorMessage,
+  commandGoAccountsQueryKey,
   isMultiKeyChannel,
   parseModelsList,
   parseGroupsList,
@@ -382,14 +391,17 @@ const SessionOccupancyChart = lazy(() =>
 /**
  * Balance cell component with click to update
  */
-function CodeProviderUsageCell({ channel }: { channel: Channel }) {
+export function CodeProviderUsageCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
   const isCommand = channel.type === CHANNEL_TYPE_COMMAND
+  const supportsUsage =
+    isFixedCodeChannelType(channel.type) &&
+    channel.type !== CHANNEL_TYPE_COMMAND_GO
   const { data } = useQuery({
     queryKey: ['code-provider-usage', channel.id],
     queryFn: () =>
       isCommand ? getCommandUsage(channel.id) : getOpencodeUsage(channel.id),
-    enabled: isFixedCodeChannelType(channel.type),
+    enabled: supportsUsage,
     refetchInterval: 15_000,
   })
   const {
@@ -399,9 +411,19 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
   } = useQuery({
     queryKey: CODE_PROVIDER_SESSION_USAGE_QUERY_KEY,
     queryFn: getCodeProviderSessionUsage,
-    enabled: isFixedCodeChannelType(channel.type),
+    enabled: supportsUsage,
     refetchInterval: 15_000,
   })
+  if (channel.type === CHANNEL_TYPE_COMMAND_GO) {
+    return (
+      <span
+        className='text-muted-foreground text-xs'
+        aria-label={t('Manage accounts in Pool Management')}
+      >
+        —
+      </span>
+    )
+  }
   if (!isFixedCodeChannelType(channel.type) || !data?.data) return null
 
   const usage = data.data
@@ -500,9 +522,9 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
         {windows.map(([label, window]) => {
           const percent = Math.min(100, Math.max(0, window.percent))
           let color = 'bg-green-500'
-          if (percent > 90) {
+          if (percent >= QUOTA_RING_CRITICAL_PERCENT) {
             color = 'bg-red-500'
-          } else if (percent >= 50) {
+          } else if (percent >= QUOTA_RING_WARNING_PERCENT) {
             color = 'bg-yellow-500'
           }
           return (
@@ -537,9 +559,9 @@ function CodeProviderUsageCell({ channel }: { channel: Channel }) {
         {poolWindows.map(([label, window, period]) => {
           const percent = Math.min(100, Math.max(0, window.percent))
           let color = 'bg-green-500'
-          if (percent > 90) {
+          if (percent >= QUOTA_RING_CRITICAL_PERCENT) {
             color = 'bg-red-500'
-          } else if (percent >= 50) {
+          } else if (percent >= QUOTA_RING_WARNING_PERCENT) {
             color = 'bg-yellow-500'
           }
           const isCurrent = true
@@ -596,7 +618,7 @@ function ChannelQueueList(props: {
   const waitSeconds = (queuedAt: number) =>
     Math.max(0, Math.round((Date.now() - queuedAt) / 1000))
   return (
-    <div className='w-full max-w-72 rounded-md border bg-muted/20 px-2 py-1 text-left'>
+    <div className='bg-muted/20 w-full max-w-72 rounded-md border px-2 py-1 text-left'>
       <div className='text-muted-foreground flex flex-wrap items-center justify-between gap-x-2 text-[10px] leading-4'>
         <span className='font-medium'>
           {props.headerLabel}: {props.queuedCount}
@@ -623,7 +645,8 @@ function ChannelQueueList(props: {
                 </span>
               </span>
               <span className='shrink-0 tabular-nums'>
-                {t('Queued')} {waitSeconds(item.queued_at)}{t('s')}
+                {t('Queued')} {waitSeconds(item.queued_at)}
+                {t('s')}
               </span>
             </div>
           ))}
@@ -777,6 +800,8 @@ function ChannelConcurrencyGaugeCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
   const isFixedCodeChannel = isFixedCodeChannelType(channel.type)
   const isCommand = channel.type === CHANNEL_TYPE_COMMAND
+  const supportsCodeUsage =
+    isFixedCodeChannel && channel.type !== CHANNEL_TYPE_COMMAND_GO
   const channelOtherSettings = parseChannelOtherSettings(channel.settings)
   const channelConcurrencyLimit =
     channelOtherSettings.channel_concurrency_limit ??
@@ -788,7 +813,7 @@ function ChannelConcurrencyGaugeCell({ channel }: { channel: Channel }) {
     queryKey: ['code-provider-usage', channel.id],
     queryFn: () =>
       isCommand ? getCommandUsage(channel.id) : getOpencodeUsage(channel.id),
-    enabled: isFixedCodeChannel,
+    enabled: supportsCodeUsage,
     refetchInterval: 15_000,
   })
   const { data: channelConcurrencyUsage } = useQuery({
@@ -801,6 +826,7 @@ function ChannelConcurrencyGaugeCell({ channel }: { channel: Channel }) {
   })
 
   if (isFixedCodeChannel) {
+    if (!supportsCodeUsage) return null
     const codeUsage = codeProviderUsage?.data
     if (!codeUsage || (codeUsage.concurrency_limit ?? 0) <= 0) return null
     const occupiedCount = Math.min(
@@ -1006,9 +1032,50 @@ export function BalanceCell({ channel }: { channel: Channel }) {
         setCommandcodeQuotaResponse(res)
         setCommandcodeQuotaOpen(true)
       } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : t('Failed to fetch usage')
-        )
+        toast.error(getApiErrorMessage(error, t('Failed to fetch usage')))
+      } finally {
+        setIsUpdating(false)
+      }
+      return
+    }
+    if (channel.type === CHANNEL_TYPE_COMMAND_GO) {
+      try {
+        const response = await refreshAllCommandGoAccounts(channel.id)
+        if (!response.success || !response.data) {
+          toast.error(response.message || t('Failed to refresh accounts'))
+        } else {
+          const { refreshed, failed } = response.data
+          if (failed.length > 0) {
+            const first = failed[0]
+            const detail = `${first.name}: ${first.error}`
+            if (refreshed === 0) {
+              toast.error(t('Refresh failed: {{error}}', { error: detail }))
+            } else {
+              toast.warning(
+                t(
+                  '{{success}} account(s) refreshed, {{failed}} failed. First: {{detail}}',
+                  {
+                    success: refreshed,
+                    failed: failed.length,
+                    detail,
+                  }
+                )
+              )
+            }
+          } else {
+            toast.success(
+              t('{{success}} account(s) refreshed, {{failed}} failed', {
+                success: refreshed,
+                failed: 0,
+              })
+            )
+          }
+          void queryClient.invalidateQueries({
+            queryKey: commandGoAccountsQueryKey(channel.id),
+          })
+        }
+      } catch (error) {
+        toast.error(getApiErrorMessage(error, t('Failed to refresh accounts')))
       } finally {
         setIsUpdating(false)
       }
@@ -1023,9 +1090,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
         setCodexUsageResponse(res)
         setCodexUsageOpen(true)
       } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : t('Failed to fetch usage')
-        )
+        toast.error(getApiErrorMessage(error, t('Failed to fetch usage')))
       } finally {
         setIsUpdating(false)
       }
@@ -1054,9 +1119,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
         toast.error(response.message || t('Failed to update balance'))
       }
     } catch (error: unknown) {
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to update balance')
-      )
+      toast.error(getApiErrorMessage(error, t('Failed to update balance')))
     } finally {
       setIsUpdating(false)
     }
@@ -1066,7 +1129,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
     remainingBadgeLabel = t('Updating...')
   } else if (
     sensitiveVisible &&
-    (channel.type === 57 || channel.type === CHANNEL_TYPE_COMMAND)
+    (channel.type === 57 || isCommandFamilyChannelType(channel.type))
   ) {
     remainingBadgeLabel = t('Account Info')
   }
@@ -1075,11 +1138,14 @@ export function BalanceCell({ channel }: { channel: Channel }) {
     remainingTooltipLabel = maskedRemainingLabel
   } else if (channel.type === 57) {
     remainingTooltipLabel = t('Click to view Codex usage')
-  } else if (channel.type === CHANNEL_TYPE_COMMAND) {
-    remainingTooltipLabel = t('Click to view Command quota')
+  } else if (isCommandFamilyChannelType(channel.type)) {
+    remainingTooltipLabel =
+      channel.type === CHANNEL_TYPE_COMMAND
+        ? t('Click to view Command quota')
+        : t('Manage accounts in Pool Management')
   }
   let remainingBadgeVariant: StatusBadgeProps['variant'] = variant
-  if (channel.type === 57 || channel.type === CHANNEL_TYPE_COMMAND) {
+  if (channel.type === 57 || isCommandFamilyChannelType(channel.type)) {
     remainingBadgeVariant = 'info'
   } else if (isUpdating) {
     remainingBadgeVariant = 'neutral'
@@ -1121,9 +1187,10 @@ export function BalanceCell({ channel }: { channel: Channel }) {
           />
           <TooltipContent>
             <p>{remainingTooltipLabel}</p>
-            {channel.type !== 57 && channel.type !== CHANNEL_TYPE_COMMAND && (
-              <p>{t('Click to update balance')}</p>
-            )}
+            {channel.type !== 57 &&
+              !isCommandFamilyChannelType(channel.type) && (
+                <p>{t('Click to update balance')}</p>
+              )}
           </TooltipContent>
         </Tooltip>
       </div>
@@ -1148,11 +1215,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
             }
             setCodexUsageResponse(res)
           } catch (error) {
-            toast.error(
-              error instanceof Error
-                ? error.message
-                : t('Failed to fetch usage')
-            )
+            toast.error(getApiErrorMessage(error, t('Failed to fetch usage')))
           } finally {
             setIsUpdating(false)
           }
@@ -1179,11 +1242,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
             }
             setCommandcodeQuotaResponse(res)
           } catch (error) {
-            toast.error(
-              error instanceof Error
-                ? error.message
-                : t('Failed to fetch usage')
-            )
+            toast.error(getApiErrorMessage(error, t('Failed to fetch usage')))
           } finally {
             setIsUpdating(false)
           }

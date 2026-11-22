@@ -1,4 +1,8 @@
 {
+  "Command Go": "Command Go",
+  "Manage accounts in Pool Management": "Manage accounts in Pool Management",
+  "Refresh failed: {{error}}": "Refresh failed: {{error}}",
+  "user_xxx": "user_xxx",
   "Edit Proxy Rule": "Edit Proxy Rule",
   "Failed to update proxy rule": "Failed to update proxy rule",
   "Proxy rule updated": "Proxy rule updated"

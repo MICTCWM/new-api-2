@@ -565,6 +565,21 @@ func UpdateChannelBalance(c *gin.Context) {
 		})
 		return
 	}
+	if channel.Type == constant.ChannelTypeCommandGo {
+		refreshed, failures := service.RefreshAllCommandGoAccounts(c.Request.Context(), id)
+		if failures == nil {
+			failures = []service.CommandGoRefreshFailure{}
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+			"data": gin.H{
+				"refreshed": refreshed,
+				"failed":    failures,
+			},
+		})
+		return
+	}
 	result, err := updateChannelBalance(channel)
 	if err != nil {
 		common.ApiError(c, err)
@@ -583,16 +598,40 @@ func UpdateChannelBalance(c *gin.Context) {
 }
 
 func updateAllChannelsBalance() error {
+	ctx := common.ProcessContext()
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
 	channels, err := model.GetAllChannels(0, 0, true, false)
 	if err != nil {
 		return err
 	}
 	for _, channel := range channels {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
 		if channel.Status != common.ChannelStatusEnabled {
 			continue
 		}
 		if channel.ChannelInfo.IsMultiKey {
 			continue // skip multi-key channels
+		}
+		if channel.Type == constant.ChannelTypeCommandGo {
+			count, countErr := service.CountCommandGoAccountsByChannel(channel.Id)
+			if countErr != nil {
+				common.SysError(fmt.Sprintf("failed to count Command Go accounts for channel #%d: %v", channel.Id, countErr))
+				continue
+			}
+			if count == 0 {
+				common.SysError(fmt.Sprintf("skip Command Go channel #%d balance update: no pool accounts", channel.Id))
+				continue
+			}
+			_, failures := service.RefreshAllCommandGoAccounts(ctx, channel.Id)
+			for _, failure := range failures {
+				common.SysError(fmt.Sprintf("Command Go channel #%d account #%d (%s) refresh failed: %s", channel.Id, failure.Id, failure.Name, failure.Error))
+			}
+			time.Sleep(common.RequestInterval)
+			continue
 		}
 		// TODO: support Azure
 		//if channel.Type != common.ChannelTypeOpenAI && channel.Type != common.ChannelTypeCustom {
@@ -627,8 +666,14 @@ func UpdateAllChannelsBalance(c *gin.Context) {
 }
 
 func AutomaticallyUpdateChannels(frequency int) {
+	ticker := time.NewTicker(time.Duration(frequency) * time.Minute)
+	defer ticker.Stop()
 	for {
-		time.Sleep(time.Duration(frequency) * time.Minute)
+		select {
+		case <-ticker.C:
+		case <-common.ProcessContext().Done():
+			return
+		}
 		common.SysLog("updating all channels")
 		_ = updateAllChannelsBalance()
 		common.SysLog("channels update done")

@@ -103,3 +103,16 @@ func TestReconcileCommandQuotaDisablesUntilLatestRollingReset(t *testing.T) {
 	require.NoError(t, DB.First(&stored, channel.Id).Error)
 	require.Equal(t, common.ChannelStatusEnabled, stored.Status)
 }
+
+func TestReconcileCodeProviderQuotaChannelsExcludesCommandGo(t *testing.T) {
+	useCommandUsageDB(t)
+	channel := &Channel{Type: constant.ChannelTypeCommandGo, Status: common.ChannelStatusEnabled, Key: "k63"}
+	require.NoError(t, DB.Create(channel).Error)
+
+	_, _, err := ReconcileCodeProviderQuotaChannels(1_800_000_000)
+	require.NoError(t, err)
+
+	var stored Channel
+	require.NoError(t, DB.First(&stored, channel.Id).Error)
+	require.Equal(t, common.ChannelStatusEnabled, stored.Status)
+}

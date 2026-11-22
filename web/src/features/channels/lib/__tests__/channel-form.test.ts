@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest'
 
-import { CHANNEL_TYPE_COMMAND, CHANNEL_TYPE_OPENCODE } from '../../constants'
+import {
+  CHANNEL_TYPE_COMMAND,
+  CHANNEL_TYPE_COMMAND_GO,
+  CHANNEL_TYPE_OPENCODE,
+} from '../../constants'
 import type { Channel } from '../../types'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
@@ -66,6 +70,26 @@ describe('transformFormDataToUpdatePayload', () => {
 
     expect(payload.models).toBe(
       'deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro,client-model'
+    )
+  })
+
+  it('keeps the Command Go fixed base URL and model mapping in the update payload', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      type: CHANNEL_TYPE_COMMAND_GO,
+      base_url: 'https://stale.example.com',
+      models: 'deepseek/deepseek-v4.1-flash,client-model',
+      model_mapping: '{"client-model":"deepseek/deepseek-v4.1-flash"}',
+      test_model: 'client-model',
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 63)
+
+    expect(payload.base_url).toBe('https://api.commandcode.ai/alpha')
+    expect(payload.models).toBe('deepseek/deepseek-v4.1-flash,client-model')
+    expect(payload.test_model).toBe('client-model')
+    expect(payload.model_mapping).toBe(
+      '{"client-model":"deepseek/deepseek-v4.1-flash"}'
     )
   })
 
@@ -523,6 +547,48 @@ describe('Command model combinations', () => {
       name: 'command',
       type: CHANNEL_TYPE_COMMAND,
       models: commandModels.v41Flash,
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects batch creation for Command Go channels', () => {
+    const result = channelFormSchema.safeParse({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'command-go',
+      type: CHANNEL_TYPE_COMMAND_GO,
+      models: 'deepseek/deepseek-v4.1-flash',
+      multi_key_mode: 'batch',
+    })
+
+    expect(result.success).toBe(false)
+    const modeIssue = result.success
+      ? undefined
+      : result.error.issues.find((issue) => issue.path[0] === 'multi_key_mode')
+    expect(modeIssue?.message).toBe(
+      'Command Go channels only support single key creation'
+    )
+  })
+
+  it('allows a single key for Command Go channels', () => {
+    const result = channelFormSchema.safeParse({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'command-go',
+      type: CHANNEL_TYPE_COMMAND_GO,
+      models: 'deepseek/deepseek-v4.1-flash',
+      multi_key_mode: 'single',
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  it('still allows batch creation for Command channels', () => {
+    const result = channelFormSchema.safeParse({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'command',
+      type: CHANNEL_TYPE_COMMAND,
+      models: commandModels.v4Flash,
+      multi_key_mode: 'batch',
     })
 
     expect(result.success).toBe(true)

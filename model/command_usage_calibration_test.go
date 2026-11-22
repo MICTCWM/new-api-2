@@ -221,3 +221,20 @@ func TestApplyCommandUsageCalibrationZeroesPoolsWhenUpstreamExplicitZero(t *test
 	require.NoError(t, err)
 	require.Equal(t, int64(0), snapshot.V41Pool.UsedMicroUSD)
 }
+
+func TestListCommandCalibrationCandidatesExcludesCommandGo(t *testing.T) {
+	useCommandUsageDB(t)
+	command := &Channel{Type: constant.ChannelTypeCommand, Status: common.ChannelStatusEnabled, Key: "k62"}
+	commandGo := &Channel{Type: constant.ChannelTypeCommandGo, Status: common.ChannelStatusEnabled, Key: "k63"}
+	require.NoError(t, DB.Create(command).Error)
+	require.NoError(t, DB.Create(commandGo).Error)
+
+	candidates, err := ListCommandCalibrationCandidates()
+	require.NoError(t, err)
+	ids := make([]int, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.Id)
+	}
+	require.Contains(t, ids, command.Id)
+	require.NotContains(t, ids, commandGo.Id)
+}

@@ -247,7 +247,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		ModelName:           relayInfo.OriginModelName,
 		RequestPath:         c.Request.URL.Path,
 		Retry:               common.GetPointer(0),
-		OpencodePool:        common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeOpencode || common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeCommand,
+		OpencodePool:        common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeOpencode || common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeCommand || common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeCommandGo,
 		AttemptedChannelIDs: make(map[int]struct{}),
 	}
 	retryRoutingModel := relayInfo.OriginModelName
@@ -261,6 +261,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.LastError = nil
 
 	opencodeAttempts := 0
+	commandGoPoolEmpty := false
+	commandGoAnyUpstreamAttempted := false
+	var commandGoPoolEmptyErr *types.NewAPIError
 	maxAttempts := common.RetryTimes + 1
 	if retryParam.OpencodePool {
 		maxAttempts = 4
@@ -312,7 +315,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		channelConcurrencySlotReserved := false
 		channelCapacityReservedTokens := 0
 		relayInfo.ChannelTPMReservedTokens = 0
-		if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand {
+		if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand || channel.Type == constant.ChannelTypeCommandGo {
 			retryParam.OpencodePool = true
 			if retryParam.AttemptedChannelIDs == nil {
 				retryParam.AttemptedChannelIDs = make(map[int]struct{})
@@ -423,6 +426,37 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 			channelConcurrencyReserved = true
 		}
+		var commandGoAccount *commandGoAttemptAccount
+		if channel.Type == constant.ChannelTypeCommandGo {
+			// Reset per-attempt attribution markers. They are set by the adaptor
+			// only if an upstream HTTP request is actually issued.
+			c.Set(string(constant.ContextKeyCommandGoUpstreamAttempted), false)
+			c.Set(string(constant.ContextKeyCommandGoStreamFailure), nil)
+			poolAccount, selectErr := service.SelectCommandGoAccount(channel.Id)
+			if selectErr != nil {
+				if concurrencyReserved {
+					releaseOpencodeConcurrency(c, channel.Type, channel.Id)
+					concurrencyReserved = false
+				}
+				newAPIError = types.NewError(selectErr, types.ErrorCodeGetChannelFailed)
+				break
+			}
+			if poolAccount == nil {
+				// The channel itself is healthy but has no usable pool account:
+				// never call upstream, exclude the channel and try the next one.
+				if concurrencyReserved {
+					releaseOpencodeConcurrency(c, channel.Type, channel.Id)
+					concurrencyReserved = false
+				}
+				commandGoPoolEmpty = true
+				commandGoPoolEmptyErr = types.NewErrorWithStatusCode(errors.New(constant.CommandGoPoolEmptyMessage), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+				relayInfo.LastError = commandGoPoolEmptyErr
+				newAPIError = commandGoPoolEmptyErr
+				continue
+			}
+			common.SetContextKey(c, constant.ContextKeyCommandGoAccountKey, poolAccount.ApiKey)
+			commandGoAccount = newCommandGoAttemptAccount(poolAccount)
+		}
 		addUsedChannel(c, channel.Id)
 		service.SetConnectionChannel(relayInfo.RequestId, channel.Id)
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
@@ -495,9 +529,33 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			service.NotifyChannelLimitQueues()
 		}
 
+		upstreamAttempted := common.GetContextKeyBool(c, constant.ContextKeyCommandGoUpstreamAttempted)
+		if upstreamAttempted {
+			commandGoAnyUpstreamAttempted = true
+		}
+
 		if newAPIError == nil {
 			relayInfo.LastError = nil
+			if streamErr, _ := common.GetContextKeyType[*types.NewAPIError](c, constant.ContextKeyCommandGoStreamFailure); streamErr != nil {
+				// Output was already written downstream before the stream broke.
+				// Attribute the failure to the account but do not retry and do not
+				// emit a second error to the client.
+				if commandGoAccount != nil && upstreamAttempted && shouldAttributeCommandGoFailure(c, streamErr) {
+					commandGoAccount.recordFailure(streamErr, streamErr.SourceStatusCode)
+				}
+				return
+			}
+			if commandGoAccount != nil && upstreamAttempted {
+				commandGoAccount.recordSuccess()
+			}
 			return
+		}
+
+		// Only attribute failures to the pool account when the adaptor actually
+		// reached upstream. Local validation errors, skip-retry errors, and client
+		// cancellations must not degrade account health.
+		if commandGoAccount != nil && upstreamAttempted && shouldAttributeCommandGoFailure(c, newAPIError) {
+			commandGoAccount.recordFailure(newAPIError, 0)
 		}
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
@@ -510,8 +568,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		relayInfo.LastError = newAPIError
 
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
-		isCodeProviderChannel := channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand
+		// Command Go has no channel-level quota; failures belong to the pool
+		// account. Do not auto-disable/re-enable the channel here. Exhausting the
+		// pool falls through to the normal channel switch/fallback chain.
+		if channel.Type != constant.ChannelTypeCommandGo {
+			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
+		}
+		isCodeProviderChannel := channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand || channel.Type == constant.ChannelTypeCommandGo
 		if retryParam.OpencodePool && service.GetCurrentChannelAffinitySelection(c) == channel.Id {
 			// A failed code-provider affinity must not be reused on the next
 			// attempt. Keep the existing attempted-channel filter so retrying
@@ -580,6 +643,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if !shouldRetry(c, newAPIError, maxAttempts-attempt-1) {
 			break
 		}
+	}
+
+	if newAPIError != nil && commandGoPoolEmpty && !commandGoAnyUpstreamAttempted {
+		newAPIError = commandGoPoolEmptyErr
 	}
 
 	useChannel := c.GetStringSlice("use_channel")
@@ -806,12 +873,32 @@ func waitChannelRetryDelay(c *gin.Context, delay time.Duration) bool {
 	}
 }
 
+// shouldAttributeCommandGoFailure reports whether an error should count against
+// the selected pool account. Local conversion/validation errors, errors that
+// explicitly opt out of retry, and client cancellations are excluded.
+func shouldAttributeCommandGoFailure(c *gin.Context, err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	if types.IsSkipRetryError(err) {
+		return false
+	}
+	switch err.GetErrorCode() {
+	case types.ErrorCodeConvertRequestFailed, types.ErrorCodeInvalidRequest:
+		return false
+	}
+	if c.Request != nil && c.Request.Context().Err() != nil {
+		return false
+	}
+	return true
+}
+
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
 	if openaiErr == nil {
 		return false
 	}
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
-	isCodeProviderChannel := channelType == constant.ChannelTypeOpencode || channelType == constant.ChannelTypeCommand
+	isCodeProviderChannel := channelType == constant.ChannelTypeOpencode || channelType == constant.ChannelTypeCommand || channelType == constant.ChannelTypeCommandGo
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) && !isCodeProviderChannel {
 		return false
 	}

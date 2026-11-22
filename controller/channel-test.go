@@ -196,6 +196,28 @@ func testChannelWithGroup(ctx context.Context, channel *model.Channel, testUserI
 		}
 	}
 
+	if channel.Type == constant.ChannelTypeCommandGo {
+		// Channel tests must not update the round-robin cursor or pool-account
+		// health counters; they only need an account to exercise the channel.
+		poolAccount, selectErr := service.PickCommandGoAccountForTest(channel.Id)
+		if selectErr != nil {
+			return testResult{
+				context:     c,
+				localErr:    selectErr,
+				newAPIError: types.NewError(selectErr, types.ErrorCodeGetChannelFailed),
+			}
+		}
+		if poolAccount == nil {
+			poolErr := errors.New(constant.CommandGoPoolEmptyMessage)
+			return testResult{
+				context:     c,
+				localErr:    poolErr,
+				newAPIError: types.NewErrorWithStatusCode(poolErr, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry()),
+			}
+		}
+		common.SetContextKey(c, constant.ContextKeyCommandGoAccountKey, poolAccount.ApiKey)
+	}
+
 	// Determine relay format based on endpoint type or request path
 	var relayFormat types.RelayFormat
 	if endpointType != "" {
@@ -530,7 +552,7 @@ func testChannelWithGroup(ctx context.Context, channel *model.Channel, testUserI
 			}
 			info.OpencodeUpstreamCostMicroUSD = &cost
 			info.OpencodePricingPeriod = &pricingPeriod
-		case constant.ChannelTypeCommand:
+		case constant.ChannelTypeCommand, constant.ChannelTypeCommandGo:
 			cost := int64(0)
 			pricingPeriod := model.OpencodePricingPeriodAt(settleAt)
 			commandModel := strings.TrimSpace(info.UpstreamModelName)
@@ -1009,14 +1031,18 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 		summary.Failed++
 	}
 
-	if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
-		summary.Disabled++
-	}
+	// Command Go channels have no channel-level quota; tests must not
+	// auto-disable or auto-enable them. Pool-account state is managed separately.
+	if channel.Type != constant.ChannelTypeCommandGo {
+		if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
+			processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
+			summary.Disabled++
+		}
 
-	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
-		service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
-		summary.Enabled++
+		if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
+			service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
+			summary.Enabled++
+		}
 	}
 
 	channel.UpdateResponseTime(milliseconds)

@@ -308,6 +308,14 @@ type UpstreamHeaderSanitizer interface {
 	SanitizeUpstreamHeaders(header *http.Header)
 }
 
+// UpstreamAttemptMarker is implemented by adaptors that need to record when a
+// request actually reaches the upstream. It is invoked after URL/header
+// validation succeeds and immediately before the HTTP request is sent, so local
+// configuration errors are never attributed to an upstream attempt.
+type UpstreamAttemptMarker interface {
+	MarkUpstreamAttempt(c *gin.Context)
+}
+
 func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]string) {
 	if req == nil {
 		return
@@ -365,7 +373,17 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if sanitizer, ok := a.(UpstreamHeaderSanitizer); ok {
 		sanitizer.SanitizeUpstreamHeaders(&req.Header)
 	}
-	resp, err := doRequest(c, req, info)
+	// Build the proxy-aware client before marking the attempt: a local proxy or
+	// transport configuration error must never be attributed to the upstream
+	// (and therefore never counted against a pool account).
+	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
+	if err != nil {
+		return nil, fmt.Errorf("new proxy http client failed: %w", err)
+	}
+	if marker, ok := a.(UpstreamAttemptMarker); ok {
+		marker.MarkUpstreamAttempt(c)
+	}
+	resp, err := doRequestWithClient(c, req, info, client)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
@@ -524,6 +542,13 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
+	return doRequestWithClient(c, req, info, client)
+}
+
+// doRequestWithClient sends req using an already-built client. Splitting this
+// out lets DoApiRequest build the client (and return local transport errors)
+// before marking the upstream attempt.
+func doRequestWithClient(c *gin.Context, req *http.Request, info *common.RelayInfo, client *http.Client) (*http.Response, error) {
 	// Clients are cached and shared across channels, so override redirect
 	// behavior on a shallow copy instead of mutating the cached client. This
 	// still reuses its transport and connection pools, including HTTP/2's

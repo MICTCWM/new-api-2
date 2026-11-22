@@ -19,7 +19,7 @@ type OpencodeSessionUsage struct {
 
 func GetOpencodeSessionUsage() ([]OpencodeSessionUsage, error) {
 	var channels []*model.Channel
-	if err := model.DB.Where("type IN ? AND status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, common.ChannelStatusEnabled).Order("id ASC").Find(&channels).Error; err != nil {
+	if err := model.DB.Where("type IN ? AND status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand, constant.ChannelTypeCommandGo}, common.ChannelStatusEnabled).Order("id ASC").Find(&channels).Error; err != nil {
 		return nil, err
 	}
 	now := time.Now().Unix()

@@ -263,7 +263,7 @@ func filterAbilitiesByCodeProviderType(abilities []Ability) ([]Ability, error) {
 	filtered := make([]Ability, 0, len(abilities))
 	for _, ability := range abilities {
 		channelType, ok := channelTypes[ability.ChannelId]
-		if !ok || (channelType != constant.ChannelTypeOpencode && channelType != constant.ChannelTypeCommand) {
+		if !ok || (channelType != constant.ChannelTypeOpencode && channelType != constant.ChannelTypeCommand && channelType != constant.ChannelTypeCommandGo) {
 			filtered = append(filtered, ability)
 		}
 	}

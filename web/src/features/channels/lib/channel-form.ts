@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import {
   CHANNEL_TYPE_COMMAND,
+  CHANNEL_TYPE_COMMAND_GO,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_STATUS,
   getFixedCodeChannelModels,
@@ -41,9 +42,13 @@ const SUPPORTED_PROXY_PROTOCOLS = new Set([
 ])
 
 function fixedCodeChannelBaseUrl(type: number): string {
-  return type === CHANNEL_TYPE_COMMAND
-    ? 'https://api.commandcode.ai/provider/v1'
-    : 'https://opencode.ai/zen/go/v1/chat/completions'
+  if (type === CHANNEL_TYPE_COMMAND) {
+    return 'https://api.commandcode.ai/provider/v1'
+  }
+  if (type === CHANNEL_TYPE_COMMAND_GO) {
+    return 'https://api.commandcode.ai/alpha'
+  }
+  return 'https://opencode.ai/zen/go/v1/chat/completions'
 }
 
 function fixedCodeChannelModels(
@@ -69,6 +74,13 @@ function fixedCodeChannelModels(
       result.unshift(fixedModel)
     }
     return formatModelsArray(result)
+  }
+  if (type === CHANNEL_TYPE_COMMAND_GO) {
+    // Command Go 仅有 v4.1 Flash 一个原生模型，缺省时补回。
+    if (selectedModels.includes(fixedModel)) {
+      return formatModelsArray(selectedModels)
+    }
+    return formatModelsArray([fixedModel, ...selectedModels])
   }
   // OpenCode allows any of its native models (flash, glm, v4.1, pro).
   const hasNative = selectedModels.some((model) =>
@@ -382,7 +394,17 @@ export const channelFormSchema = z
     }
 
     if (isFixedCodeChannelType(data.type)) {
-      if (data.multi_key_mode === 'multi_to_single') {
+      if (data.type === CHANNEL_TYPE_COMMAND_GO) {
+        // Command Go is one channel + one account pool; batch creation and
+        // multi-key modes are rejected by the backend.
+        if (data.multi_key_mode && data.multi_key_mode !== 'single') {
+          addRequiredIssue(
+            ctx,
+            'multi_key_mode',
+            'Command Go channels only support single key creation'
+          )
+        }
+      } else if (data.multi_key_mode === 'multi_to_single') {
         addRequiredIssue(
           ctx,
           'multi_key_mode',
@@ -398,10 +420,15 @@ export const channelFormSchema = z
           !getFixedCodeChannelModels(data.type).includes(model) &&
           !mappingSources.has(model)
       )
-      const fixedModelError =
-        data.type === CHANNEL_TYPE_COMMAND
-          ? 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
-          : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
+      let fixedModelError =
+        'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
+      if (data.type === CHANNEL_TYPE_COMMAND) {
+        fixedModelError =
+          'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
+      } else if (data.type === CHANNEL_TYPE_COMMAND_GO) {
+        fixedModelError =
+          'Command Go supports deepseek/deepseek-v4.1-flash and model mapping source models'
+      }
       if (invalidModels.length > 0) {
         addRequiredIssue(ctx, 'models', fixedModelError)
       }
@@ -415,6 +442,14 @@ export const channelFormSchema = z
             ctx,
             'models',
             'Command must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash'
+          )
+        }
+      } else if (data.type === CHANNEL_TYPE_COMMAND_GO) {
+        if (!configuredModels.includes(getFixedCodeChannelModel(data.type))) {
+          addRequiredIssue(
+            ctx,
+            'models',
+            'Command Go must include deepseek/deepseek-v4.1-flash'
           )
         }
       } else {
@@ -958,7 +993,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   settingsObj.station_cache_enabled = formData.station_cache_enabled === true
   settingsObj.simulated_cache_creation_enabled =
     formData.simulated_cache_creation_enabled === true
-  settingsObj.fake_non_stream_enabled = formData.fake_non_stream_enabled === true
+  settingsObj.fake_non_stream_enabled =
+    formData.fake_non_stream_enabled === true
   settingsObj.video_frame_extraction_enabled =
     formData.video_frame_extraction_enabled === true
   settingsObj.disable_protocol_conversion =
@@ -980,6 +1016,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.channel_tpm_limit
     delete settingsObj.channel_tpm_buffer
     delete settingsObj.channel_limit_mode
+    delete settingsObj.rewrite_upstream_429
   } else {
     delete settingsObj.channel_rpm_limit
     settingsObj.channel_concurrency_limit = Math.trunc(
@@ -995,6 +1032,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     )
     settingsObj.channel_limit_mode =
       formData.channel_limit_mode === 'queue' ? 'queue' : 'reject'
+    settingsObj.rewrite_upstream_429 = formData.rewrite_upstream_429 === true
   }
   const normalizedChannelRetryTimes = Math.min(
     5,
@@ -1003,7 +1041,6 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   settingsObj.channel_retry_times = normalizedChannelRetryTimes
   settingsObj.fallback_retry_enabled =
     normalizedChannelRetryTimes > 0 && formData.fallback_retry_enabled === true
-  settingsObj.rewrite_upstream_429 = formData.rewrite_upstream_429 === true
 
   // Upstream model update settings (for model-fetchable channel types)
   if (MODEL_FETCHABLE_TYPES.has(formData.type)) {
@@ -1163,7 +1200,9 @@ export function transformFormDataToUpdatePayload(
   })
 
   // Send explicit empty strings for nullable fields so GORM updates can clear them.
-  payload.base_url = normalizeBaseUrl(formData.base_url) || ''
+  payload.base_url = isFixedCodeChannelType(formData.type)
+    ? fixedCodeChannelBaseUrl(formData.type)
+    : normalizeBaseUrl(formData.base_url) || ''
   payload.openai_organization = formData.openai_organization || ''
   payload.test_model = formData.test_model || ''
   payload.tag = formData.tag || ''

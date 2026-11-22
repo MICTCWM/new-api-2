@@ -367,7 +367,7 @@ func filterChannelIDsByCodeProviderType(channelIDs []int, excludeCodeProviders b
 	filtered := make([]int, 0, len(channelIDs))
 	for _, channelID := range channelIDs {
 		channel, ok := channelsIDM[channelID]
-		if !ok || (channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand) {
+		if !ok || (channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand && channel.Type != constant.ChannelTypeCommandGo) {
 			filtered = append(filtered, channelID)
 		}
 	}
@@ -487,7 +487,7 @@ func CodeProviderChannelHasCapacity(channel *Channel, modelName string, now int6
 	if channel == nil {
 		return false, nil
 	}
-	if channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand {
+	if channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand && channel.Type != constant.ChannelTypeCommandGo {
 		return true, nil
 	}
 	if !channelSupportsCodeProviderModel(channel, modelName) {
@@ -506,6 +506,14 @@ func CodeProviderChannelHasCapacity(channel *Channel, modelName string, now int6
 			err = ReconcileCodeProviderQuotaChannel(channel.Id, now)
 		}
 		return available, err
+	}
+	// Command Go (63) is excluded from Command channel-level quota. Only
+	// concurrency is enforced; pool-account quota is handled by the account pool.
+	if channel.Type == constant.ChannelTypeCommandGo {
+		if checkRPM {
+			return CommandGoChannelHasConcurrencyCapacity(channel, now)
+		}
+		return true, nil
 	}
 	if checkRPM {
 		available, err := CommandChannelHasCapacityForModel(channel, modelName, now)

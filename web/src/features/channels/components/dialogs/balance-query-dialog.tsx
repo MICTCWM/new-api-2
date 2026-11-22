@@ -57,6 +57,7 @@ export function BalanceQueryDialog(props: BalanceQueryDialogProps) {
     useState<CommandcodeQuotaResponse | null>(null)
 
   const isCodex = currentRow?.type === 57
+  // Only type 62 exposes /commandcode/quota; type 63 uses the account pool.
   const isCommand = currentRow?.type === CHANNEL_TYPE_COMMAND
 
   const handleQueryCodexUsage = async () => {

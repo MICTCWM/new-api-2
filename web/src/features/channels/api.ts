@@ -30,6 +30,13 @@ import type {
   ChannelTestResponse,
   CodeProviderUsageOverrideRequest,
   CodeProviderSessionUsageResponse,
+  CommandGoAccountsResponse,
+  CommandGoDeleteAccountsParams,
+  CommandGoDeleteAccountsResponse,
+  CommandGoImportAccountsResponse,
+  CommandGoRecoverAccountsResponse,
+  CommandGoRefreshAccountResponse,
+  CommandGoRefreshAllResponse,
   CommandUsageResponse,
   CopyChannelParams,
   CopyChannelResponse,
@@ -449,6 +456,79 @@ export async function getCommandUsage(
   const res = await api.get(
     `/api/channel/${channelId}/command/usage`,
     channelActionConfig({ disableDuplicate: true })
+  )
+  return res.data
+}
+
+// ============================================================================
+// Command Go Account Pool
+// ============================================================================
+
+export async function getCommandGoAccounts(
+  channelId: number
+): Promise<CommandGoAccountsResponse> {
+  const res = await api.get(
+    `/api/channel/${channelId}/commandgo/accounts`,
+    channelActionConfig({ disableDuplicate: true })
+  )
+  return res.data
+}
+
+export async function importCommandGoAccounts(
+  channelId: number,
+  text: string
+): Promise<CommandGoImportAccountsResponse> {
+  const res = await api.post(
+    `/api/channel/${channelId}/commandgo/accounts/import`,
+    { text },
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function refreshAllCommandGoAccounts(
+  channelId: number
+): Promise<CommandGoRefreshAllResponse> {
+  const res = await api.post(
+    `/api/channel/${channelId}/commandgo/accounts/refresh`,
+    {},
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function refreshCommandGoAccount(
+  channelId: number,
+  accountId: number
+): Promise<CommandGoRefreshAccountResponse> {
+  const res = await api.post(
+    `/api/channel/${channelId}/commandgo/accounts/${accountId}/refresh`,
+    {},
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function recoverCommandGoAccounts(
+  channelId: number,
+  ids: number[]
+): Promise<CommandGoRecoverAccountsResponse> {
+  const res = await api.post(
+    `/api/channel/${channelId}/commandgo/accounts/recover`,
+    { ids },
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function deleteCommandGoAccounts(
+  channelId: number,
+  params: CommandGoDeleteAccountsParams
+): Promise<CommandGoDeleteAccountsResponse> {
+  const res = await api.post(
+    `/api/channel/${channelId}/commandgo/accounts/delete`,
+    params,
+    channelActionConfig()
   )
   return res.data
 }

@@ -64,6 +64,19 @@ func TestResetStatusCode(t *testing.T) {
 	}
 }
 
+func TestForceStatusCodeMappingMaps402To429(t *testing.T) {
+	mapping := ForceStatusCodeMapping(`{"500":503}`, http.StatusPaymentRequired, http.StatusTooManyRequests)
+	newAPIError := &types.NewAPIError{StatusCode: http.StatusPaymentRequired}
+	ResetStatusCode(newAPIError, mapping)
+	require.Equal(t, http.StatusTooManyRequests, newAPIError.StatusCode)
+	require.Equal(t, http.StatusPaymentRequired, newAPIError.SourceStatusCode)
+
+	// Existing mappings are preserved.
+	otherError := &types.NewAPIError{StatusCode: http.StatusInternalServerError}
+	ResetStatusCode(otherError, mapping)
+	require.Equal(t, http.StatusServiceUnavailable, otherError.StatusCode)
+}
+
 func TestRelayErrorHandlerTruncatesInvalidJSONBodyInLog(t *testing.T) {
 	withDebugEnabled(t, false)
 

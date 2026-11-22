@@ -46,6 +46,12 @@ func ShouldChatCompletionsUseResponsesPolicy(policy model_setting.ChatCompletion
 }
 
 func ShouldChatCompletionsUseResponsesGlobal(channelID int, channelType int, model string) bool {
+	// Command Go speaks a single NDJSON agent envelope upstream and cannot be
+	// adapted from an OpenAI Responses call, so it must never be upgraded from
+	// Chat Completions to Responses.
+	if channelType == constant.ChannelTypeCommandGo {
+		return false
+	}
 	return ShouldChatCompletionsUseResponsesPolicy(
 		model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy,
 		channelID,
@@ -96,6 +102,7 @@ func isOpenAIChatUpstream(apiType int) bool {
 		constant.APITypeXinference,
 		constant.APITypeOpencode,
 		constant.APITypeCommand,
+		constant.APITypeCommandGo,
 		constant.APITypeXai,
 		constant.APITypeCoze,
 		constant.APITypeJimeng,

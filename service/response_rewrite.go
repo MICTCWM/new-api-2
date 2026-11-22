@@ -257,7 +257,7 @@ func ShouldHideCommandThinking(c *gin.Context) bool {
 	if c == nil {
 		return false
 	}
-	if common.GetContextKeyInt(c, constant.ContextKeyChannelType) != constant.ChannelTypeCommand {
+	if common.GetContextKeyInt(c, constant.ContextKeyChannelType) != constant.ChannelTypeCommand && common.GetContextKeyInt(c, constant.ContextKeyChannelType) != constant.ChannelTypeCommandGo {
 		return false
 	}
 	return common.GetContextKeyBool(c, constant.ContextKeyCommandHideThinking)

@@ -60,11 +60,17 @@ const (
 	ChannelTypeNewAPI         = 60
 	ChannelTypeOpencode       = 61
 	ChannelTypeCommand        = 62
+	ChannelTypeCommandGo      = 63
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
 
 const OpencodeUpstreamExhaustedMessage = "上游错误"
+
+// CommandGoPoolEmptyMessage is returned when a Command Go channel has no pool
+// account that can currently serve a request (every account is error,
+// no_quota, or already attempted within this request's retry chain).
+const CommandGoPoolEmptyMessage = "Command Go 池内无可用账号"
 
 // Per-channel limit 429 messages (English, returned to API callers).
 const (
@@ -107,6 +113,7 @@ var streamSupportedChannelTypes = map[int]bool{
 	ChannelTypeTencent:        true,
 	ChannelTypeOpencode:       true,
 	ChannelTypeCommand:        true,
+	ChannelTypeCommandGo:      true,
 }
 
 func IsStreamSupportedChannel(channelType int) bool {
@@ -177,6 +184,7 @@ var ChannelBaseURLs = []string{
 	"",                                          //60
 	"https://opencode.ai/zen/go/v1/chat/completions", //61
 	"https://api.commandcode.ai/provider/v1",         //62
+	"https://api.commandcode.ai/alpha",               //63
 }
 
 var ChannelTypeNames = map[int]string{
@@ -239,6 +247,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeNewAPI:         "New API",
 	ChannelTypeOpencode:       "Opencode",
 	ChannelTypeCommand:        "Command",
+	ChannelTypeCommandGo:      "Command Go",
 }
 
 func GetChannelTypeName(channelType int) string {

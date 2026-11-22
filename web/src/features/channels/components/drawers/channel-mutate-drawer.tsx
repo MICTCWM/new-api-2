@@ -127,6 +127,7 @@ import {
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_STATUS_LABELS,
   CHANNEL_TYPE_COMMAND,
+  CHANNEL_TYPE_COMMAND_GO,
   CHANNEL_TYPE_OPTIONS,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
@@ -929,17 +930,21 @@ export function ChannelMutateDrawer({
   const isChannelDetailLoading = isEditing && isChannelLoading
   const supportsMultiKeyAddMode =
     currentType !== 57 && !(currentType === 41 && vertexKeyType === 'api_key')
-  const addModeOptions = useMemo(
-    () =>
-      supportsMultiKeyAddMode
-        ? ADD_MODE_OPTIONS.filter(
-            (option) =>
-              !isFixedCodeChannelType(currentType) ||
-              option.value !== 'multi_to_single'
-          )
-        : ADD_MODE_OPTIONS.filter((option) => option.value === 'single'),
-    [currentType, supportsMultiKeyAddMode]
-  )
+  const addModeOptions = useMemo(() => {
+    // Command Go creates one channel per key; the remaining accounts are
+    // imported into that channel's pool, so batch/multi-key modes are invalid.
+    if (currentType === CHANNEL_TYPE_COMMAND_GO) {
+      return ADD_MODE_OPTIONS.filter((option) => option.value === 'single')
+    }
+    if (!supportsMultiKeyAddMode) {
+      return ADD_MODE_OPTIONS.filter((option) => option.value === 'single')
+    }
+    return ADD_MODE_OPTIONS.filter(
+      (option) =>
+        !isFixedCodeChannelType(currentType) ||
+        option.value !== 'multi_to_single'
+    )
+  }, [currentType, supportsMultiKeyAddMode])
 
   const advancedCustomStats = useMemo(
     () => getAdvancedCustomStats(currentAdvancedCustom),
@@ -1016,6 +1021,26 @@ export function ChannelMutateDrawer({
     [currentType]
   )
 
+  const fixedCodeModelSupportMessage = useMemo(() => {
+    if (currentType === CHANNEL_TYPE_COMMAND) {
+      return 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
+    }
+    if (currentType === CHANNEL_TYPE_COMMAND_GO) {
+      return 'Command Go supports deepseek/deepseek-v4.1-flash and model mapping source models'
+    }
+    return 'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
+  }, [currentType])
+
+  const fixedCodeEndpointMessage = useMemo(() => {
+    if (currentType === CHANNEL_TYPE_COMMAND) {
+      return 'Fixed endpoint: https://api.commandcode.ai/provider/v1. Supports deepseek/deepseek-v4-flash, deepseek/deepseek-v4-pro, and deepseek/deepseek-v4.1-flash.'
+    }
+    if (currentType === CHANNEL_TYPE_COMMAND_GO) {
+      return 'Fixed endpoint: https://api.commandcode.ai/alpha. Supports deepseek/deepseek-v4.1-flash.'
+    }
+    return 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, and deepseek-v4-pro.'
+  }, [currentType])
+
   const channelTypeOptions = useMemo(() => {
     const options = CHANNEL_TYPE_OPTIONS.map((option) => ({
       value: String(option.value),
@@ -1058,8 +1083,11 @@ export function ChannelMutateDrawer({
   const providerRequiresBaseUrl = [3, 8, 36, 45].includes(currentType)
   const providerRequiresOther = [3, 18, 21, 39, 41, 49].includes(currentType)
   const identityComplete = Boolean(currentName?.trim() && currentType > 0)
+  // Command Go channels create an empty account pool and import keys later,
+  // so a key is optional on creation.
+  const keyRequired = currentType !== CHANNEL_TYPE_COMMAND_GO
   const credentialsComplete = Boolean(
-    (isEditing || currentKey?.trim()) &&
+    (isEditing || !keyRequired || currentKey?.trim()) &&
     (!providerRequiresBaseUrl || currentBaseUrl?.trim()) &&
     (!providerRequiresOther || currentOther?.trim())
   )
@@ -1439,6 +1467,15 @@ export function ChannelMutateDrawer({
 
   useEffect(() => {
     if (isFixedCodeChannelType(currentType)) {
+      if (currentType === CHANNEL_TYPE_COMMAND_GO) {
+        if (multiKeyMode !== 'single') {
+          form.setValue('multi_key_mode', 'single', {
+            shouldDirty: !isEditing,
+            shouldValidate: true,
+          })
+        }
+        return
+      }
       if (multiKeyMode === 'multi_to_single') {
         form.setValue('multi_key_mode', 'batch', {
           shouldDirty: !isEditing,
@@ -1639,13 +1676,7 @@ export function ChannelMutateDrawer({
   // Handle model operations
   const handleFillRelatedModels = useCallback(() => {
     if (isFixedCodeChannelType(currentType)) {
-      toast.info(
-        t(
-          currentType === CHANNEL_TYPE_COMMAND
-            ? 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
-            : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
-        )
-      )
+      toast.info(t(fixedCodeModelSupportMessage))
       return
     }
     if (!basicModels.length) {
@@ -1656,17 +1687,11 @@ export function ChannelMutateDrawer({
     toast.success(
       t('Filled {{count}} related model(s)', { count: basicModels.length })
     )
-  }, [basicModels, currentType, updateModels, t])
+  }, [basicModels, currentType, updateModels, t, fixedCodeModelSupportMessage])
 
   const handleFillAllModels = useCallback(() => {
     if (isFixedCodeChannelType(currentType)) {
-      toast.info(
-        t(
-          currentType === CHANNEL_TYPE_COMMAND
-            ? 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
-            : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
-        )
-      )
+      toast.info(t(fixedCodeModelSupportMessage))
       return
     }
     if (!allModelsList.length) {
@@ -1677,23 +1702,23 @@ export function ChannelMutateDrawer({
     toast.success(
       t('Filled {{count}} model(s)', { count: allModelsList.length })
     )
-  }, [allModelsList, currentType, updateModels, t])
+  }, [
+    allModelsList,
+    currentType,
+    updateModels,
+    t,
+    fixedCodeModelSupportMessage,
+  ])
 
   const handleClearModels = useCallback(() => {
     if (isFixedCodeChannelType(currentType)) {
       form.setValue('models', getFixedCodeChannelModel(currentType))
-      toast.info(
-        t(
-          currentType === CHANNEL_TYPE_COMMAND
-            ? 'Command supports Flash, Pro, V4.1 Flash, and model mapping source models'
-            : 'Opencode supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, and model mapping source models'
-        )
-      )
+      toast.info(t(fixedCodeModelSupportMessage))
       return
     }
     form.setValue('models', '')
     toast.success(t('Cleared all models'))
-  }, [currentType, form, t])
+  }, [currentType, form, t, fixedCodeModelSupportMessage])
 
   const handleCopyModels = useCallback(async () => {
     const models = form.getValues('models')
@@ -1824,8 +1849,13 @@ export function ChannelMutateDrawer({
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
-      // Validate key is required when creating
-      if (!isEditing && !data.key?.trim()) {
+      // Validate key is required when creating, except for Command Go
+      // channels whose pool starts empty and is filled via Pool Management.
+      if (
+        !isEditing &&
+        data.type !== CHANNEL_TYPE_COMMAND_GO &&
+        !data.key?.trim()
+      ) {
         form.setError('key', {
           type: 'manual',
           message: ERROR_MESSAGES.REQUIRED_KEY,
@@ -2968,42 +2998,37 @@ export function ChannelMutateDrawer({
                             )}
 
                             {/* General base_url for other types */}
-                            {![3, 8, 22, 36, 45, 61, 62].includes(
-                              currentType
-                            ) && (
-                              <FormField
-                                control={form.control}
-                                name='base_url'
-                                render={({ field }) => (
-                                  <FormItem>
-                                    <FormLabel>{t('Base URL')}</FormLabel>
-                                    <FormControl>
-                                      <Input
-                                        placeholder={t(
-                                          FIELD_PLACEHOLDERS.BASE_URL
+                            {!isFixedCodeChannelType(currentType) &&
+                              ![3, 8, 22, 36, 45].includes(currentType) && (
+                                <FormField
+                                  control={form.control}
+                                  name='base_url'
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>{t('Base URL')}</FormLabel>
+                                      <FormControl>
+                                        <Input
+                                          placeholder={t(
+                                            FIELD_PLACEHOLDERS.BASE_URL
+                                          )}
+                                          {...field}
+                                        />
+                                      </FormControl>
+                                      <FormDescription>
+                                        {t(
+                                          'Custom API base URL. For official channels, New API has built-in addresses. Only fill this for third-party proxy sites or special endpoints. Do not add /v1 or trailing slash.'
                                         )}
-                                        {...field}
-                                      />
-                                    </FormControl>
-                                    <FormDescription>
-                                      {t(
-                                        'Custom API base URL. For official channels, New API has built-in addresses. Only fill this for third-party proxy sites or special endpoints. Do not add /v1 or trailing slash.'
-                                      )}
-                                    </FormDescription>
-                                    <FormMessage />
-                                  </FormItem>
-                                )}
-                              />
-                            )}
+                                      </FormDescription>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                              )}
 
                             {isFixedCodeChannelType(currentType) && (
                               <Alert>
                                 <AlertDescription>
-                                  {t(
-                                    currentType === CHANNEL_TYPE_COMMAND
-                                      ? 'Fixed endpoint: https://api.commandcode.ai/provider/v1. Supports deepseek/deepseek-v4-flash, deepseek/deepseek-v4-pro, and deepseek/deepseek-v4.1-flash.'
-                                      : 'Fixed endpoint: https://opencode.ai/zen/go/v1/chat/completions. Supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, and deepseek-v4-pro.'
-                                  )}
+                                  {t(fixedCodeEndpointMessage)}
                                 </AlertDescription>
                               </Alert>
                             )}
@@ -3194,6 +3219,12 @@ export function ChannelMutateDrawer({
                                         )}
                                       </>
                                     )
+                                  } else if (
+                                    currentType === CHANNEL_TYPE_COMMAND_GO
+                                  ) {
+                                    keyDescription = t(
+                                      'Optional: leave empty to create an empty account pool, then import accounts from Pool Management.'
+                                    )
                                   } else if (isBatchMode) {
                                     keyDescription = t(
                                       'Enter one API key per line for batch creation'
@@ -3201,7 +3232,11 @@ export function ChannelMutateDrawer({
                                   }
                                   return (
                                     <FormItem>
-                                      <FormLabel>{t('API Key *')}</FormLabel>
+                                      <FormLabel>
+                                        {currentType === CHANNEL_TYPE_COMMAND_GO
+                                          ? t('API Key')
+                                          : t('API Key *')}
+                                      </FormLabel>
                                       <FormControl>
                                         <Textarea
                                           placeholder={keyPlaceholder}
@@ -4214,7 +4249,9 @@ export function ChannelMutateDrawer({
                                 render={({ field }) => (
                                   <FormItem className='flex items-center justify-between gap-4 rounded-md border px-3 py-2.5'>
                                     <div className='space-y-0.5'>
-                                      <FormLabel>{t('Fallback Retry')}</FormLabel>
+                                      <FormLabel>
+                                        {t('Fallback Retry')}
+                                      </FormLabel>
                                       <FormDescription>
                                         {t(
                                           'When this channel is used as a fallback and the request fails, retry on this channel according to Channel Retry before moving to the next fallback.'

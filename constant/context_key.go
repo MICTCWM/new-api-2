@@ -48,6 +48,22 @@ const (
 	// never sees the reasoning content that was requested to stay hidden.
 	ContextKeyCommandHideThinking ContextKey = "command_hide_thinking"
 
+	// ContextKeyCommandGoAccountKey carries the upstream Command Go account key
+	// selected for this request (pool account). When unset, the adaptor falls
+	// back to the channel API key so a single-account channel still works.
+	ContextKeyCommandGoAccountKey ContextKey = "command_go_account_key"
+
+	// ContextKeyCommandGoUpstreamAttempted is set by the Command Go adaptor
+	// only when it actually issues an HTTP request upstream, so purely local
+	// failures (validation, client cancellation before sending) are not
+	// attributed to a pool account.
+	ContextKeyCommandGoUpstreamAttempted ContextKey = "command_go_upstream_attempted"
+
+	// ContextKeyCommandGoStreamFailure carries the *types.NewAPIError for a
+	// stream that already emitted output before failing. The relay records it
+	// against the pool account but does not retry.
+	ContextKeyCommandGoStreamFailure ContextKey = "command_go_stream_failure"
+
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
 	ContextKeyAutoGroupRetryIndex ContextKey = "auto_group_retry_index"

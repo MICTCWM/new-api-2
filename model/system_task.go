@@ -20,6 +20,7 @@ const (
 	SystemTaskTypeChannelTest     = "channel_test"
 	SystemTaskTypeOpencodeUsage   = "opencode_usage_calibration"
 	SystemTaskTypeCommandUsage    = "command_usage_calibration"
+	SystemTaskTypeCommandGoPool   = "command_go_pool_refresh"
 	SystemTaskTypeSpeedProtection = "speed_protection"
 	SystemTaskTypeModelUpdate     = "model_update"
 	SystemTaskTypeMidjourneyPoll  = "midjourney_poll"

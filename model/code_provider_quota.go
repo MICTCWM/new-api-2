@@ -180,6 +180,12 @@ func ReconcileCodeProviderQuotaChannel(channelID int, now int64) error {
 	if err != nil {
 		return err
 	}
+	// Command Go (63) is fully excluded from channel-level rolling quota. It must
+	// never be auto-disabled by this path; pool-account quota is handled
+	// separately by the command-go account pool.
+	if channel.Type == constant.ChannelTypeCommandGo {
+		return nil
+	}
 	if channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand {
 		return nil
 	}
@@ -238,6 +244,7 @@ func ReconcileCodeProviderQuotaChannels(now int64) (int, int, error) {
 		return 0, 0, errors.New("database is not initialized")
 	}
 	var channels []Channel
+	// Command Go (63) 以池账号额度为准，不参与渠道级配额对账。
 	if err := DB.Where("type IN ? AND status IN ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, []int{common.ChannelStatusEnabled, common.ChannelStatusAutoDisabled}).Find(&channels).Error; err != nil {
 		return 0, 0, err
 	}

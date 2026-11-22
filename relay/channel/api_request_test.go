@@ -3,12 +3,48 @@ package channel
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type markerTestAdaptor struct {
+	Adaptor
+	marked *bool
+}
+
+func (a *markerTestAdaptor) GetRequestURL(*relaycommon.RelayInfo) (string, error) {
+	return "http://127.0.0.1:1/v1/chat/completions", nil
+}
+
+func (a *markerTestAdaptor) SetupRequestHeader(*gin.Context, *http.Header, *relaycommon.RelayInfo) error {
+	return nil
+}
+
+func (a *markerTestAdaptor) MarkUpstreamAttempt(*gin.Context) {
+	*a.marked = true
+}
+
+func TestDoApiRequestDoesNotMarkUpstreamOnProxyClientError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+
+	marked := false
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		ChannelSetting: dto.ChannelSettings{Proxy: "ftp://127.0.0.1:21"},
+	}}
+	_, err := DoApiRequest(&markerTestAdaptor{marked: &marked}, c, info, strings.NewReader("{}"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "new proxy http client failed")
+	assert.False(t, marked, "a local proxy client error must not mark an upstream attempt")
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()

@@ -516,7 +516,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		}
 		relayInfo.OpencodeUpstreamCostMicroUSD = &opencodeCost
 		relayInfo.OpencodePricingPeriod = &pricingPeriod
-	} else if relayInfo.ChannelType == constant.ChannelTypeCommand {
+	} else if relayInfo.ChannelType == constant.ChannelTypeCommand || relayInfo.ChannelType == constant.ChannelTypeCommandGo {
 		commandCost := int64(0)
 		settleAt := time.Now().UTC()
 		pricingPeriod := model.OpencodePricingPeriodAt(settleAt)

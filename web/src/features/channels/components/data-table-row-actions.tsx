@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import type { Row } from '@tanstack/react-table'
 import {
   MoreHorizontal,
@@ -15,6 +16,7 @@ import {
   Trash2,
   RefreshCw,
   Loader2,
+  Users,
 } from 'lucide-react'
 import { useContext, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -44,8 +46,9 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { resetCommandUsage, resetOpencodeUsage } from '../api'
 import {
-  CHANNEL_TYPE_COMMAND,
+  CHANNEL_TYPE_COMMAND_GO,
   MODEL_FETCHABLE_TYPES,
+  isCommandFamilyChannelType,
   isFixedCodeChannelType,
 } from '../constants'
 import {
@@ -72,6 +75,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const channel = row.original
   const { setOpen, setCurrentRow, upstream } = useChannels()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const currentUser = useAuthStore((s) => s.auth.user)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [resetUsageConfirmOpen, setResetUsageConfirmOpen] = useState(false)
@@ -81,10 +85,17 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
   const isEnabled = isChannelEnabled(channel)
   const isMultiKey = isMultiKeyChannel(channel)
+  const isCommand = isCommandFamilyChannelType(channel.type)
+  const isCommandGo = channel.type === CHANNEL_TYPE_COMMAND_GO
   const canEditSensitive = hasPermission(
     currentUser,
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+  )
+  const canRead = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.READ
   )
   const canOperate = hasPermission(
     currentUser,
@@ -164,17 +175,12 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     if (!canOperate) return
     setIsResettingUsage(true)
     try {
-      const response =
-        channel.type === CHANNEL_TYPE_COMMAND
-          ? await resetCommandUsage()
-          : await resetOpencodeUsage()
+      const response = isCommand
+        ? await resetCommandUsage()
+        : await resetOpencodeUsage()
       if (response.success) {
         toast.success(
-          t(
-            channel.type === CHANNEL_TYPE_COMMAND
-              ? 'Command quotas reset'
-              : 'OpenCode quotas reset'
-          )
+          t(isCommand ? 'Command quotas reset' : 'OpenCode quotas reset')
         )
         await queryClient.invalidateQueries({
           queryKey: ['code-provider-usage'],
@@ -183,7 +189,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         toast.error(
           response.message ||
             t(
-              channel.type === CHANNEL_TYPE_COMMAND
+              isCommand
                 ? 'Failed to reset Command quotas'
                 : 'Failed to reset OpenCode quotas'
             )
@@ -192,7 +198,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     } catch {
       toast.error(
         t(
-          channel.type === CHANNEL_TYPE_COMMAND
+          isCommand
             ? 'Failed to reset Command quotas'
             : 'Failed to reset OpenCode quotas'
         )
@@ -200,6 +206,14 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     } finally {
       setIsResettingUsage(false)
     }
+  }
+
+  const handleOpenPool = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation()
+    navigate({
+      to: '/channels/pool/$channelId',
+      params: { channelId: String(channel.id) },
+    })
   }
 
   let statusIcon = <Power className='size-4' />
@@ -252,6 +266,24 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         </TooltipTrigger>
         <TooltipContent>{t('Test Connection')}</TooltipContent>
       </Tooltip>
+
+      {isCommandGo && canRead && (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                onClick={handleOpenPool}
+                aria-label={t('Pool Management')}
+              />
+            }
+          >
+            <Users className='size-4' />
+          </TooltipTrigger>
+          <TooltipContent>{t('Pool Management')}</TooltipContent>
+        </Tooltip>
+      )}
 
       {layout === 'card' && (
         <Tooltip>
@@ -328,13 +360,15 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 
-          {/* Query Balance */}
-          <DropdownMenuItem onClick={handleQueryBalance}>
-            {t('Query Balance')}
-            <DropdownMenuShortcut>
-              <DollarSign size={16} />
-            </DropdownMenuShortcut>
-          </DropdownMenuItem>
+          {/* Query Balance (Command Go uses the account pool instead) */}
+          {!isCommandGo && (
+            <DropdownMenuItem onClick={handleQueryBalance}>
+              {t('Query Balance')}
+              <DropdownMenuShortcut>
+                <DollarSign size={16} />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
 
           {/* Fetch Models */}
           <DropdownMenuItem onClick={handleFetchModels}>
@@ -344,7 +378,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 
-          {isFixedCodeChannelType(channel.type) && (
+          {isFixedCodeChannelType(channel.type) && !isCommandGo && (
             <DropdownMenuItem
               disabled={!canOperate}
               onClick={() => {
@@ -427,7 +461,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
           <DropdownMenuSeparator />
 
-          {isFixedCodeChannelType(channel.type) && (
+          {isFixedCodeChannelType(channel.type) && !isCommandGo && (
             <DropdownMenuItem
               disabled={!canOperate || isResettingUsage}
               onSelect={(event) => {
@@ -436,7 +470,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               }}
             >
               {t(
-                channel.type === CHANNEL_TYPE_COMMAND
+                isCommand
                   ? 'Reset all Command channel quotas'
                   : 'Reset all OpenCode channel quotas'
               )}
@@ -472,12 +506,12 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         open={resetUsageConfirmOpen}
         onOpenChange={setResetUsageConfirmOpen}
         title={t(
-          channel.type === CHANNEL_TYPE_COMMAND
+          isCommand
             ? 'Reset all Command channel quotas?'
             : 'Reset all OpenCode channel quotas?'
         )}
         desc={t(
-          channel.type === CHANNEL_TYPE_COMMAND
+          isCommand
             ? 'This clears the 5-hour, weekly, monthly, and total-pool allowances for every Command channel.'
             : 'This clears the 5-hour, weekly, monthly, and total pool allowances for every OpenCode channel.'
         )}

@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/codex"
 	"github.com/QuantumNous/new-api/relay/channel/cohere"
 	"github.com/QuantumNous/new-api/relay/channel/command"
+	"github.com/QuantumNous/new-api/relay/channel/commandgo"
 	"github.com/QuantumNous/new-api/relay/channel/coze"
 	"github.com/QuantumNous/new-api/relay/channel/deepseek"
 	"github.com/QuantumNous/new-api/relay/channel/dify"
@@ -135,6 +136,8 @@ func GetAdaptor(apiType int) channel.Adaptor {
 		return &opencode.Adaptor{}
 	case constant.APITypeCommand:
 		return &command.Adaptor{}
+	case constant.APITypeCommandGo:
+		return &commandgo.Adaptor{}
 	}
 	return nil
 }
@@ -149,6 +152,8 @@ func GetAdaptorForChannel(apiType, channelType int) channel.Adaptor {
 		return &opencode.Adaptor{}
 	case constant.ChannelTypeCommand:
 		return &command.Adaptor{}
+	case constant.ChannelTypeCommandGo:
+		return &commandgo.Adaptor{}
 	}
 	return GetAdaptor(apiType)
 }

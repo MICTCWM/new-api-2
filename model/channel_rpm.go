@@ -314,7 +314,7 @@ func GetChannelRPMLimit(channel *Channel) int {
 }
 
 func GetChannelConcurrencyLimit(channel *Channel) int {
-	if channel == nil || channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand {
+	if channel == nil || channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand || channel.Type == constant.ChannelTypeCommandGo {
 		return 0
 	}
 	settings := channel.GetOtherSettings()
@@ -380,7 +380,7 @@ func GetChannelConcurrencyUsageSnapshot(channelID int, now int64) (*ChannelRPMUs
 	if err != nil {
 		return nil, err
 	}
-	if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand {
+	if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand || channel.Type == constant.ChannelTypeCommandGo {
 		return nil, errors.New("channel-specific RPM is not used by code provider channels")
 	}
 
@@ -536,7 +536,7 @@ func SettleChannelTPMUsage(channelID int, reservedTokens, totalTokens int64) err
 	if err != nil || channel == nil {
 		return err
 	}
-	if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand {
+	if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand || channel.Type == constant.ChannelTypeCommandGo {
 		return nil
 	}
 	if GetChannelTPMLimit(channel) == 0 && reservedTokens == 0 {

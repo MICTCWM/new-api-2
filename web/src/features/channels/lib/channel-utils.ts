@@ -30,6 +30,44 @@ import {
 import type { Channel, ChannelSettings, ChannelOtherSettings } from '../types'
 
 // ============================================================================
+// Error Utilities
+// ============================================================================
+
+/**
+ * Resolve the most useful message from an API error.
+ *
+ * Channel action requests use `skipErrorHandler`, so backend validation errors
+ * (often HTTP 400 with `{ success: false, message }`) never reach the global
+ * toast handler. Callers must surface `err.response.data.message` themselves
+ * before falling back to the generic Error message or a localized fallback.
+ */
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object') {
+    const { name, code } = error as { name?: unknown; code?: unknown }
+    // Axios aborts pending requests on unmount/duplicate suppression. Those
+    // rejections are not failures, so skip the raw "canceled" message and use
+    // the caller's localized fallback.
+    if (name === 'CanceledError' || code === 'ERR_CANCELED') {
+      return fallback
+    }
+    const responseMessage = (
+      error as { response?: { data?: { message?: unknown } } }
+    ).response?.data?.message
+    if (
+      typeof responseMessage === 'string' &&
+      responseMessage.trim().length > 0
+    ) {
+      return responseMessage
+    }
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.trim().length > 0) {
+      return message
+    }
+  }
+  return fallback
+}
+
+// ============================================================================
 // Channel Type Utilities
 // ============================================================================
 
@@ -56,6 +94,7 @@ export function getChannelTypeIcon(type: number): string {
     60: 'NewAPI', // New API
     61: 'OpenAI', // Opencode
     62: 'OpenAI', // Command
+    63: 'OpenAI', // Command Go
     3: 'Azure', // Azure
 
     // Anthropic

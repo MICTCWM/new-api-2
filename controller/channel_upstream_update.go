@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
 	"github.com/QuantumNous/new-api/relay/channel/command"
+	"github.com/QuantumNous/new-api/relay/channel/commandgo"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	"github.com/QuantumNous/new-api/relay/channel/opencode"
@@ -363,9 +364,12 @@ func getFetchModelsResponseBody(method string, requestURL string, channel *model
 }
 
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
-	if channel != nil && (channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand) {
+	if channel != nil && (channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand || channel.Type == constant.ChannelTypeCommandGo) {
 		if channel.Type == constant.ChannelTypeCommand {
 			return []string{command.Model, command.ProModel, command.V41Model}, nil
+		}
+		if channel.Type == constant.ChannelTypeCommandGo {
+			return commandgo.ModelList, nil
 		}
 		return []string{opencode.Model, opencode.GlmModel, opencode.V41Model, opencode.ProModel}, nil
 	}

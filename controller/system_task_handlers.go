@@ -22,6 +22,7 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(opencodeUsageCalibrationHandler{})
 	service.RegisterSystemTaskHandler(commandUsageCalibrationHandler{})
+	service.RegisterSystemTaskHandler(commandGoPoolRefreshHandler{})
 	service.RegisterSystemTaskHandler(speedProtectionHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
@@ -47,6 +48,58 @@ func (commandUsageCalibrationHandler) Run(ctx context.Context, task *model.Syste
 		return
 	}
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, map[string]int{"calibrated": calibrated}, nil)
+}
+
+// commandGoPoolRefreshHandler refreshes every Command Go pool account on a
+// ten-minute cadence. It only updates quota snapshots and the no_quota marker;
+// an account already in error/no_quota never becomes active automatically
+// (recovery is a manual admin action).
+type commandGoPoolRefreshHandler struct{}
+
+func (commandGoPoolRefreshHandler) Type() string { return model.SystemTaskTypeCommandGoPool }
+
+func (commandGoPoolRefreshHandler) Enabled() bool { return true }
+
+func (commandGoPoolRefreshHandler) Interval() time.Duration { return 10 * time.Minute }
+
+func (commandGoPoolRefreshHandler) NewPayload() any { return nil }
+
+func (commandGoPoolRefreshHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	channels, err := model.GetAllChannels(0, 0, true, false)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	refreshed := 0
+	failed := 0
+	for _, channel := range channels {
+		if ctx.Err() != nil {
+			finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, map[string]int{"refreshed": refreshed, "failed": failed}, ctx.Err())
+			return
+		}
+		if channel == nil || channel.Type != constant.ChannelTypeCommandGo {
+			continue
+		}
+		if channel.Status != common.ChannelStatusEnabled && channel.Status != common.ChannelStatusAutoDisabled {
+			continue
+		}
+		count, countErr := service.CountCommandGoAccountsByChannel(channel.Id)
+		if countErr != nil {
+			common.SysError(fmt.Sprintf("failed to count Command Go accounts for channel #%d: %v", channel.Id, countErr))
+			failed++
+			continue
+		}
+		if count == 0 {
+			continue
+		}
+		channelRefreshed, failures := service.RefreshAllCommandGoAccounts(ctx, channel.Id)
+		refreshed += channelRefreshed
+		failed += len(failures)
+		for _, failure := range failures {
+			common.SysError(fmt.Sprintf("Command Go channel #%d account #%d (%s) scheduled refresh failed: %s", channel.Id, failure.Id, failure.Name, failure.Error))
+		}
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, map[string]int{"refreshed": refreshed, "failed": failed}, nil)
 }
 
 type opencodeUsageCalibrationHandler struct{}

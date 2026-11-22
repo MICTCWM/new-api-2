@@ -105,6 +105,12 @@ type LogCleanupResult struct {
 
 var (
 	systemTaskRunnerOnce sync.Once
+	// systemTaskRunnerWG tracks the runner goroutine and systemTaskHandlerWG
+	// tracks handlers it has dispatched. Shutdown waits on the runner first;
+	// once it stops no new handler can be registered, so the handler wait has a
+	// stable set to join.
+	systemTaskRunnerWG  sync.WaitGroup
+	systemTaskHandlerWG sync.WaitGroup
 	// systemTaskWakeup signals the runner to check for runnable tasks
 	// immediately instead of waiting for the idle poll. Buffered so a signal
 	// raised while the runner is busy is not lost and is handled on the next loop.
@@ -127,7 +133,9 @@ func StartSystemTaskRunner() {
 		}
 
 		runnerID := fmt.Sprintf("%s-%s", common.NodeName, common.GetRandomString(8))
+		systemTaskRunnerWG.Add(1)
 		gopool.Go(func() {
+			defer systemTaskRunnerWG.Done()
 			logger.LogInfo(context.Background(), fmt.Sprintf("system task runner started: runner=%s idle_interval=%s", runnerID, systemTaskRunnerIdleInterval))
 
 			ticker := time.NewTicker(systemTaskRunnerIdleInterval)
@@ -158,11 +166,39 @@ func StartSystemTaskRunner() {
 				select {
 				case <-ticker.C:
 				case <-systemTaskWakeup:
+				case <-common.ProcessContext().Done():
+					logger.LogInfo(context.Background(), fmt.Sprintf("system task runner stopping: runner=%s", runnerID))
+					return
 				}
 				runPass()
 			}
 		})
 	})
+}
+
+// WaitSystemTaskHandlers waits for the system task runner goroutine and every
+// handler it has dispatched to finish, bounded by timeout. It returns false if
+// the timeout elapsed first. Graceful shutdown calls it before closing the
+// database: dispatched handlers can still write while they honor ctx
+// cancellation, so closing DB without joining them is unsafe.
+func WaitSystemTaskHandlers(timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = systemTaskLockTTL
+	}
+	done := make(chan struct{})
+	go func() {
+		// Wait for the runner before the handlers: after it stops, no new
+		// handler can be added to systemTaskHandlerWG.
+		systemTaskRunnerWG.Wait()
+		systemTaskHandlerWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 func StartLogCleanupTask(targetTimestamp int64) (*model.SystemTask, error) {
@@ -248,7 +284,9 @@ func runSystemTaskClaimPass(runnerID string) {
 		}
 		dispatchHandler := handler
 		dispatchTask := claimedTask
+		systemTaskHandlerWG.Add(1)
 		gopool.Go(func() {
+			defer systemTaskHandlerWG.Done()
 			runWithLeaseHeartbeat(dispatchTask, runnerID, func(ctx context.Context) {
 				dispatchHandler.Run(ctx, dispatchTask, runnerID)
 			})
@@ -306,7 +344,15 @@ func runSystemTaskScheduler() {
 // fn runs. The TTL is a crash-detection window, not a task time limit: an
 // arbitrarily long handler stays alive as long as the heartbeat succeeds.
 func runWithLeaseHeartbeat(task *model.SystemTask, runnerID string, fn func(ctx context.Context)) {
-	ctx, cancel := context.WithCancel(context.Background())
+	runWithLeaseHeartbeatContext(common.ProcessContext(), task, runnerID, fn)
+}
+
+// runWithLeaseHeartbeatContext runs fn under a context that is cancelled when
+// either the lease is lost or the parent context ends. Production passes
+// common.ProcessContext so process shutdown stops long-running handlers instead
+// of letting them race the closing database.
+func runWithLeaseHeartbeatContext(parent context.Context, task *model.SystemTask, runnerID string, fn func(ctx context.Context)) {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	interval := systemTaskLockTTL / 3

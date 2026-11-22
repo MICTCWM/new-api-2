@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/command"
+	"github.com/QuantumNous/new-api/relay/channel/commandgo"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	"github.com/QuantumNous/new-api/relay/channel/opencode"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -843,7 +844,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("channel cannot be empty")
 	}
 
-	if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand {
+	if channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand || channel.Type == constant.ChannelTypeCommandGo {
 		modelName := opencode.Model
 		canonicalURL := opencode.CanonicalURL
 		keyName := "opencode"
@@ -852,7 +853,15 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			canonicalURL = command.BaseURL
 			keyName = "command"
 		}
-		if isAdd && strings.TrimSpace(channel.Key) == "" {
+		if channel.Type == constant.ChannelTypeCommandGo {
+			modelName = commandgo.Model
+			canonicalURL = commandgo.BaseURL
+			keyName = "command-go"
+		}
+		// Command Go (63) manages keys through its account pool, so a channel
+		// created in single-channel mode may leave the key empty. The field is a
+		// placeholder there; accounts are imported afterwards.
+		if isAdd && channel.Type != constant.ChannelTypeCommandGo && strings.TrimSpace(channel.Key) == "" {
 			return fmt.Errorf("%s API key cannot be empty", keyName)
 		}
 		if channel.Models == "" {
@@ -888,6 +897,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 				if channel.Type == constant.ChannelTypeCommand {
 					return fmt.Errorf("%s only supports Flash, Pro, V4.1 Flash, or model mapping source models", keyName)
 				}
+				if channel.Type == constant.ChannelTypeCommandGo {
+					return fmt.Errorf("%s only supports %s or model mapping source models", keyName, modelName)
+				}
 				return fmt.Errorf("%s only supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, deepseek-v4-pro, or model mapping source models", keyName)
 			}
 			if _, ok := seenModels[configuredModel]; ok {
@@ -900,7 +912,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			return fmt.Errorf("%s must have at least one model", keyName)
 		}
 		if !hasNativeModel {
-			if channel.Type == constant.ChannelTypeCommand {
+			if channel.Type == constant.ChannelTypeCommand || channel.Type == constant.ChannelTypeCommandGo {
 				return fmt.Errorf("%s must include the fixed model %s", keyName, modelName)
 			}
 			return fmt.Errorf("%s must include deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, or deepseek-v4-pro", keyName)
@@ -940,7 +952,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
-		if channel.Key == "" {
+		if channel.Key == "" && channel.Type != constant.ChannelTypeCommandGo {
 			return fmt.Errorf("channel cannot be empty")
 		}
 
@@ -1097,6 +1109,13 @@ func AddChannel(c *gin.Context) {
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
 	case "multi_to_single":
+		if addChannelRequest.Channel.Type == constant.ChannelTypeCommandGo {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "Command Go 渠道使用账号池管理密钥，请先创建单个渠道再导入账号",
+			})
+			return
+		}
 		if addChannelRequest.Channel.Type == constant.ChannelTypeOpencode || addChannelRequest.Channel.Type == constant.ChannelTypeCommand {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -1131,6 +1150,13 @@ func AddChannel(c *gin.Context) {
 		}
 		keys = []string{addChannelRequest.Channel.Key}
 	case "batch":
+		if addChannelRequest.Channel.Type == constant.ChannelTypeCommandGo {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "Command Go 渠道使用账号池管理密钥，请先创建单个渠道再导入账号",
+			})
+			return
+		}
 		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
 			// multi json
 			keys, err = getVertexArrayKeys(addChannelRequest.Channel.Key)
@@ -1156,7 +1182,7 @@ func AddChannel(c *gin.Context) {
 
 	channels := make([]model.Channel, 0, len(keys))
 	for _, key := range keys {
-		if key == "" {
+		if key == "" && addChannelRequest.Channel.Type != constant.ChannelTypeCommandGo {
 			continue
 		}
 		localChannel := addChannelRequest.Channel
@@ -1465,15 +1491,17 @@ func UpdateChannel(c *gin.Context) {
 		})
 		return
 	}
-	if (channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand) && strings.TrimSpace(channel.Key) == "" {
-		if originChannel.Type != channel.Type || strings.TrimSpace(originChannel.Key) == "" {
+	if (channel.Type == constant.ChannelTypeOpencode || channel.Type == constant.ChannelTypeCommand || channel.Type == constant.ChannelTypeCommandGo) && strings.TrimSpace(channel.Key) == "" {
+		if originChannel.Type == channel.Type && strings.TrimSpace(originChannel.Key) != "" {
+			channel.Key = originChannel.Key
+		} else if channel.Type != constant.ChannelTypeCommandGo {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "API key cannot be empty",
 			})
 			return
 		}
-		channel.Key = originChannel.Key
+		// Command Go may keep an empty placeholder key; accounts come from the pool.
 	}
 	originProxy := originChannel.GetSetting().Proxy
 	proxyChanged := false
@@ -1937,8 +1965,8 @@ func CopyChannel(c *gin.Context) {
 		return
 	}
 
-	// insert
-	if err := clone.Insert(); err != nil {
+	// insert channel, abilities and (for Command Go) pool accounts atomically
+	if err := clone.InsertWithCommandGoAccounts(id); err != nil {
 		common.SysError("failed to clone channel: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "复制渠道失败，请稍后重试"})
 		return

@@ -137,6 +137,24 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	return
 }
 
+// ForceStatusCodeMapping returns the mapping JSON with from -> to forced while
+// preserving every other entry. It is used to pin a channel's downstream status
+// without mutating the operator-configured mapping for other codes.
+func ForceStatusCodeMapping(statusCodeMappingStr string, from, to int) string {
+	mapping := make(map[string]any)
+	if trimmed := strings.TrimSpace(statusCodeMappingStr); trimmed != "" && trimmed != "{}" {
+		if err := common.Unmarshal([]byte(trimmed), &mapping); err != nil {
+			mapping = make(map[string]any)
+		}
+	}
+	mapping[strconv.Itoa(from)] = to
+	encoded, err := common.Marshal(mapping)
+	if err != nil {
+		return statusCodeMappingStr
+	}
+	return string(encoded)
+}
+
 func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) {
 	if newApiErr == nil {
 		return

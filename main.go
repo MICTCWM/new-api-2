@@ -228,12 +228,29 @@ func main() {
 	sig := <-quit
 	common.SysLog(fmt.Sprintf("received signal: %v, shutting down...", sig))
 
+	// Stop background workers (for example Command Go import refreshes) before
+	// the database is closed.
+	common.TriggerProcessShutdown()
+
+	// Drain in-flight HTTP handlers before joining background workers. Import
+	// and refresh goroutines are only registered from a request handler, so
+	// waiting for srv.Shutdown first closes the window where a handler registers
+	// a new refresh after the wait group already observed zero.
 	// SSE streams may run for minutes; give them time to finish before forced exit
 	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
+	}
+
+	// Join import-triggered background refreshes and dispatched system task
+	// handlers before the deferred CloseDB so neither can write to a closed
+	// database during shutdown.
+	service.WaitCommandGoImportRefreshes()
+	const systemTaskShutdownTimeout = 30 * time.Second
+	if !service.WaitSystemTaskHandlers(systemTaskShutdownTimeout) {
+		common.SysError(fmt.Sprintf("system task handlers did not finish within %s", systemTaskShutdownTimeout))
 	}
 	// 内存中的看板数据保存入库，避免重启丢失未落库数据 (issue #5679)
 	if common.DataExportEnabled {

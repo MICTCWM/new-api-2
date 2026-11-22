@@ -236,7 +236,7 @@ func selectAffinityChannel(c *gin.Context, modelName string, usingGroup string) 
 	}
 	if err == nil && preferred != nil && !model.IsFallbackChannel(preferred.Id) && preferred.Status == common.ChannelStatusEnabled &&
 		channelSupportsRequestPath(preferred, c.Request.URL.Path, routingModel) {
-		if preferred.Type == constant.ChannelTypeOpencode || preferred.Type == constant.ChannelTypeCommand {
+		if preferred.Type == constant.ChannelTypeOpencode || preferred.Type == constant.ChannelTypeCommand || preferred.Type == constant.ChannelTypeCommandGo {
 			quotaAvailable, quotaErr := model.CodeProviderChannelHasCapacity(preferred, routingModel, time.Now().Unix(), false)
 			if quotaErr != nil || !quotaAvailable {
 				preferred = nil
@@ -614,7 +614,14 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		mappingJSON = service.ApplyModelSplitMappingOverride(mappingJSON, modelName, splitTarget)
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, mappingJSON)
-	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
+	statusCodeMapping := channel.GetStatusCodeMapping()
+	if channel.Type == constant.ChannelTypeCommandGo {
+		// Command Go maps upstream 402 to 429 so the HTTP layer matches the
+		// in-stream mapping. SourceStatusCode remains 402, so pool-account
+		// attribution still classifies it as no_quota.
+		statusCodeMapping = service.ForceStatusCodeMapping(statusCodeMapping, http.StatusPaymentRequired, http.StatusTooManyRequests)
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, statusCodeMapping)
 
 	key, index, newAPIError := channel.GetNextEnabledKey()
 	if newAPIError != nil {

@@ -452,7 +452,7 @@ func GetCodeProviderConcurrencyUsage(channelType, channelID int, now int64) (int
 		}
 		resetOpencodeChannelWindows(usage, now)
 		return normalizeOpencodeConcurrency(usage.ConcurrencyCount), operation_setting.GetOpencodeConcurrencyLimit(), nil
-	case constant.ChannelTypeCommand:
+	case constant.ChannelTypeCommand, constant.ChannelTypeCommandGo:
 		usage, err := getOrCreateCommandChannelUsage(channelID, now)
 		if err != nil {
 			return 0, 0, err
@@ -1325,6 +1325,10 @@ func channelSupportsCodeProviderModel(channel *Channel, modelName string) bool {
 		if modelName == CommandFlashModel || modelName == CommandProModel || modelName == CommandV41FlashModel {
 			return true
 		}
+	case constant.ChannelTypeCommandGo:
+		if modelName == CommandV41FlashModel {
+			return true
+		}
 	default:
 		return false
 	}
@@ -1350,7 +1354,7 @@ func IsCodeProviderModel(modelName string) bool {
 	var count int64
 	err := DB.Table("abilities").
 		Joins("JOIN channels ON channels.id = abilities.channel_id").
-		Where("abilities.model = ? AND channels.type IN ? AND channels.status = ?", modelName, []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, common.ChannelStatusEnabled).
+		Where("abilities.model = ? AND channels.type IN ? AND channels.status = ?", modelName, []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand, constant.ChannelTypeCommandGo}, common.ChannelStatusEnabled).
 		Count(&count).Error
 	return err == nil && count > 0
 }
@@ -1372,7 +1376,7 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 	query := DB.Table("channels").
 		Select("channels.*").
 		Joins("JOIN abilities ON abilities.channel_id = channels.id").
-		Where("channels.type IN ? AND channels.status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, common.ChannelStatusEnabled).
+		Where("channels.type IN ? AND channels.status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand, constant.ChannelTypeCommandGo}, common.ChannelStatusEnabled).
 		Where("abilities."+commonGroupCol+" = ? AND abilities.model = ? AND abilities.enabled = ?", group, modelName, true)
 	if err := query.Find(&channels).Error; err != nil {
 		return nil, err
@@ -1418,14 +1422,24 @@ func getCodeProviderCandidates(group, modelName string, attempted map[int]struct
 			} else {
 				ok, err = CommandChannelHasQuotaCapacityForModel(channel, modelName, now)
 			}
+		case constant.ChannelTypeCommandGo:
+			// Command Go (63) has no channel-level quota; only concurrency is
+			// considered. Pool-account quota is enforced by the account pool.
+			if checkRPM {
+				ok, err = CommandGoChannelHasConcurrencyCapacity(channel, now)
+			} else {
+				ok = true
+			}
 		}
 		if err != nil {
 			return nil, err
 		}
 		if ok {
 			available = append(available, channel)
-		} else if quotaErr := ReconcileCodeProviderQuotaChannel(channel.Id, now); quotaErr != nil {
-			return nil, quotaErr
+		} else if channel.Type != constant.ChannelTypeCommandGo {
+			if quotaErr := ReconcileCodeProviderQuotaChannel(channel.Id, now); quotaErr != nil {
+				return nil, quotaErr
+			}
 		}
 	}
 	return available, nil
@@ -1447,7 +1461,7 @@ func GetCodeProviderCapacitySnapshotForGroupModel(group, modelName string, now i
 
 func getCodeProviderCapacitySnapshot(group, modelName string, now int64) (*OpencodeCapacitySnapshot, error) {
 	var channels []*Channel
-	query := DB.Where("type IN ? AND status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand}, common.ChannelStatusEnabled)
+	query := DB.Where("type IN ? AND status = ?", []int{constant.ChannelTypeOpencode, constant.ChannelTypeCommand, constant.ChannelTypeCommandGo}, common.ChannelStatusEnabled)
 	if group != "" && modelName != "" {
 		query = query.
 			Joins("JOIN abilities ON abilities.channel_id = channels.id").
@@ -1513,10 +1527,22 @@ func getCodeProviderCapacitySnapshot(group, modelName string, now int64) (*Openc
 			}
 			resetCommandChannelWindows(usage, now)
 			rpmCount = normalizeCommandConcurrency(usage.ConcurrencyCount)
+		case constant.ChannelTypeCommandGo:
+			// Command Go (63) never consumes Command channel-level quota; it only
+			// contributes concurrency capacity.
+			quotaAvailable = true
+			usage, usageErr := getOrCreateCommandChannelUsage(channel.Id, now)
+			if usageErr != nil {
+				return nil, usageErr
+			}
+			resetCommandChannelWindows(usage, now)
+			rpmCount = normalizeCommandConcurrency(usage.ConcurrencyCount)
 		}
 		if !quotaAvailable {
-			if quotaErr := ReconcileCodeProviderQuotaChannel(channel.Id, now); quotaErr != nil {
-				return nil, quotaErr
+			if channel.Type != constant.ChannelTypeCommandGo {
+				if quotaErr := ReconcileCodeProviderQuotaChannel(channel.Id, now); quotaErr != nil {
+					return nil, quotaErr
+				}
 			}
 			continue
 		}
@@ -1532,7 +1558,7 @@ func ReserveCodeProviderConcurrency(channelType, channelID int) (bool, error) {
 	switch channelType {
 	case constant.ChannelTypeOpencode:
 		return ReserveOpencodeConcurrency(channelID)
-	case constant.ChannelTypeCommand:
+	case constant.ChannelTypeCommand, constant.ChannelTypeCommandGo:
 		return ReserveCommandConcurrency(channelID)
 	default:
 		return false, fmt.Errorf("unsupported code provider channel type: %d", channelType)
@@ -1543,7 +1569,7 @@ func ReleaseCodeProviderConcurrency(channelType, channelID int) error {
 	switch channelType {
 	case constant.ChannelTypeOpencode:
 		return ReleaseOpencodeConcurrency(channelID)
-	case constant.ChannelTypeCommand:
+	case constant.ChannelTypeCommand, constant.ChannelTypeCommandGo:
 		return ReleaseCommandConcurrency(channelID)
 	default:
 		return fmt.Errorf("unsupported code provider channel type: %d", channelType)
@@ -1554,7 +1580,7 @@ func ReserveCodeProviderRPM(channelType, channelID int, now int64) (bool, int64,
 	switch channelType {
 	case constant.ChannelTypeOpencode:
 		return ReserveOpencodeRPM(channelID, now)
-	case constant.ChannelTypeCommand:
+	case constant.ChannelTypeCommand, constant.ChannelTypeCommandGo:
 		return ReserveCommandRPM(channelID, now)
 	default:
 		return false, 0, fmt.Errorf("unsupported code provider channel type: %d", channelType)
@@ -1565,7 +1591,7 @@ func ReleaseCodeProviderRPM(channelType, channelID int, now int64) error {
 	switch channelType {
 	case constant.ChannelTypeOpencode:
 		return ReleaseOpencodeRPM(channelID, now)
-	case constant.ChannelTypeCommand:
+	case constant.ChannelTypeCommand, constant.ChannelTypeCommandGo:
 		return ReleaseCommandRPM(channelID, now)
 	default:
 		return fmt.Errorf("unsupported code provider channel type: %d", channelType)

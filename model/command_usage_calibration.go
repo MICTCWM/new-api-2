@@ -52,8 +52,10 @@ func nextCommandUsageCalibrationAt(channelID int, now int64) int64 {
 	return next
 }
 
-// ListCommandCalibrationCandidates 返回参与校准的 Command 渠道：启用中的
+// ListCommandCalibrationCandidates 返回参与渠道级校准的 Command 渠道：启用中的
 // 渠道，以及因额度窗口耗尽被自动停用（仍需跟踪恢复）的渠道。
+//
+// Command Go (63) 以池账号额度为准，不参与渠道级校准/对账。
 func ListCommandCalibrationCandidates() ([]*Channel, error) {
 	if DB == nil || !DB.Migrator().HasTable("channels") {
 		return nil, nil

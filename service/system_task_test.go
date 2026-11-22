@@ -232,3 +232,22 @@ func TestEnqueueSystemTaskReportsCreatedAndExistingActive(t *testing.T) {
 	require.NotNil(t, second)
 	assert.NotEqual(t, first.TaskID, second.TaskID)
 }
+
+func TestRunWithLeaseHeartbeatStopsWhenParentContextCancelled(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	task := &model.SystemTask{TaskID: "task-parent-cancel"}
+	exited := make(chan struct{})
+
+	go runWithLeaseHeartbeatContext(parent, task, "runner-parent", func(ctx context.Context) {
+		<-ctx.Done()
+		close(exited)
+	})
+
+	cancel()
+
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not stop promptly after the parent context was cancelled")
+	}
+}

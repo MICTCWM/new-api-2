@@ -34,7 +34,10 @@ import {
   setCommandUsageOverride,
   setOpencodeUsageOverride,
 } from '../../api'
-import { CHANNEL_TYPE_COMMAND, CHANNEL_TYPE_OPENCODE } from '../../constants'
+import {
+  CHANNEL_TYPE_OPENCODE,
+  isCommandFamilyChannelType,
+} from '../../constants'
 import type {
   CodeProviderUsageOverrideRequest,
   OpencodeUsageWindow,
@@ -144,10 +147,11 @@ export function CodeProviderUsageOverrideDialog({
     pro: true,
   })
 
+  const isCommand = currentRow
+    ? isCommandFamilyChannelType(currentRow.type)
+    : false
   const isCodeProvider =
-    currentRow?.type === CHANNEL_TYPE_COMMAND ||
-    currentRow?.type === CHANNEL_TYPE_OPENCODE
-  const isCommand = currentRow?.type === CHANNEL_TYPE_COMMAND
+    isCommand || currentRow?.type === CHANNEL_TYPE_OPENCODE
 
   useEffect(() => {
     if (!open || !currentRow || !isCodeProvider) return

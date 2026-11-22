@@ -232,6 +232,119 @@ export interface CommandUsageResponse {
   data?: CommandUsageSnapshot
 }
 
+// ============================================================================
+// Command Go Account Pool
+// ============================================================================
+
+export type CommandGoAccountStatus = 'active' | 'error' | 'no_quota'
+
+export interface CommandGoQuotaWindow {
+  used: number
+  cap: number
+  percent: number
+  reset_at: number
+}
+
+export interface CommandGoMonthlyQuotaWindow extends CommandGoQuotaWindow {
+  remaining: number
+  total: number
+}
+
+export interface CommandGoAccountCredits {
+  monthly: number
+  purchased: number
+  free: number
+  total_remaining: number
+}
+
+export interface CommandGoAccountWindows {
+  five_hour: CommandGoQuotaWindow
+  weekly: CommandGoQuotaWindow
+  monthly: CommandGoMonthlyQuotaWindow
+}
+
+export interface CommandGoAccount {
+  id: number
+  name: string
+  key_mask: string
+  status: CommandGoAccountStatus
+  consecutive_failures: number
+  last_error: string
+  last_used_at: number
+  last_refreshed_at: number
+  plan_id: string
+  quota_available: boolean
+  credits: CommandGoAccountCredits
+  windows: CommandGoAccountWindows
+}
+
+export interface CommandGoAccountSummary {
+  total: number
+  active: number
+  error: number
+  no_quota: number
+}
+
+export interface CommandGoAccountsResponse {
+  success: boolean
+  message?: string
+  data?: {
+    accounts: CommandGoAccount[]
+    summary: CommandGoAccountSummary
+  }
+}
+
+export interface CommandGoAccountRef {
+  id: number
+  name: string
+}
+
+export interface CommandGoImportAccountsResponse {
+  success: boolean
+  message?: string
+  data?: {
+    created: CommandGoAccountRef[]
+    existing: CommandGoAccountRef[]
+    invalid: number
+  }
+}
+
+export interface CommandGoRefreshAllResponse {
+  success: boolean
+  message?: string
+  data?: {
+    refreshed: number
+    failed: Array<{ id: number; name: string; error: string }>
+  }
+}
+
+export interface CommandGoRefreshAccountResponse {
+  success: boolean
+  message?: string
+  data?: CommandGoAccount
+}
+
+export interface CommandGoRecoverAccountsResponse {
+  success: boolean
+  message?: string
+  data?: {
+    updated: number
+  }
+}
+
+export interface CommandGoDeleteAccountsResponse {
+  success: boolean
+  message?: string
+  data?: {
+    deleted: number
+  }
+}
+
+export interface CommandGoDeleteAccountsParams {
+  ids?: number[]
+  status?: 'error' | 'no_quota'
+}
+
 export interface ChannelQueueItem {
   request_id: string
   user_id: number

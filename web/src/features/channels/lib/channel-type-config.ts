@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { CHANNEL_TYPES, getFixedCodeChannelModel } from '../constants'
+import {
+  CHANNEL_TYPES,
+  CHANNEL_TYPE_COMMAND_GO,
+  getFixedCodeChannelModel,
+} from '../constants'
 
 // ============================================================================
 // Channel Type Configuration
@@ -186,6 +190,20 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       baseUrl: 'Fixed endpoint: https://api.commandcode.ai/provider/v1',
       key: 'Command API key',
       models: getFixedCodeChannelModel(62),
+    },
+  },
+  63: {
+    id: CHANNEL_TYPE_COMMAND_GO,
+    name: CHANNEL_TYPES[CHANNEL_TYPE_COMMAND_GO],
+    icon: 'OpenAI',
+    defaultBaseUrl: 'https://api.commandcode.ai/alpha',
+    supportedModels: [getFixedCodeChannelModel(CHANNEL_TYPE_COMMAND_GO)],
+    hints: {
+      baseUrl: 'Fixed endpoint: https://api.commandcode.ai/alpha',
+      key: 'Command Go user_* key for the account pool',
+      models: getFixedCodeChannelModel(CHANNEL_TYPE_COMMAND_GO),
+      other:
+        'Each channel holds one account pool. Manage accounts from Pool Management.',
     },
   },
 }

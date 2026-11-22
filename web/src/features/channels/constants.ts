@@ -6,6 +6,7 @@
 export const CHANNEL_TYPE_NEW_API = 60
 export const CHANNEL_TYPE_OPENCODE = 61
 export const CHANNEL_TYPE_COMMAND = 62
+export const CHANNEL_TYPE_COMMAND_GO = 63
 
 // Mirrors relay/common's stream-capable channel set. The backend remains the
 // source of truth, while this set keeps unsupported channel types from showing
@@ -35,11 +36,13 @@ export const SPEED_PROTECTION_SUPPORTED_CHANNEL_TYPES = new Set([
   CHANNEL_TYPE_NEW_API,
   CHANNEL_TYPE_OPENCODE,
   CHANNEL_TYPE_COMMAND,
+  CHANNEL_TYPE_COMMAND_GO,
 ])
 
 export const FIXED_CODE_CHANNEL_MODELS: Record<number, string> = {
   [CHANNEL_TYPE_OPENCODE]: 'deepseek-v4-flash',
   [CHANNEL_TYPE_COMMAND]: 'deepseek/deepseek-v4-flash',
+  [CHANNEL_TYPE_COMMAND_GO]: 'deepseek/deepseek-v4.1-flash',
 }
 
 export const OPENCODE_NATIVE_MODELS = [
@@ -55,6 +58,10 @@ export const COMMAND_NATIVE_MODELS = [
   'deepseek/deepseek-v4.1-flash',
 ] as const
 
+export const COMMAND_GO_NATIVE_MODELS = [
+  'deepseek/deepseek-v4.1-flash',
+] as const
+
 export function getFixedCodeChannelModel(type: number): string {
   return (
     FIXED_CODE_CHANNEL_MODELS[type] ||
@@ -66,6 +73,9 @@ export function getFixedCodeChannelModels(type: number): readonly string[] {
   if (type === CHANNEL_TYPE_COMMAND) {
     return COMMAND_NATIVE_MODELS
   }
+  if (type === CHANNEL_TYPE_COMMAND_GO) {
+    return COMMAND_GO_NATIVE_MODELS
+  }
   if (type === CHANNEL_TYPE_OPENCODE) {
     return OPENCODE_NATIVE_MODELS
   }
@@ -73,7 +83,20 @@ export function getFixedCodeChannelModels(type: number): readonly string[] {
 }
 
 export function isFixedCodeChannelType(type: number): boolean {
-  return type === CHANNEL_TYPE_OPENCODE || type === CHANNEL_TYPE_COMMAND
+  return (
+    type === CHANNEL_TYPE_OPENCODE ||
+    type === CHANNEL_TYPE_COMMAND ||
+    type === CHANNEL_TYPE_COMMAND_GO
+  )
+}
+
+/**
+ * Types that share the Command family display and quota handling. Command Go
+ * adds a per-channel account pool on top of the same upstream, so the channel
+ * level quota/usage UI treats both alike.
+ */
+export function isCommandFamilyChannelType(type: number): boolean {
+  return type === CHANNEL_TYPE_COMMAND || type === CHANNEL_TYPE_COMMAND_GO
 }
 
 export const CHANNEL_TYPES = {
@@ -136,12 +159,13 @@ export const CHANNEL_TYPES = {
   60: 'New API',
   61: 'Opencode',
   62: 'Command',
+  63: 'Command Go',
 } as const
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
-  1, 14, 33, 24, 43, 3, 41, 48, 61, 62, 60, 58, 42, 34, 20, 4, 40, 27, 25, 17,
-  26, 15, 46, 23, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 59, 22, 21,
-  44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
+  1, 14, 33, 24, 43, 3, 41, 48, 61, 62, 63, 60, 58, 42, 34, 20, 4, 40, 27, 25,
+  17, 26, 15, 46, 23, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 59, 22,
+  21, 44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
 ]
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
@@ -484,11 +508,13 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   60: 'Enter API key for this channel',
   61: 'Enter Opencode API key(s), one per line for batch creation',
   62: 'Enter Command API key(s), one per line for batch creation',
+  63: 'Enter a single user_* key as a placeholder; import remaining accounts via Pool Management after creation. The key may be left empty.',
 }
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {
   61: 'Opencode uses a fixed endpoint and supports deepseek-v4-flash, glm-5.3-flash, deepseek-v4.1-flash, and deepseek-v4-pro. Batch mode creates one channel per API key.',
   62: 'Command uses a fixed endpoint and supports deepseek/deepseek-v4-flash, deepseek/deepseek-v4.1-flash, and the optional deepseek/deepseek-v4-pro. The channel must include deepseek/deepseek-v4-flash or deepseek/deepseek-v4.1-flash. Batch mode creates one channel per API key.',
+  63: 'Command Go uses a fixed endpoint and only supports deepseek/deepseek-v4.1-flash. Each channel holds an account pool managed from Pool Management, and every account has 5-hour, weekly, and monthly quota windows.',
   3: 'For channels added after May 10, 2025, no need to remove "." from model names during deployment',
   8: 'If connecting to upstream One API or New API relay projects, use OpenAI type instead unless you know what you are doing',
   37: 'Dify channels only support chatflow and agent, and agent does not support images',

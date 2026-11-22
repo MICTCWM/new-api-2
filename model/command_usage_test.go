@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"strconv"
 	"testing"
 	"time"
@@ -34,6 +35,16 @@ func TestCommandUsageUsesOneCombinedPoolAcrossPricingPeriods(t *testing.T) {
 	peakNow := time.Date(2026, time.August, 19, 1, 0, 0, 0, time.UTC)
 	offPeakNow := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
 	halfPool := CommandPoolLimitMicroUSD / 2
+
+	// Settlement only writes channel-level rows for a confirmed Command (62)
+	// channel; create it explicitly.
+	require.NoError(t, DB.Create(&Channel{
+		Id:     501,
+		Type:   constant.ChannelTypeCommand,
+		Status: common.ChannelStatusEnabled,
+		Key:    "command-key-501",
+		Group:  "default",
+	}).Error)
 
 	require.NoError(t, SettleCommandCost(501, halfPool, peakNow))
 	require.NoError(t, SettleCommandCost(501, halfPool, offPeakNow))
@@ -320,4 +331,64 @@ func TestSetCommandUsageOverrideWithV41Pool(t *testing.T) {
 	require.Equal(t, v41, snapshot.V41Pool.UsedMicroUSD)
 	require.Equal(t, pro, snapshot.ProPool.UsedMicroUSD)
 	require.Equal(t, v41+pro, snapshot.Pool.UsedMicroUSD)
+}
+
+func TestSettleCommandCostSkipsChannelRowsForCommandGoAndUnknown(t *testing.T) {
+	useCommandUsageDB(t)
+	now := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
+
+	goChannel := &Channel{
+		Type:   constant.ChannelTypeCommandGo,
+		Status: common.ChannelStatusEnabled,
+		Key:    "command-go-key",
+		Group:  "default",
+	}
+	require.NoError(t, DB.Create(goChannel).Error)
+
+	require.NoError(t, SettleCommandCostForModel(goChannel.Id, CommandFlashModel, 1_000_000, now))
+	// Unknown type / concurrently deleted channel must not leave channel-level
+	// rows for a channel that might be Command Go.
+	require.NoError(t, SettleCommandCostForModel(999_999, CommandFlashModel, 1_000_000, now))
+
+	var channelRows int64
+	require.NoError(t, DB.Model(&CommandChannelUsage{}).Count(&channelRows).Error)
+	require.EqualValues(t, 0, channelRows)
+
+	var poolRows int64
+	require.NoError(t, DB.Model(&CommandPoolUsage{}).Count(&poolRows).Error)
+	require.EqualValues(t, 0, poolRows)
+}
+
+func TestSettleCommandCostForCommandGoDoesNotOpenTransaction(t *testing.T) {
+	useCommandUsageDB(t)
+	now := time.Date(2026, time.August, 19, 0, 0, 0, 0, time.UTC)
+
+	goChannel := &Channel{
+		Type:   constant.ChannelTypeCommandGo,
+		Status: common.ChannelStatusEnabled,
+		Key:    "command-go-no-tx-key",
+		Group:  "default",
+	}
+	require.NoError(t, DB.Create(goChannel).Error)
+
+	// A query running inside a transaction has *sql.Tx as its ConnPool. The
+	// Command Go fast path must reject the channel from a plain read, so the
+	// per-request settlement never opens a locking transaction on the channel row.
+	txCalls := 0
+	callbackName := "test:count_command_settle_tx_queries"
+	require.NoError(t, DB.Callback().Query().After("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		if _, ok := db.Statement.ConnPool.(*sql.Tx); ok {
+			txCalls++
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, DB.Callback().Query().Remove(callbackName))
+	})
+
+	require.NoError(t, SettleCommandCostForModel(goChannel.Id, CommandFlashModel, 1_000_000, now))
+	require.Equal(t, 0, txCalls)
+
+	var channelRows int64
+	require.NoError(t, DB.Model(&CommandChannelUsage{}).Count(&channelRows).Error)
+	require.EqualValues(t, 0, channelRows)
 }

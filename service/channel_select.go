@@ -330,22 +330,22 @@ func selectSpeedProtectedCandidate(param *RetryParam, group string) (*model.Chan
 	available := make([]*model.Channel, 0, len(candidates))
 	now := time.Now().Unix()
 	for _, candidate := range candidates {
-		if param.ExcludeCodeProviderChannels && (candidate.Type == constant.ChannelTypeOpencode || candidate.Type == constant.ChannelTypeCommand) {
+		if param.ExcludeCodeProviderChannels && (candidate.Type == constant.ChannelTypeOpencode || candidate.Type == constant.ChannelTypeCommand || candidate.Type == constant.ChannelTypeCommandGo) {
 			continue
 		}
-		if param.OpencodePool && candidate.Type != constant.ChannelTypeOpencode && candidate.Type != constant.ChannelTypeCommand {
+		if param.OpencodePool && candidate.Type != constant.ChannelTypeOpencode && candidate.Type != constant.ChannelTypeCommand && candidate.Type != constant.ChannelTypeCommandGo {
 			continue
 		}
 		if !relaycommon.IsStreamSupportedChannel(candidate.Type) {
 			continue
 		}
-		if (candidate.Type == constant.ChannelTypeOpencode || candidate.Type == constant.ChannelTypeCommand) && !strings.HasSuffix(strings.TrimRight(param.RequestPath, "/"), "/chat/completions") {
+		if (candidate.Type == constant.ChannelTypeOpencode || candidate.Type == constant.ChannelTypeCommand || candidate.Type == constant.ChannelTypeCommandGo) && !strings.HasSuffix(strings.TrimRight(param.RequestPath, "/"), "/chat/completions") {
 			continue
 		}
 		if !model.ChannelSupportsRequestPath(candidate, param.RequestPath, param.ModelName) {
 			continue
 		}
-		if candidate.Type != constant.ChannelTypeOpencode && candidate.Type != constant.ChannelTypeCommand {
+		if candidate.Type != constant.ChannelTypeOpencode && candidate.Type != constant.ChannelTypeCommand && candidate.Type != constant.ChannelTypeCommandGo {
 			available, err := model.ChannelHasRPMCapacity(candidate, now)
 			if err != nil {
 				return nil, err
@@ -420,7 +420,7 @@ func selectAffinityCodeProviderCandidate(param *RetryParam, group string) (*mode
 		return nil, nil
 	}
 	if channel.Status != common.ChannelStatusEnabled ||
-		(channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand) ||
+		(channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand && channel.Type != constant.ChannelTypeCommandGo) ||
 		!model.IsChannelEnabledForGroupModel(group, param.ModelName, channel.Id) ||
 		!model.ChannelSupportsRequestPath(channel, param.RequestPath, param.ModelName) {
 		if !ShouldKeepChannelAffinityOnChannelDisabled() {
@@ -500,7 +500,7 @@ func selectQueuedAffinityCandidate(param *RetryParam) (*model.Channel, string, e
 		return nil, "", nil
 	}
 	if channel.Status != common.ChannelStatusEnabled ||
-		(channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand) {
+		(channel.Type != constant.ChannelTypeOpencode && channel.Type != constant.ChannelTypeCommand && channel.Type != constant.ChannelTypeCommandGo) {
 		if !ShouldKeepChannelAffinityOnChannelDisabled() {
 			ClearCurrentChannelAffinityCache(param.Ctx)
 		} else {

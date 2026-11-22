@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/QuantumNous/new-api/common"
 )
 
 // Command Code（commandcode.ai）账号额度查询。
@@ -184,7 +186,7 @@ func FetchCommandcodeQuotaReport(ctx context.Context, client commandcodeHTTPIfac
 				Org  map[string]interface{} `json:"org"`
 			} `json:"data"`
 		}
-		if err := json.Unmarshal(body, &payload); err == nil {
+		if err := common.Unmarshal(body, &payload); err == nil {
 			user := payload.User
 			org := payload.Org
 			if user == nil {
@@ -215,7 +217,7 @@ func FetchCommandcodeQuotaReport(ctx context.Context, client commandcodeHTTPIfac
 		fail("billing/credits", "HTTP %d", status)
 	} else {
 		var payload map[string]interface{}
-		if err := json.Unmarshal(body, &payload); err == nil {
+		if err := common.Unmarshal(body, &payload); err == nil {
 			credits, _ := payload["credits"].(map[string]interface{})
 			wl, _ := payload["windowLimits"].(map[string]interface{})
 			if credits == nil || wl == nil {
@@ -265,7 +267,7 @@ func FetchCommandcodeQuotaReport(ctx context.Context, client commandcodeHTTPIfac
 			Data         map[string]interface{} `json:"data"`
 			Subscription map[string]interface{} `json:"subscription"`
 		}
-		if err := json.Unmarshal(body, &payload); err == nil {
+		if err := common.Unmarshal(body, &payload); err == nil {
 			subData = payload.Data
 			if subData == nil {
 				subData = payload.Subscription
@@ -293,7 +295,7 @@ func FetchCommandcodeQuotaReport(ctx context.Context, client commandcodeHTTPIfac
 			CancelAtPeriodEnd:  commandcodeBool(subData["cancelAtPeriodEnd"]),
 		}
 		if raw, hasPending := subData["pendingPhase"]; hasPending && raw != nil {
-			if rawJSON, err := json.Marshal(raw); err == nil {
+			if rawJSON, err := common.Marshal(raw); err == nil {
 				plan.PendingPhase = rawJSON
 			}
 		}
@@ -320,11 +322,11 @@ func FetchCommandcodeQuotaReport(ctx context.Context, client commandcodeHTTPIfac
 		var payload struct {
 			Data map[string]interface{} `json:"data"`
 		}
-		if err := json.Unmarshal(body, &payload); err == nil {
+		if err := common.Unmarshal(body, &payload); err == nil {
 			u := payload.Data
 			if u == nil {
 				var direct map[string]interface{}
-				_ = json.Unmarshal(body, &direct)
+				_ = common.Unmarshal(body, &direct)
 				u = direct
 			}
 			if u != nil {
