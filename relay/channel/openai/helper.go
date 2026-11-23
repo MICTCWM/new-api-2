@@ -164,7 +164,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		if info.ShouldIncludeUsage && !containStreamUsage {
+		if info.ShouldIncludeUsage && !containStreamUsage && usage != nil && usage.TotalTokens > 0 {
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
 			response.SetSystemFingerprint(systemFingerprint)
 			helper.ObjectData(c, response)

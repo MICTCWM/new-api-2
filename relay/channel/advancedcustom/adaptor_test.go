@@ -722,7 +722,8 @@ func TestAdaptorConvertsOpenAIChatRequestToClaudeUpstream(t *testing.T) {
 	c := advancedCustomGinContext("/v1/chat/completions")
 
 	converted, err := adaptor.ConvertOpenAIRequest(c, info, &dto.GeneralOpenAIRequest{
-		Model: "claude-test",
+		Model:     "claude-test",
+		MaxTokens: common.GetPointer[uint](1024),
 		Messages: []dto.Message{
 			{Role: "user", Content: "hello"},
 		},

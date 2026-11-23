@@ -872,7 +872,6 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 		Claude: convmeta.ClaudeOptions{
 			ThinkingAdapterEnabled:                claudeSettings.ThinkingAdapterEnabled,
 			ThinkingAdapterBudgetTokensPercentage: claudeSettings.ThinkingAdapterBudgetTokensPercentage,
-			DefaultMaxTokens:                      claudeSettings.GetDefaultMaxTokens,
 		},
 		Gemini: convmeta.GeminiOptions{
 			ThinkingAdapterEnabled:                geminiSettings.ThinkingAdapterEnabled,

@@ -143,6 +143,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			}
 
+			if c.Writer != nil && c.Writer.Written() {
+				// A streaming handler may have already committed a 200 response
+				// (or written an SSE error event). Never append a JSON error body
+				// after SSE bytes; the handler owns the downstream protocol.
+				return
+			}
+
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
 				helper.WssError(c, ws, newAPIError.ToOpenAIError())

@@ -29,9 +29,7 @@ func requestOpenAI2Cohere(textRequest dto.GeneralOpenAIRequest) *CohereRequest {
 	if common.CohereSafetySetting != "NONE" {
 		cohereReq.SafetyMode = common.CohereSafetySetting
 	}
-	if cohereReq.MaxTokens == 0 {
-		cohereReq.MaxTokens = 4000
-	}
+	// Preserve the client's omission: do not inject a default max_tokens.
 	for _, msg := range textRequest.Messages {
 		if msg.Role == "user" {
 			cohereReq.Message = msg.StringContent()

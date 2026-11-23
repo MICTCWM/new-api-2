@@ -117,8 +117,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var responseTextBuilder strings.Builder
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
+	var terminalEventType string
+	var terminalEventData string
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	scannerErr := helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
 		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
@@ -218,11 +220,30 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				}
 			}
 		}
-		// 在 completed usage 改写之后再发送，确保客户端收到模拟缓存字段。
-		sendResponsesStreamData(c, streamResponse, data)
+		if streamResponse.Type == "response.completed" || streamResponse.Type == "response.done" {
+			// Hold the terminal event until the scanner confirms the upstream
+			// produced content. Forwarding it earlier would tell the client the
+			// response succeeded before the empty-stream check runs.
+			terminalEventType = streamResponse.Type
+			terminalEventData = data
+		} else {
+			// 在 completed usage 改写之后再发送，确保客户端收到模拟缓存字段。
+			sendResponsesStreamData(c, streamResponse, data)
+		}
 		service.UpdateConnectionOutputText(info.RequestId, responseTextBuilder.String(), info.UpstreamModelName, 0)
 
 	})
+
+	if scannerErr != nil {
+		// Do not estimate a zero/partial usage for an empty upstream stream.
+		// The scanner has already failed this attempt (SSE error when the
+		// response was committed, 502/504 when it was not).
+		return nil, scannerErr
+	}
+
+	if terminalEventType != "" {
+		sendResponsesStreamData(c, dto.ResponsesStreamResponse{Type: terminalEventType}, terminalEventData)
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量

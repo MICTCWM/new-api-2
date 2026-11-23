@@ -33,9 +33,12 @@ type StreamStatus struct {
 	EndError  error
 	endOnce   sync.Once
 
-	mu         sync.Mutex
-	Errors     []StreamErrorEntry
-	ErrorCount int
+	mu                sync.Mutex
+	Errors            []StreamErrorEntry
+	ErrorCount        int
+	hasContentDelta   bool
+	hasReasoningDelta bool
+	emptyResponse     bool
 }
 
 func NewStreamStatus() *StreamStatus {
@@ -65,6 +68,68 @@ func (s *StreamStatus) RecordError(msg string) {
 			Timestamp: time.Now(),
 		})
 	}
+}
+
+// MarkContentDelta records that the upstream stream produced visible content
+// (text, tool arguments, image/audio payload, or another non-empty output).
+func (s *StreamStatus) MarkContentDelta() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hasContentDelta = true
+}
+
+// MarkReasoningDelta records that the upstream stream produced reasoning/thinking
+// content. Reasoning is tracked separately so a thinking-only stream is not
+// mistaken for an empty response.
+func (s *StreamStatus) MarkReasoningDelta() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hasReasoningDelta = true
+}
+
+func (s *StreamStatus) HasContentDelta() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hasContentDelta
+}
+
+func (s *StreamStatus) HasReasoningDelta() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hasReasoningDelta
+}
+
+// MarkEmptyResponse flags an upstream stream that ended normally but carried no
+// content or reasoning delta. It is kept separate from EndReason so the original
+// done/eof reason remains available for diagnostics.
+func (s *StreamStatus) MarkEmptyResponse() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emptyResponse = true
+}
+
+func (s *StreamStatus) IsEmptyResponse() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.emptyResponse
 }
 
 func (s *StreamStatus) HasErrors() bool {
@@ -106,6 +171,9 @@ func (s *StreamStatus) Summary() string {
 	s.mu.Lock()
 	if s.ErrorCount > 0 {
 		fmt.Fprintf(b, " soft_errors=%d", s.ErrorCount)
+	}
+	if s.emptyResponse {
+		b.WriteString(" empty_response=true")
 	}
 	s.mu.Unlock()
 	return b.String()

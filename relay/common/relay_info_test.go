@@ -77,7 +77,7 @@ func TestRelayInfoMetaTypedNilReceiver(t *testing.T) {
 	require.NotNil(t, firstOptions)
 	require.NotNil(t, secondOptions)
 	assert.NotSame(t, firstOptions, secondOptions)
-	assert.NotNil(t, firstOptions.Claude.DefaultMaxTokens)
+	assert.Nil(t, firstOptions.Claude.DefaultMaxTokens)
 	assert.NotNil(t, firstOptions.Gemini.SupportsImagine)
 	assert.NotNil(t, firstOptions.Gemini.SafetySetting)
 	assert.NotNil(t, firstOptions.PreserveThinkingSuffix)

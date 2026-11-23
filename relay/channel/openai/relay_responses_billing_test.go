@@ -258,6 +258,7 @@ func TestOaiResponsesStreamHandlerInjectsSimulatedCacheUsage(t *testing.T) {
 	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
 
 	event := `{"type":"response.completed","response":{"id":"resp_sim","usage":{"input_tokens":3000,"output_tokens":5,"total_tokens":3005},"output":[]}}`
+	delta := `{"type":"response.output_text.delta","delta":"ok"}`
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -279,7 +280,7 @@ func TestOaiResponsesStreamHandlerInjectsSimulatedCacheUsage(t *testing.T) {
 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader("data: " + event + "\n\ndata: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader("data: " + delta + "\n\ndata: " + event + "\n\ndata: [DONE]\n\n")),
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}
 	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)

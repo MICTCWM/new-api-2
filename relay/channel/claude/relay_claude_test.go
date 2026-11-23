@@ -326,6 +326,7 @@ func TestBuildOpenAIStyleUsageFromClaudeUsageDefaultsAggregateCacheCreationTo5m(
 func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48HighUsesAdaptiveThinking(t *testing.T) {
 	request := dto.GeneralOpenAIRequest{
 		Model:       "claude-opus-4-8-high",
+		MaxTokens:   commonPointer(uint(1024)),
 		Temperature: commonPointer(0.7),
 		TopP:        commonPointer(0.9),
 		TopK:        commonPointer(40),
@@ -352,6 +353,7 @@ func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48HighUsesAdaptiveThinking(
 func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48ThinkingUsesAdaptiveHighEffort(t *testing.T) {
 	request := dto.GeneralOpenAIRequest{
 		Model:       "claude-opus-4-8-thinking",
+		MaxTokens:   commonPointer(uint(1024)),
 		Temperature: commonPointer(0.7),
 		TopP:        commonPointer(0.9),
 		TopK:        commonPointer(40),

@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -74,10 +75,21 @@ func ExtendWriteDeadline(c *gin.Context) {
 	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 }
 
-func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
+func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) *types.NewAPIError {
 
 	if resp == nil || dataHandler == nil {
-		return
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("upstream returned an empty streaming response"),
+			types.ErrorCodeEmptyResponse,
+			http.StatusBadGateway,
+		)
+	}
+	if info == nil {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("relay info is nil"),
+			types.ErrorCodeEmptyResponse,
+			http.StatusInternalServerError,
+		)
 	}
 
 	// 无条件新建 StreamStatus
@@ -263,6 +275,13 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				continue
 			}
 			if !strings.HasPrefix(data, "[DONE]") {
+				hasContent, hasReasoning := classifyStreamPayload(data)
+				if hasContent {
+					info.StreamStatus.MarkContentDelta()
+				}
+				if hasReasoning {
+					info.StreamStatus.MarkReasoningDelta()
+				}
 				if info.SetFirstResponseTime() {
 					if info.IsStream {
 						// 连接日志：首 token 到达，状态从「等待首 token」切到「正在流式输出」。
@@ -316,6 +335,16 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 	cleanup()
 
+	// An upstream stream that ended normally (EOF or data: [DONE]) without any
+	// content or reasoning delta is a failed request, not an empty success.
+	// Decide before flushing the response rewriter: flushing a buffered
+	// role/finish frame would commit a 200 response and make a retry impossible.
+	if emptyErr := emptyStreamResponseError(c, info); emptyErr != nil {
+		logger.LogError(c, fmt.Sprintf("stream ended: %s, received=%d, empty_response_error=%s",
+			info.StreamStatus.Summary(), info.ReceivedResponseCount, emptyErr.Error()))
+		return emptyErr
+	}
+
 	// Flush any text still held back by the response rewriter. Protocols whose
 	// terminal event triggers a flush (Claude / Responses / Gemini) already
 	// drained the buffer; this covers OpenAI chat and truncated streams. The
@@ -330,5 +359,131 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		logger.LogInfo(c, fmt.Sprintf("stream ended: %s", info.StreamStatus.Summary()))
 	} else {
 		logger.LogError(c, fmt.Sprintf("stream ended: %s, received=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount))
+	}
+	return nil
+}
+
+// emptyStreamResponseError returns a failure when the upstream finished with
+// done/eof/timeout but produced no visible content or reasoning. If nothing has
+// been written downstream yet, the caller can still return 502/504 and let the
+// relay retry on another attempt. If the response is already committed, an SSE
+// error event is emitted and the error is marked as non-retryable, because a
+// second upstream attempt cannot replace the bytes the client already received.
+func emptyStreamResponseError(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
+	if info == nil || info.StreamStatus == nil || info.StreamStatus.IsEmptyResponse() {
+		return nil
+	}
+	// Binary/media stream handlers do not return a retryable error and can
+	// legitimately carry no text delta (raw TTS audio, image generation
+	// progress). Leave their existing finalization semantics untouched.
+	switch info.RelayFormat {
+	case types.RelayFormatOpenAIAudio, types.RelayFormatOpenAIImage, types.RelayFormatOpenAIRealtime:
+		return nil
+	}
+	if !isEmptyStreamEnd(info.StreamStatus) {
+		return nil
+	}
+
+	statusCode := http.StatusBadGateway
+	if info.StreamStatus.EndReason == relaycommon.StreamEndReasonTimeout {
+		statusCode = http.StatusGatewayTimeout
+	}
+	err := fmt.Errorf("upstream stream ended without content or reasoning output")
+
+	info.StreamStatus.MarkEmptyResponse()
+	if c != nil && c.Writer != nil && c.Writer.Written() {
+		writeEmptyStreamSSEError(c, info, statusCode, err)
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeEmptyResponse,
+			statusCode,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+
+	resetUncommittedStreamHeaders(c)
+	return types.NewErrorWithStatusCode(err, types.ErrorCodeEmptyResponse, statusCode)
+}
+
+func isEmptyStreamEnd(status *relaycommon.StreamStatus) bool {
+	if status == nil || status.HasErrors() {
+		return false
+	}
+	if status.HasContentDelta() || status.HasReasoningDelta() {
+		return false
+	}
+	switch status.EndReason {
+	case relaycommon.StreamEndReasonDone, relaycommon.StreamEndReasonEOF, relaycommon.StreamEndReasonTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func resetUncommittedStreamHeaders(c *gin.Context) {
+	if c == nil || c.Writer == nil || c.Writer.Written() {
+		return
+	}
+	for _, name := range []string{
+		"Content-Type",
+		"Cache-Control",
+		"Connection",
+		"Transfer-Encoding",
+		"X-Accel-Buffering",
+	} {
+		c.Writer.Header().Del(name)
+	}
+	// SetEventStreamHeaders() uses this key to avoid setting headers twice on
+	// the same gin.Context. A retry reuses the context, so clear the marker.
+	delete(c.Keys, "event_stream_headers_set")
+}
+
+func writeEmptyStreamSSEError(c *gin.Context, info *relaycommon.RelayInfo, statusCode int, cause error) {
+	if c == nil || c.Writer == nil {
+		return
+	}
+	ExtendWriteDeadline(c)
+	apiErr := types.NewErrorWithStatusCode(cause, types.ErrorCodeEmptyResponse, statusCode)
+	openAIError := apiErr.ToOpenAIError()
+
+	writeError := func(payload any) {
+		body, err := common.Marshal(payload)
+		if err != nil {
+			logger.LogError(c, "failed to marshal empty stream error: "+err.Error())
+			return
+		}
+		c.Render(-1, common.CustomEvent{Data: "data: " + string(body)})
+		_ = FlushWriter(c)
+	}
+
+	switch info.RelayFormat {
+	case types.RelayFormatClaude:
+		c.Render(-1, common.CustomEvent{Data: "event: error\n"})
+		body, err := common.Marshal(map[string]any{
+			"type":  "error",
+			"error": apiErr.ToClaudeError(),
+		})
+		if err != nil {
+			logger.LogError(c, "failed to marshal claude empty stream error: "+err.Error())
+			return
+		}
+		c.Render(-1, common.CustomEvent{Data: "data: " + string(body)})
+		_ = FlushWriter(c)
+	case types.RelayFormatGemini:
+		writeError(map[string]any{
+			"error": map[string]any{
+				"code":    statusCode,
+				"message": cause.Error(),
+				"status":  "UNAVAILABLE",
+			},
+		})
+	case types.RelayFormatOpenAIResponses:
+		c.Render(-1, common.CustomEvent{Data: "event: error\n"})
+		writeError(map[string]any{
+			"type":  "error",
+			"error": openAIError,
+		})
+	default:
+		writeError(map[string]any{"error": openAIError})
 	}
 }

@@ -70,7 +70,8 @@ func TestRequestConverterFacadeAcceptsTypedNilRelayInfo(t *testing.T) {
 		t.Run(string(target), func(t *testing.T) {
 			var info *relaycommon.RelayInfo
 			request := &dto.GeneralOpenAIRequest{
-				Model: "test-model",
+				Model:     "test-model",
+				MaxTokens: ptrValue(uint(1024)),
 				Messages: []dto.Message{
 					{Role: "user", Content: "hello"},
 				},
