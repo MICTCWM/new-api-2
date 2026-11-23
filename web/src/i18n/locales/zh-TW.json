@@ -2368,6 +2368,8 @@
     "Go back and edit": "返回修改",
     "Go to Dashboard": "前往儀表板",
     "Go to first page": "前往首頁",
+    "Enable Gzip Compression": "啟用 Gzip 壓縮",
+    "Compress JSON request bodies; fall back to the original JSON when compression is not smaller or the upstream rejects it": "壓縮 JSON 請求體；壓縮後未更小或上游拒絕時改用原始 JSON",
     "Go to home": "返回主頁",
     "Go to io.net API Keys": "前往 io.net API 金鑰",
     "Go to last page": "前往末頁",

@@ -2368,6 +2368,8 @@
     "Go back and edit": "Вернуться и изменить",
     "Go to Dashboard": "Перейти в панель управления",
     "Go to first page": "Перейти на первую страницу",
+    "Enable Gzip Compression": "Включить сжатие Gzip",
+    "Compress JSON request bodies; fall back to the original JSON when compression is not smaller or the upstream rejects it": "Сжимать JSON-тело запроса; при отсутствии выигрыша или отказе вышестоящего сервера отправлять исходный JSON",
     "Go to home": "На главную",
     "Go to io.net API Keys": "Перейти к ключам API io.net",
     "Go to last page": "Перейти на последнюю страницу",

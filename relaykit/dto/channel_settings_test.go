@@ -620,6 +620,21 @@ func TestChannelSettingsHTTPTransportJSONRoundTrip(t *testing.T) {
 	assert.NotContains(t, string(encoded), "http_protocol")
 }
 
+func TestChannelSettingsGzipEnabledRoundTrip(t *testing.T) {
+	enabled := ChannelSettings{GzipEnabled: true}
+	encoded, err := json.Marshal(enabled)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"gzip_enabled":true`)
+
+	var decoded ChannelSettings
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	assert.True(t, decoded.GzipEnabled)
+
+	disabled, err := json.Marshal(ChannelSettings{})
+	require.NoError(t, err)
+	assert.NotContains(t, string(disabled), "gzip_enabled")
+}
+
 func TestChannelSettingsValidateHTTPTransport(t *testing.T) {
 	require.NoError(t, (&ChannelSettings{}).ValidateHTTPTransport())
 	require.NoError(t, (&ChannelSettings{HTTPProtocol: "AUTO"}).ValidateHTTPTransport())

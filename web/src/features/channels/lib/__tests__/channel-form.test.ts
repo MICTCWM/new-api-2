@@ -230,6 +230,59 @@ describe('transformFormDataToUpdatePayload', () => {
     expect(settings.video_frame_extraction_enabled).toBe(true)
   })
 
+  it('persists the gzip request compression toggle into the channel setting JSON', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      gzip_enabled: true,
+    }
+
+    const payload = transformFormDataToUpdatePayload(formData, 1)
+    const setting = JSON.parse(payload.setting as string) as Record<
+      string,
+      unknown
+    >
+
+    expect(setting.gzip_enabled).toBe(true)
+  })
+
+  it('round-trips an enabled gzip request compression toggle from the channel setting JSON', () => {
+    const channel = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      id: 1,
+      type: 1,
+      status: 1,
+      created_time: 0,
+      test_time: 0,
+      response_time: 0,
+      setting: JSON.stringify({ gzip_enabled: true }),
+      group: 'default',
+      channel_info: {} as Channel['channel_info'],
+    } as unknown as Channel
+
+    const formData = transformChannelToFormDefaults(channel)
+
+    expect(formData.gzip_enabled).toBe(true)
+  })
+
+  it('defaults the gzip request compression toggle to off when the setting is absent', () => {
+    const channel = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      id: 1,
+      type: 1,
+      status: 1,
+      created_time: 0,
+      test_time: 0,
+      response_time: 0,
+      setting: '{}',
+      group: 'default',
+      channel_info: {} as Channel['channel_info'],
+    } as unknown as Channel
+
+    const formData = transformChannelToFormDefaults(channel)
+
+    expect(formData.gzip_enabled).toBe(false)
+  })
+
   it('defaults the station cache toggle to off when the setting is absent', () => {
     const channel = {
       ...CHANNEL_FORM_DEFAULT_VALUES,

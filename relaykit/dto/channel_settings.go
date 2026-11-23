@@ -15,8 +15,12 @@ type ChannelSettings struct {
 	ThinkingToContent      bool   `json:"thinking_to_content,omitempty"`
 	Proxy                  string `json:"proxy"`
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
-	SystemPrompt           string `json:"system_prompt,omitempty"`
-	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// GzipEnabled compresses JSON relay request bodies before sending them
+	// upstream. If the compressed body is not smaller, or the upstream rejects
+	// it, the original JSON body is sent instead.
+	GzipEnabled          bool   `json:"gzip_enabled,omitempty"`
+	SystemPrompt         string `json:"system_prompt,omitempty"`
+	SystemPromptOverride bool   `json:"system_prompt_override,omitempty"`
 	// HTTPProtocol controls outbound HTTP version negotiation for this channel.
 	// Accepted values: "", "auto" (default), "http1".
 	HTTPProtocol string `json:"http_protocol,omitempty"`

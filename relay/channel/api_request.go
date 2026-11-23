@@ -345,26 +345,63 @@ func upstreamRequestContext(info *common.RelayInfo) context.Context {
 }
 
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	prepared, err := prepareAPIRequestBody(c, info, requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("prepare request body failed: %w", err)
+	}
+
+	resp, attempted, err := doApiRequestAttempt(a, c, info, prepared.first, prepared.firstSize, prepared.firstEncoding)
+	if prepared.compressed && attempted && shouldRetryGzipRequest(c, info, resp, err) {
+		if resp != nil && resp.Body != nil {
+			// Drain a bounded amount so the first connection can be reused before
+			// replaying the request with the original JSON.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+			_ = resp.Body.Close()
+		}
+		logger.LogDebug(c, fmt.Sprintf(
+			"gzip request failed before a usable response (status=%d, original_bytes=%d, compressed_bytes=%d), retrying with original JSON",
+			responseStatus(resp), prepared.originalSize, prepared.compressedSize,
+		))
+		originalBody, originalSize, replayErr := prepared.original()
+		if replayErr != nil {
+			return nil, fmt.Errorf("replay original request body failed: %w", replayErr)
+		}
+		resp, _, err = doApiRequestAttempt(a, c, info, originalBody, originalSize, "")
+	}
+	return resp, err
+}
+
+func responseStatus(resp *http.Response) int {
+	if resp == nil {
+		return 0
+	}
+	return resp.StatusCode
+}
+
+func doApiRequestAttempt(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader, bodySize int64, contentEncoding string) (*http.Response, bool, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
-		return nil, fmt.Errorf("get request url failed: %w", err)
+		return nil, false, fmt.Errorf("get request url failed: %w", err)
 	}
 	logger.LogDebug(c, "fullRequestURL: %s", common.SanitizeURLForLog(fullRequestURL))
 	req, err := http.NewRequestWithContext(upstreamRequestContext(info), c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
-		return nil, fmt.Errorf("new request failed: %w", err)
+		return nil, false, fmt.Errorf("new request failed: %w", err)
 	}
 	ApplyUpstreamBodyMetadata(req, requestBody)
+	if bodySize >= 0 {
+		req.ContentLength = bodySize
+	}
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
-		return nil, fmt.Errorf("setup request header failed: %w", err)
+		return nil, false, fmt.Errorf("setup request header failed: %w", err)
 	}
 	// 在 SetupRequestHeader 之后应用 Header Override，确保用户设置优先级最高
 	// 这样可以覆盖默认的 Authorization header 设置
 	headerOverride, err := processHeaderOverride(info, c)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
 	// OpenCode session headers must stay internal to the OpenCode hop; let the
@@ -373,21 +410,28 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if sanitizer, ok := a.(UpstreamHeaderSanitizer); ok {
 		sanitizer.SanitizeUpstreamHeaders(&req.Header)
 	}
+	// Header overrides are user-controlled, so the encoding that matches the
+	// actual body must win over any override.
+	if contentEncoding != "" {
+		req.Header.Set("Content-Encoding", contentEncoding)
+	} else {
+		req.Header.Del("Content-Encoding")
+	}
 	// Build the proxy-aware client before marking the attempt: a local proxy or
 	// transport configuration error must never be attributed to the upstream
 	// (and therefore never counted against a pool account).
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
-		return nil, fmt.Errorf("new proxy http client failed: %w", err)
+		return nil, false, fmt.Errorf("new proxy http client failed: %w", err)
 	}
 	if marker, ok := a.(UpstreamAttemptMarker); ok {
 		marker.MarkUpstreamAttempt(c)
 	}
 	resp, err := doRequestWithClient(c, req, info, client)
 	if err != nil {
-		return nil, fmt.Errorf("do request failed: %w", err)
+		return nil, true, fmt.Errorf("do request failed: %w", err)
 	}
-	return resp, nil
+	return resp, true, nil
 }
 
 func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {

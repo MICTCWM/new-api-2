@@ -2368,6 +2368,8 @@
     "Go back and edit": "Quay lại và chỉnh sửa",
     "Go to Dashboard": "Truy cập Dashboard",
     "Go to first page": "Đi đến trang đầu tiên",
+    "Enable Gzip Compression": "Bật nén Gzip",
+    "Compress JSON request bodies; fall back to the original JSON when compression is not smaller or the upstream rejects it": "Nén nội dung JSON của yêu cầu; dùng lại JSON gốc nếu nén không nhỏ hơn hoặc máy chủ thượng nguồn từ chối",
     "Go to home": "Về trang chủ",
     "Go to io.net API Keys": "Đi đến Khóa API io.net",
     "Go to last page": "Đi đến trang cuối cùng",

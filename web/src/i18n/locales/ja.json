@@ -2368,6 +2368,8 @@
     "Go back and edit": "戻って編集",
     "Go to Dashboard": "ダッシュボードへ移動",
     "Go to first page": "最初のページへ移動",
+    "Enable Gzip Compression": "Gzip 圧縮を有効化",
+    "Compress JSON request bodies; fall back to the original JSON when compression is not smaller or the upstream rejects it": "JSON リクエストボディを圧縮。圧縮後のサイズが小さくならない場合や上流が拒否した場合は元の JSON を使用",
     "Go to home": "ホームへ戻る",
     "Go to io.net API Keys": "io.net API キーへ移動",
     "Go to last page": "最後のページへ移動",

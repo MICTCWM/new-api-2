@@ -2368,6 +2368,8 @@
     "Go back and edit": "Go back and edit",
     "Go to Dashboard": "Go to Dashboard",
     "Go to first page": "Go to first page",
+    "Enable Gzip Compression": "Enable Gzip Compression",
+    "Compress JSON request bodies; fall back to the original JSON when compression is not smaller or the upstream rejects it": "Compress JSON request bodies; fall back to the original JSON when compression is not smaller or the upstream rejects it",
     "Go to home": "Go to home",
     "Go to io.net API Keys": "Go to io.net API Keys",
     "Go to last page": "Go to last page",
