@@ -364,7 +364,89 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 			return nil, errors.New("field instruction is required")
 		}
 	}
+	if err := validateOpenAIToolNames(textRequest); err != nil {
+		return nil, err
+	}
+	if err := validateOpenAIToolChoice(textRequest); err != nil {
+		return nil, err
+	}
 	return textRequest, nil
+}
+
+func validateOpenAIToolChoice(request *dto.GeneralOpenAIRequest) error {
+	if request == nil || request.ToolChoice == nil {
+		return nil
+	}
+	declared := make(map[string]struct{})
+	for _, tool := range request.Tools {
+		if name := strings.TrimSpace(tool.Function.Name); name != "" {
+			declared[name] = struct{}{}
+		}
+	}
+	for _, message := range request.Messages {
+		for _, tool := range message.Tools {
+			if name := strings.TrimSpace(tool.Function.Name); name != "" {
+				declared[name] = struct{}{}
+			}
+		}
+	}
+	switch choice := request.ToolChoice.(type) {
+	case string:
+		if choice == "required" && len(declared) == 0 {
+			return errors.New("tool_choice=required requires at least one tool")
+		}
+	case map[string]any:
+		choiceType, _ := choice["type"].(string)
+		if choiceType == "function" {
+			function, _ := choice["function"].(map[string]any)
+			name, _ := function["name"].(string)
+			name = strings.TrimSpace(name)
+			if name == "" {
+				return errors.New("tool_choice function name is required")
+			}
+			if _, ok := declared[name]; !ok {
+				return fmt.Errorf("tool_choice references undeclared tool %q", name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateOpenAIToolNames(request *dto.GeneralOpenAIRequest) error {
+	if request == nil {
+		return nil
+	}
+	for _, tool := range request.Tools {
+		if err := validateOpenAIToolName(tool); err != nil {
+			return err
+		}
+	}
+	for _, message := range request.Messages {
+		for _, tool := range message.Tools {
+			if err := validateOpenAIToolName(tool); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateOpenAIToolName(tool dto.ToolCallRequest) error {
+	if tool.Type != "" && tool.Type != "function" {
+		return nil
+	}
+	name := strings.TrimSpace(tool.Function.Name)
+	if name == "" {
+		return errors.New("tool function name is required")
+	}
+	if len(name) > 128 {
+		return errors.New("tool function name exceeds 128 characters")
+	}
+	first := name[0]
+	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+		return errors.New("tool function name must start with a letter or underscore")
+	}
+	return nil
 }
 
 func GetAndValidateGeminiRequest(c *gin.Context) (*dto.GeminiChatRequest, error) {

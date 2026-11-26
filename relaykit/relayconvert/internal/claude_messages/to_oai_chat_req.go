@@ -120,19 +120,24 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 					}
 					openAIMessage.SetMediaContent(systemMediaMessages)
 				} else {
-					systemStr := ""
+					systemParts := make([]string, 0, len(systems))
 					for _, system := range systems {
-						if system.Text != nil {
-							systemStr += *system.Text
+						if system.Text != nil && *system.Text != "" {
+							systemParts = append(systemParts, *system.Text)
 						}
 					}
-					openAIMessage.SetStringContent(systemStr)
+					// Keep block boundaries as separators instead of concatenating the
+					// blocks into a single run-on string. This preserves authored text
+					// while staying compatible with upstreams that only accept a string
+					// system message.
+					openAIMessage.SetStringContent(strings.Join(systemParts, "\n\n"))
 				}
 				openAIMessages = append(openAIMessages, openAIMessage)
 			}
 		}
 	}
 
+	toolNames := make(map[string]string)
 	for _, claudeMessage := range claudeRequest.Messages {
 		openAIMessage := dto.Message{
 			Role: claudeMessage.Role,
@@ -156,14 +161,54 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 						CacheControl: mediaMsg.CacheControl,
 					}
 					mediaMessages = append(mediaMessages, message)
+				case "thinking":
+					if mediaMsg.Thinking != nil && *mediaMsg.Thinking != "" {
+						appendMessageReasoningContent(&openAIMessage, *mediaMsg.Thinking)
+					}
+				case "redacted_thinking":
+					// Redacted thinking is intentionally opaque. There is no
+					// equivalent OpenAI request field, so it cannot be forwarded.
 				case "image":
-					imageData := fmt.Sprintf("data:%s;base64,%s", mediaMsg.Source.MediaType, mediaMsg.Source.Data)
+					imageData := ""
+					if mediaMsg.Source != nil {
+						if mediaMsg.Source.Url != "" {
+							imageData = mediaMsg.Source.Url
+						} else if mediaMsg.Source.Data != nil {
+							imageData = fmt.Sprintf("data:%s;base64,%s", mediaMsg.Source.MediaType, kitutil.Interface2String(mediaMsg.Source.Data))
+						}
+					}
+					if imageData == "" {
+						continue
+					}
 					mediaMessage := dto.MediaContent{
 						Type:     "image_url",
 						ImageUrl: &dto.MessageImageUrl{Url: imageData},
 					}
 					mediaMessages = append(mediaMessages, mediaMessage)
+				case "document":
+					if mediaMsg.Source == nil {
+						continue
+					}
+					fileData := ""
+					if mediaMsg.Source.Url != "" {
+						fileData = mediaMsg.Source.Url
+					} else if mediaMsg.Source.Data != nil {
+						fileData = fmt.Sprintf("data:%s;base64,%s", mediaMsg.Source.MediaType, kitutil.Interface2String(mediaMsg.Source.Data))
+					}
+					if fileData == "" {
+						continue
+					}
+					mediaMessages = append(mediaMessages, dto.MediaContent{
+						Type: "file",
+						File: map[string]any{
+							"filename":  "document.pdf",
+							"file_data": fileData,
+						},
+					})
 				case "tool_use":
+					if mediaMsg.Id != "" && mediaMsg.Name != "" {
+						toolNames[mediaMsg.Id] = mediaMsg.Name
+					}
 					toolCall := dto.ToolCallRequest{
 						ID:   mediaMsg.Id,
 						Type: "function",
@@ -178,13 +223,10 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 						Role:       "tool",
 						ToolCallId: mediaMsg.ToolUseId,
 					}
-					if mediaMsg.IsStringContent() {
-						oaiToolMessage.SetStringContent(mediaMsg.GetStringContent())
-					} else {
-						mediaContents := mediaMsg.ParseMediaContent()
-						encodedJSON, _ := kitutil.Marshal(mediaContents)
-						oaiToolMessage.SetStringContent(string(encodedJSON))
+					if name := toolNames[mediaMsg.ToolUseId]; name != "" {
+						oaiToolMessage.Name = kitutil.GetPointer(name)
 					}
+					oaiToolMessage.SetStringContent(claudeToolResultContent(mediaMsg))
 					openAIMessages = append(openAIMessages, oaiToolMessage)
 				}
 			}
@@ -192,11 +234,14 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 			if len(toolCalls) > 0 {
 				openAIMessage.SetToolCalls(toolCalls)
 			}
-			if len(mediaMessages) > 0 && len(toolCalls) == 0 {
+			// OpenAI assistant messages may carry both user-visible content and
+			// tool_calls. Dropping the content here used to erase the assistant's
+			// text whenever it also called a tool.
+			if len(mediaMessages) > 0 {
 				openAIMessage.SetMediaContent(mediaMessages)
 			}
 		}
-		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 {
+		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 || openAIMessage.ReasoningContent != nil {
 			openAIMessages = append(openAIMessages, openAIMessage)
 		}
 	}
@@ -211,4 +256,43 @@ func requestToJSONString(v interface{}) string {
 		return "{}"
 	}
 	return string(b)
+}
+
+func appendMessageReasoningContent(message *dto.Message, reasoning string) {
+	if reasoning == "" {
+		return
+	}
+	if message.ReasoningContent != nil && strings.TrimSpace(*message.ReasoningContent) != "" {
+		combined := *message.ReasoningContent + "\n\n" + reasoning
+		message.ReasoningContent = &combined
+		return
+	}
+	message.ReasoningContent = kitutil.GetPointer(reasoning)
+}
+
+func claudeToolResultContent(mediaMsg dto.ClaudeMediaMessage) string {
+	if mediaMsg.IsStringContent() {
+		return mediaMsg.GetStringContent()
+	}
+	mediaContents := mediaMsg.ParseMediaContent()
+	textParts := make([]string, 0, len(mediaContents))
+	structured := make([]dto.ClaudeMediaMessage, 0, len(mediaContents))
+	for _, content := range mediaContents {
+		if content.Type == "text" && content.GetText() != "" {
+			textParts = append(textParts, content.GetText())
+			continue
+		}
+		structured = append(structured, content)
+	}
+	if len(structured) == 0 {
+		return strings.Join(textParts, "\n")
+	}
+	if len(textParts) > 0 {
+		structured = append([]dto.ClaudeMediaMessage{{Type: "text", Text: kitutil.GetPointer(strings.Join(textParts, "\n"))}}, structured...)
+	}
+	encodedJSON, err := kitutil.Marshal(structured)
+	if err != nil {
+		return strings.Join(textParts, "\n")
+	}
+	return string(encodedJSON)
 }

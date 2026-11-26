@@ -313,6 +313,11 @@ type Message struct {
 	Reasoning        *string         `json:"reasoning,omitempty"`
 	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallId       string          `json:"tool_call_id,omitempty"`
+	// Tools carries provider-specific dynamic tool declarations attached to a
+	// message (for example a system message). Standard OpenAI Chat Completions
+	// keeps tools at the request level; preserving this field lets protocol
+	// converters forward dynamic declarations instead of silently dropping them.
+	Tools []ToolCallRequest `json:"tools,omitempty"`
 	// CacheControl mirrors Anthropic-style cache_control attached to a chat
 	// message. Kept as raw JSON so unknown shapes parse without error; the
 	// simulated-cache layer only reads the optional ttl field.

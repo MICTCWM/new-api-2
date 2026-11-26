@@ -2,6 +2,7 @@ package oaichat
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -30,16 +31,44 @@ type openRouterRequestReasoning struct {
 func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
 	opts := convmeta.OptionsOf(info)
 	claudeTools := make([]any, 0, len(textRequest.Tools))
-
-	for _, tool := range textRequest.Tools {
+	claudeToolNames := make(map[string]struct{}, len(textRequest.Tools))
+	addClaudeTool := func(tool dto.ToolCallRequest) {
 		if _, ok := tool.Function.Parameters.(map[string]any); !ok && tool.Type != "function" {
-			continue
+			return
 		}
+		name := strings.TrimSpace(tool.Function.Name)
+		if name == "" {
+			return
+		}
+		if _, exists := claudeToolNames[name]; exists {
+			return
+		}
+		claudeToolNames[name] = struct{}{}
 		claudeTools = append(claudeTools, &dto.Tool{
-			Name:        tool.Function.Name,
+			Name:        name,
 			Description: tool.Function.Description,
 			InputSchema: sharedclaude.FunctionParametersToInputSchema(tool.Function.Parameters),
 		})
+	}
+	for _, tool := range textRequest.Tools {
+		addClaudeTool(tool)
+	}
+	// Some compatible providers allow declaring tools inside a system message.
+	// Those declarations are not part of the top-level OpenAI tools array, so
+	// collect them into Claude's request-level tools instead of dropping them.
+	for _, message := range textRequest.Messages {
+		if len(message.Tools) == 0 {
+			continue
+		}
+		if message.Role != "system" {
+			return nil, errors.New("dynamic tools are only supported on system messages")
+		}
+		if !isEmptyOpenAIContent(message.Content) {
+			return nil, errors.New("system message cannot contain both content and tools")
+		}
+		for _, tool := range message.Tools {
+			addClaudeTool(tool)
+		}
 	}
 
 	if textRequest.WebSearchOptions != nil {
@@ -207,44 +236,54 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		switch stop := textRequest.Stop.(type) {
 		case string:
 			claudeRequest.StopSequences = []string{stop}
-		case []interface{}:
-			stopSequences := make([]string, 0)
+		case []string:
+			claudeRequest.StopSequences = stop
+		case []any:
+			stopSequences := make([]string, 0, len(stop))
 			for _, item := range stop {
-				stopSequences = append(stopSequences, item.(string))
+				if value, ok := item.(string); ok {
+					stopSequences = append(stopSequences, value)
+				}
 			}
 			claudeRequest.StopSequences = stopSequences
 		}
 	}
 
-	formatMessages := make([]dto.Message, 0)
-	lastMessage := dto.Message{
-		Role: "tool",
-	}
-	for i, message := range textRequest.Messages {
-		if message.Role == "" {
-			textRequest.Messages[i].Role = "user"
+	formatMessages := make([]dto.Message, 0, len(textRequest.Messages))
+	for _, message := range textRequest.Messages {
+		role := strings.TrimSpace(message.Role)
+		if role == "" {
+			role = "user"
 		}
+		// OpenAI's developer role is the newer spelling of the system
+		// instruction role. Claude only accepts system/user/assistant, so
+		// normalize it before the message reaches the upstream schema.
+		if role == "developer" {
+			role = "system"
+		}
+		if role != "system" && role != "user" && role != "assistant" && role != "tool" {
+			continue
+		}
+
 		fmtMessage := dto.Message{
-			Role:    message.Role,
+			Role:    role,
 			Content: message.Content,
 		}
-		if message.Role == "tool" {
+		if role == "tool" {
 			fmtMessage.ToolCallId = message.ToolCallId
 		}
-		if message.Role == "assistant" && message.ToolCalls != nil {
+		if role == "assistant" && hasOpenAIToolCalls(message.ToolCalls) {
 			fmtMessage.ToolCalls = message.ToolCalls
 		}
-		if lastMessage.Role == message.Role && lastMessage.Role != "tool" {
-			if lastMessage.IsStringContent() && message.IsStringContent() {
-				fmtMessage.SetStringContent(strings.Trim(fmt.Sprintf("%s %s", lastMessage.StringContent(), message.StringContent()), "\""))
-				formatMessages = formatMessages[:len(formatMessages)-1]
-			}
-		}
-		if fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "") {
-			fmtMessage.SetStringContent("...")
+		// Do not invent placeholder text for empty messages. An assistant
+		// message with tool_calls legitimately has no text; empty user/assistant
+		// messages carry no information and are omitted instead of being turned
+		// into "...". Message boundaries between same-role turns are also kept:
+		// Anthropic accepts consecutive same-role turns and combines them itself.
+		if role != "tool" && !hasOpenAIToolCalls(fmtMessage.ToolCalls) && isEmptyOpenAIContent(fmtMessage.Content) {
+			continue
 		}
 		formatMessages = append(formatMessages, fmtMessage)
-		lastMessage = fmtMessage
 	}
 
 	claudeMessages := make([]dto.ClaudeMessage, 0)
@@ -293,39 +332,25 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			Role: message.Role,
 		}
 		if message.Role == "tool" {
+			toolResult := dto.ClaudeMediaMessage{
+				Type:      "tool_result",
+				ToolUseId: message.ToolCallId,
+				Content:   claudeToolResultContentFromOpenAI(message.Content),
+			}
 			if len(claudeMessages) > 0 && claudeMessages[len(claudeMessages)-1].Role == "user" {
 				lastClaudeMessage := claudeMessages[len(claudeMessages)-1]
-				if content, ok := lastClaudeMessage.Content.(string); ok {
-					lastClaudeMessage.Content = []dto.ClaudeMediaMessage{
-						{
-							Type: "text",
-							Text: kitutil.GetPointer[string](content),
-						},
-					}
+				blocks, ok := claudeMessageContentBlocks(lastClaudeMessage.Content)
+				if ok {
+					lastClaudeMessage.Content = append(blocks, toolResult)
+					claudeMessages[len(claudeMessages)-1] = lastClaudeMessage
+					continue
 				}
-				lastClaudeMessage.Content = append(lastClaudeMessage.Content.([]dto.ClaudeMediaMessage), dto.ClaudeMediaMessage{
-					Type:      "tool_result",
-					ToolUseId: message.ToolCallId,
-					Content:   message.Content,
-				})
-				claudeMessages[len(claudeMessages)-1] = lastClaudeMessage
-				continue
 			}
 
 			claudeMessage.Role = "user"
-			claudeMessage.Content = []dto.ClaudeMediaMessage{
-				{
-					Type:      "tool_result",
-					ToolUseId: message.ToolCallId,
-					Content:   message.Content,
-				},
-			}
-		} else if message.IsStringContent() && message.ToolCalls == nil {
-			text := message.StringContent()
-			if text == "" {
-				text = "..."
-			}
-			claudeMessage.Content = text
+			claudeMessage.Content = []dto.ClaudeMediaMessage{toolResult}
+		} else if message.IsStringContent() && !hasOpenAIToolCalls(message.ToolCalls) {
+			claudeMessage.Content = message.StringContent()
 		} else {
 			claudeMediaMessages := make([]dto.ClaudeMediaMessage, 0)
 			for _, mediaMessage := range message.ParseContent() {
@@ -364,7 +389,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				}
 			}
 
-			if message.ToolCalls != nil {
+			if hasOpenAIToolCalls(message.ToolCalls) {
 				for _, toolCall := range message.ParseToolCalls() {
 					inputObj := make(map[string]any)
 					if args := toolCall.Function.Arguments; args != "" {
@@ -397,4 +422,95 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		return nil, sharedclaude.ErrMissingMaxTokens
 	}
 	return &claudeRequest, nil
+}
+
+func hasOpenAIToolCalls(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null" && trimmed != "[]"
+}
+
+func isEmptyOpenAIContent(content any) bool {
+	if content == nil {
+		return true
+	}
+	switch value := content.(type) {
+	case string:
+		return value == ""
+	case []any:
+		return len(value) == 0
+	case []dto.MediaContent:
+		return len(value) == 0
+	case []dto.ClaudeMediaMessage:
+		return len(value) == 0
+	default:
+		return false
+	}
+}
+
+func claudeMessageContentBlocks(content any) ([]dto.ClaudeMediaMessage, bool) {
+	switch value := content.(type) {
+	case nil:
+		return []dto.ClaudeMediaMessage{}, true
+	case string:
+		if value == "" {
+			return []dto.ClaudeMediaMessage{}, true
+		}
+		return []dto.ClaudeMediaMessage{{Type: "text", Text: kitutil.GetPointer(value)}}, true
+	case []dto.ClaudeMediaMessage:
+		return value, true
+	case []any:
+		blocks, err := kitutil.Any2Type[[]dto.ClaudeMediaMessage](value)
+		if err == nil {
+			return blocks, true
+		}
+	}
+	return nil, false
+}
+
+func claudeToolResultContentFromOpenAI(content any) any {
+	switch value := content.(type) {
+	case nil:
+		return ""
+	case string:
+		return value
+	case []any:
+		blocks := make([]dto.ClaudeMediaMessage, 0, len(value))
+		for _, item := range value {
+			part, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch part["type"] {
+			case "text", "input_text":
+				if text, ok := part["text"].(string); ok {
+					blocks = append(blocks, dto.ClaudeMediaMessage{Type: "text", Text: kitutil.GetPointer(text)})
+				}
+			case "image_url":
+				url := ""
+				switch image := part["image_url"].(type) {
+				case string:
+					url = image
+				case map[string]any:
+					url, _ = image["url"].(string)
+				}
+				if url != "" {
+					blocks = append(blocks, dto.ClaudeMediaMessage{Type: "image", Source: &dto.ClaudeMessageSource{Type: "url", Url: url}})
+				}
+			}
+		}
+		if len(blocks) > 0 {
+			return blocks
+		}
+		encoded, err := kitutil.Marshal(value)
+		if err == nil {
+			return string(encoded)
+		}
+		return ""
+	default:
+		encoded, err := kitutil.Marshal(value)
+		if err == nil {
+			return string(encoded)
+		}
+		return fmt.Sprintf("%v", value)
+	}
 }
