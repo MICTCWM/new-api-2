@@ -151,6 +151,7 @@ func RegisterConnection(relayInfo *relaycommon.RelayInfo, username string, input
 	if connectionLogSeq.Add(1)%connectionLogPruneEach == 0 {
 		pruneConnectionLogs()
 	}
+	notifyConnectionLogChange()
 }
 
 func lookupConnection(requestID string) *connectionRecord {
@@ -171,9 +172,12 @@ func lookupConnection(requestID string) *connectionRecord {
 // SetConnectionChannel records the channel selected for the attempt, which may
 // change on auto-group retries; the last one before settlement is what shows.
 func SetConnectionChannel(requestID string, channelID int) {
-	if record := lookupConnection(requestID); record != nil {
-		record.channelID.Store(int64(channelID))
+	record := lookupConnection(requestID)
+	if record == nil {
+		return
 	}
+	record.channelID.Store(int64(channelID))
+	notifyConnectionLogChange()
 }
 
 // MarkConnectionFirstToken flips 等待首 token into 正在流式输出.
@@ -182,13 +186,18 @@ func MarkConnectionFirstToken(requestID string) {
 	if record == nil {
 		return
 	}
-	record.firstToken.CompareAndSwap(0, connectionLogNowMS())
+	if record.firstToken.CompareAndSwap(0, connectionLogNowMS()) {
+		notifyConnectionLogChange()
+	}
 }
 
 func AddConnectionChunk(requestID string) {
-	if record := lookupConnection(requestID); record != nil {
-		record.chunks.Add(1)
+	record := lookupConnection(requestID)
+	if record == nil {
+		return
 	}
+	record.chunks.Add(1)
+	notifyConnectionLogChange()
 }
 
 // SettleConnectionTokens records the real usage once upstream reported it.
@@ -207,6 +216,7 @@ func SettleConnectionTokens(requestID string, inputTokens, outputTokens int) {
 	record.output.Store(int64(outputTokens))
 	record.settled.Store(true)
 	record.outputCountMu.Unlock()
+	notifyConnectionLogChange()
 }
 
 // UpdateConnectionOutputText publishes an estimated output-token count while a
@@ -245,6 +255,9 @@ func UpdateConnectionOutputText(requestID, text, model string, extraTokens int) 
 	if delta > 0 {
 		record.recordOutputCadence(delta, connectionLogNowMS())
 	}
+	// Reached at most once per connectionOutputCountInterval, so the stream
+	// window (not this call) decides the real broadcast rate.
+	notifyConnectionLogChange()
 }
 
 // recordOutputCadence appends a real token delta to the 100ms cadence history.
@@ -304,6 +317,7 @@ func MarkConnectionRetry(requestID string, count int, waitUntilMS int64) {
 	}
 	record.retryCount.Store(int64(count))
 	record.retryWaitUntil.Store(waitUntilMS)
+	notifyConnectionLogChange()
 }
 
 // ClearConnectionRetryWait ends the retry backoff for the next attempt.
@@ -313,6 +327,7 @@ func ClearConnectionRetryWait(requestID string) {
 		return
 	}
 	record.retryWaitUntil.Store(0)
+	notifyConnectionLogChange()
 }
 
 func FinishConnection(requestID string) {
@@ -320,7 +335,9 @@ func FinishConnection(requestID string) {
 	if record == nil {
 		return
 	}
-	record.finishedAt.CompareAndSwap(0, connectionLogNowMS())
+	if record.finishedAt.CompareAndSwap(0, connectionLogNowMS()) {
+		notifyConnectionLogChange()
+	}
 }
 
 func (record *connectionRecord) state() (string, bool) {

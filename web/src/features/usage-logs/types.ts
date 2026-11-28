@@ -518,26 +518,3 @@ export interface ConnectionLogSnapshot {
   node_name: string
   items: ConnectionLogItem[]
 }
-
-export type ConnectionLogProgressItem = Pick<
-  ConnectionLogItem,
-  | 'request_id'
-  | 'state'
-  | 'first_token_at'
-  | 'finished_at'
-  | 'ttft_ms'
-  | 'duration_ms'
-  | 'input_tokens'
-  | 'output_tokens'
-  | 'output_cadence'
-  | 'active'
-  | 'retry_count'
-  | 'retry_wait_ms'
->
-
-export interface ConnectionLogProgressSnapshot {
-  concurrent: number
-  total_input_tokens: number
-  server_time: number
-  items: ConnectionLogProgressItem[]
-}

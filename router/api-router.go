@@ -12,6 +12,18 @@ import (
 )
 
 func SetApiRouter(router *gin.Engine) {
+	// The live connection log is an event stream, so it must not inherit the
+	// gzip middleware (which buffers the whole response) or the global API rate
+	// limit (a polling admin panel would exhaust the per-IP quota and 429 the
+	// whole dashboard). Both routes keep admin auth.
+	connectionLogRoute := router.Group("/api/connection")
+	connectionLogRoute.Use(middleware.RouteTag("api"))
+	connectionLogRoute.Use(middleware.AdminAuth())
+	{
+		connectionLogRoute.GET("/logs", controller.GetConnectionLogs)
+		connectionLogRoute.GET("/logs/stream", controller.StreamConnectionLogs)
+	}
+
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
@@ -26,7 +38,6 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/models", middleware.UserAuth(), controller.DashboardListModels)
 		apiRouter.GET("/status/test", middleware.AdminAuth(), controller.TestStatus)
 		apiRouter.GET("/opencode/queue", middleware.AdminAuth(), controller.GetOpencodeQueue)
-		apiRouter.GET("/connection/logs", middleware.AdminAuth(), controller.GetConnectionLogs)
 		apiRouter.GET("/notice", controller.GetNotice)
 		apiRouter.GET("/user-agreement", controller.GetUserAgreement)
 		apiRouter.GET("/privacy-policy", controller.GetPrivacyPolicy)

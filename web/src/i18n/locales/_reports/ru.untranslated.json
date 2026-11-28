@@ -49,7 +49,7 @@
   "Paste Command Code user_* keys, one per line. Up to 50 keys per import.": "Paste Command Code user_* keys, one per line. Up to 50 keys per import.",
   "Command Go user_* key for the account pool": "Command Go user_* key for the account pool",
   "Each channel holds one account pool. Manage accounts from Pool Management.": "Each channel holds one account pool. Manage accounts from Pool Management.",
-  "Enter Command Go user_* key(s), one per line for batch creation": "Enter Command Go user_* key(s), one per line for batch creation",
+  "Enter a single user_* key as a placeholder; import remaining accounts via Pool Management after creation. The key may be left empty.": "Enter a single user_* key as a placeholder; import remaining accounts via Pool Management after creation. The key may be left empty.",
   "Command Go uses a fixed endpoint and only supports deepseek/deepseek-v4.1-flash. Each channel holds an account pool managed from Pool Management, and every account has 5-hour, weekly, and monthly quota windows.": "Command Go uses a fixed endpoint and only supports deepseek/deepseek-v4.1-flash. Each channel holds an account pool managed from Pool Management, and every account has 5-hour, weekly, and monthly quota windows.",
   "Command Go supports deepseek/deepseek-v4.1-flash and model mapping source models": "Command Go supports deepseek/deepseek-v4.1-flash and model mapping source models",
   "Command Go must include deepseek/deepseek-v4.1-flash": "Command Go must include deepseek/deepseek-v4.1-flash",

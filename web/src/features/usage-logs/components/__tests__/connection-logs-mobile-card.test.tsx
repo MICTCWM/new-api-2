@@ -10,8 +10,14 @@ import { getConnectionLogs } from '../../api'
 import type { ConnectionLogItem, ConnectionLogSnapshot } from '../../types'
 import { ConnectionLogsPanel } from '../connection-logs-panel'
 import { UsageLogsProvider } from '../usage-logs-provider'
+import { resetConnectionLogStream } from './connection-log-stream-mock'
 
 vi.mock('../../api', () => ({ getConnectionLogs: vi.fn() }))
+// The panel is pushed over SSE; these tests inject snapshots as pushed frames.
+vi.mock(
+  '../../use-connection-log-stream',
+  () => import('./connection-log-stream-mock')
+)
 
 const mockGetConnectionLogs = vi.mocked(getConnectionLogs)
 const originalMatchMedia = window.matchMedia
@@ -152,6 +158,7 @@ function renderPanel() {
 describe('connection logs mobile cards', () => {
   beforeEach(() => {
     mockGetConnectionLogs.mockReset()
+    resetConnectionLogStream()
     installMobileMatchMedia()
     originalTranslationBundle = structuredClone(
       i18next.getResourceBundle('en', 'translation') ?? {}

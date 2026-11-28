@@ -7,8 +7,18 @@ import { getConnectionLogs } from '../../api'
 import type { ConnectionLogItem, ConnectionLogSnapshot } from '../../types'
 import { ConnectionLogsPanel } from '../connection-logs-panel'
 import { UsageLogsProvider } from '../usage-logs-provider'
+import {
+  failConnectionLogStream,
+  pushConnectionLogSnapshot,
+  resetConnectionLogStream,
+} from './connection-log-stream-mock'
 
 vi.mock('../../api', () => ({ getConnectionLogs: vi.fn() }))
+// The panel is pushed over SSE; these tests inject snapshots as pushed frames.
+vi.mock(
+  '../../use-connection-log-stream',
+  () => import('./connection-log-stream-mock')
+)
 
 const mockGetConnectionLogs = vi.mocked(getConnectionLogs)
 
@@ -74,6 +84,7 @@ function renderPanel() {
 describe('connection logs panel', () => {
   beforeEach(() => {
     mockGetConnectionLogs.mockReset()
+    resetConnectionLogStream()
     originalTranslationBundle = structuredClone(
       i18next.getResourceBundle('en', 'translation') ?? {}
     )
@@ -96,6 +107,8 @@ describe('connection logs panel', () => {
         'No connections right now': 'No connections right now',
         'Failed to load logs': 'Failed to load logs',
         Refresh: 'Refresh',
+        Live: 'Live',
+        'Reconnecting to live stream': 'Reconnecting to live stream',
         'Auto refresh: {{seconds}}s': 'Auto refresh: {{seconds}}s',
         'Live connections on this node': 'Live connections on this node',
         'Retry ×{{count}}': 'Retry ×{{count}}',
@@ -463,7 +476,7 @@ describe('connection logs panel', () => {
     expect(screen.queryByText('alice')).not.toBeInTheDocument()
   })
 
-  test('shows the five second auto refresh hint', async () => {
+  test('labels the panel as live instead of showing a polling hint', async () => {
     mockGetConnectionLogs.mockResolvedValue({
       success: true,
       data: snapshot([BASE_ITEM]),
@@ -471,7 +484,61 @@ describe('connection logs panel', () => {
 
     renderPanel()
 
-    expect(await screen.findByText('Auto refresh: 5s')).toBeInTheDocument()
+    expect(await screen.findByText('alice')).toBeInTheDocument()
+    expect(screen.getByText('Live')).toBeInTheDocument()
+    expect(screen.queryByText('Auto refresh: 5s')).not.toBeInTheDocument()
+  })
+
+  test('shows a new request as soon as its frame arrives', async () => {
+    mockGetConnectionLogs.mockResolvedValue({
+      success: true,
+      data: snapshot([BASE_ITEM]),
+    })
+
+    renderPanel()
+    expect(await screen.findByText('alice')).toBeInTheDocument()
+
+    // No polling involved: the pushed frame alone must add the row.
+    act(() => {
+      pushConnectionLogSnapshot(
+        snapshot([
+          BASE_ITEM,
+          {
+            ...BASE_ITEM,
+            request_id: 'req-fresh',
+            username: 'dave',
+            started_at: BASE_ITEM.started_at + 2000,
+          },
+        ])
+      )
+    })
+
+    expect(await screen.findByText('dave')).toBeInTheDocument()
+    expect(screen.getByText('alice')).toBeInTheDocument()
+    expect(screen.getByTestId('connection-concurrent')).toHaveTextContent('2')
+  })
+
+  test('polls the snapshot endpoint when the live stream gave up', async () => {
+    mockGetConnectionLogs.mockResolvedValue({
+      success: true,
+      data: snapshot([BASE_ITEM]),
+    })
+
+    renderPanel()
+    expect(await screen.findByText('alice')).toBeInTheDocument()
+
+    mockGetConnectionLogs.mockResolvedValue({
+      success: true,
+      data: snapshot([{ ...BASE_ITEM, username: 'polled-user' }]),
+    })
+    act(() => {
+      failConnectionLogStream()
+    })
+
+    // The degraded panel keeps updating from the rate-limit-exempt snapshot
+    // endpoint instead of leaving the admin with a frozen list.
+    expect(await screen.findByText('polled-user')).toBeInTheDocument()
+    expect(screen.getByText('Auto refresh: 10s')).toBeInTheDocument()
   })
 
   test('renders the empty state when nothing is connected', async () => {

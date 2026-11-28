@@ -10,6 +10,7 @@
   "Failed to load accounts": "Failed to load accounts",
   "Paste Command Code user_* keys, one per line. Up to 50 keys per import.": "Paste Command Code user_* keys, one per line. Up to 50 keys per import.",
   "Command Go user_* key for the account pool": "Command Go user_* key for the account pool",
+  "Enter a single user_* key as a placeholder; import remaining accounts via Pool Management after creation. The key may be left empty.": "Enter a single user_* key as a placeholder; import remaining accounts via Pool Management after creation. The key may be left empty.",
   "Command Go uses a fixed endpoint and only supports deepseek/deepseek-v4.1-flash. Each channel holds an account pool managed from Pool Management, and every account has 5-hour, weekly, and monthly quota windows.": "Command Go uses a fixed endpoint and only supports deepseek/deepseek-v4.1-flash. Each channel holds an account pool managed from Pool Management, and every account has 5-hour, weekly, and monthly quota windows.",
   "Command Go supports deepseek/deepseek-v4.1-flash and model mapping source models": "Command Go supports deepseek/deepseek-v4.1-flash and model mapping source models",
   "Every account with an error status in this pool will be permanently removed. This action cannot be undone.": "Every account with an error status in this pool will be permanently removed. This action cannot be undone.",

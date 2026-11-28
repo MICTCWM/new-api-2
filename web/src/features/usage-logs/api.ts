@@ -26,7 +26,6 @@ import type {
   GetLogStatsResponse,
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
-  ConnectionLogProgressSnapshot,
   ConnectionLogSnapshot,
   UserInfo,
 } from './types'
@@ -117,27 +116,19 @@ export const getUserTaskLogs = (params: GetTaskLogsParams) =>
 // Live Connection Logs API
 // ============================================================================
 
+/**
+ * One-shot snapshot of the live connections. The panel normally receives these
+ * over the SSE stream; this stays as the fallback poll when the stream is
+ * unavailable. It skips the global error toast so a degraded poll cannot flood
+ * the screen with notifications.
+ */
 export async function getConnectionLogs(): Promise<{
   success: boolean
   data: ConnectionLogSnapshot
-}>
-export async function getConnectionLogs(progress: true): Promise<{
-  success: boolean
-  data: ConnectionLogProgressSnapshot
-}>
-export async function getConnectionLogs(progress = false): Promise<{
-  success: boolean
-  data: ConnectionLogSnapshot | ConnectionLogProgressSnapshot
 }> {
-  if (progress) {
-    const res = await api.get<{
-      success: boolean
-      data: ConnectionLogProgressSnapshot
-    }>('/api/connection/logs?progress=true')
-    return res.data
-  }
   const res = await api.get<{ success: boolean; data: ConnectionLogSnapshot }>(
-    '/api/connection/logs'
+    '/api/connection/logs',
+    { skipErrorHandler: true }
   )
   return res.data
 }

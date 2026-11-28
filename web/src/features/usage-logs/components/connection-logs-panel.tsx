@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Activity, CircleDashed, RefreshCw, Waves } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -11,19 +11,18 @@ import { formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { getConnectionLogs } from '../api'
-import type { ConnectionLogItem } from '../types'
+import type { ConnectionLogItem, ConnectionLogSnapshot } from '../types'
+import { useConnectionLogStream } from '../use-connection-log-stream'
 import {
   ConnectionLogsTable,
   type ConnectionViewMode,
 } from './connection-logs-table'
 import { ConnectionLogsViewToggle } from './connection-logs-view-toggle'
 
-// Token counts and the real cadence strip need frequent, small refreshes, so
-// progress polls well below the five-second log refresh. 150ms is fast enough
-// that a burst shows up almost as it happens; at 250ms the strip was always a
-// quarter second behind the tokens it was supposed to be reporting.
-const REFRESH_INTERVAL_MS = 5000
-const LIVE_PROGRESS_INTERVAL_MS = 150
+// The panel is pushed over SSE, so a snapshot appears the moment a request
+// starts. This interval is only the degraded path: when the stream keeps
+// failing the panel polls the rate-limit-exempt snapshot endpoint instead.
+const FALLBACK_POLL_INTERVAL_MS = 10_000
 const EMPTY_ITEMS: ConnectionLogItem[] = []
 const VIEW_MODE_STORAGE_KEY = 'connection_logs_view_mode'
 
@@ -68,19 +67,35 @@ function ConnectionLogsFrame(props: { role?: 'alert'; children: ReactNode }) {
 }
 
 /**
+ * Picks the fresher of the pushed and the fetch-on-demand snapshot. The manual
+ * refresh control and the fallback poll both land in the query, so the newest
+ * arrival wins instead of a source always overriding the other.
+ */
+function pickLiveSnapshot(
+  pushed: ConnectionLogSnapshot | null,
+  pushedAt: number | null,
+  fetched: ConnectionLogSnapshot | null | undefined,
+  fetchedAt: number
+): ConnectionLogSnapshot | null {
+  if (!fetched) return pushed
+  if (!pushed) return fetched
+  return fetchedAt > (pushedAt ?? 0) ? fetched : pushed
+}
+
+/**
  * Mobile header: one 24px line replaces the desktop title block, the wrapping
  * node/refresh copy and the two tall stat cards, so the list starts roughly
  * eighty pixels higher on a 320px viewport.
  */
 function ConnectionLogsMobileHeader(props: {
   nodeName?: string
+  liveLabel: string
   refreshing: boolean
   onRefresh: () => void
   viewMode: ConnectionViewMode
   onViewModeChange: (mode: ConnectionViewMode) => void
 }) {
   const { t } = useTranslation()
-  const refreshSeconds = REFRESH_INTERVAL_MS / 1000
 
   return (
     <CardHeader
@@ -99,11 +114,8 @@ function ConnectionLogsMobileHeader(props: {
           {props.nodeName}
         </span>
       ) : null}
-      <span
-        className='text-muted-foreground ml-auto shrink-0 font-mono text-[10px] tabular-nums'
-        title={t('Auto refresh: {{seconds}}s', { seconds: refreshSeconds })}
-      >
-        {refreshSeconds}s
+      <span className='text-muted-foreground ml-auto min-w-0 shrink-0 truncate font-mono text-[10px] tabular-nums'>
+        {props.liveLabel}
       </span>
       <ConnectionLogsViewToggle
         value={props.viewMode}
@@ -182,57 +194,77 @@ export function ConnectionLogsPanel() {
     }
     return 'list'
   })
-  const logsQuery = useQuery({
+  const stream = useConnectionLogStream()
+  // One snapshot query with three jobs: the mount fetch covers the moment
+  // before the stream handshake completes, the refresh control fetches on
+  // demand, and when the stream keeps failing this becomes the slow polling
+  // fallback. It never toasts on failure, so a degraded panel stays quiet.
+  const snapshotQuery = useQuery({
     queryKey: ['usage-logs', 'connection-logs'],
     queryFn: () => getConnectionLogs(),
-    refetchInterval: REFRESH_INTERVAL_MS,
-    staleTime: REFRESH_INTERVAL_MS - 1000,
+    refetchInterval: stream.fallback ? FALLBACK_POLL_INTERVAL_MS : false,
+    staleTime: FALLBACK_POLL_INTERVAL_MS - 1000,
     retry: false,
   })
-  const progressQuery = useQuery({
-    queryKey: ['usage-logs', 'connection-log-progress'],
-    queryFn: () => getConnectionLogs(true),
-    refetchInterval: LIVE_PROGRESS_INTERVAL_MS,
-    staleTime: 0,
-    retry: false,
-  })
-  const snapshot = logsQuery.data?.data
-  const progress = progressQuery.data?.data
-  const progressByRequestID = new Map(
-    (progress?.items ?? []).map((item) => [item.request_id, item])
+  const { refetch: refetchSnapshot } = snapshotQuery
+  useEffect(() => {
+    // Switching to the fallback must fetch at once, not after one interval;
+    // keeping the same query key means the last snapshot stays on screen.
+    if (stream.fallback) void refetchSnapshot()
+  }, [stream.fallback, refetchSnapshot])
+  const polledSnapshot = snapshotQuery.data?.data
+  const snapshot = pickLiveSnapshot(
+    stream.snapshot,
+    stream.receivedAt,
+    polledSnapshot,
+    snapshotQuery.dataUpdatedAt
   )
-  const items = (snapshot?.items ?? EMPTY_ITEMS).map((item) => {
-    const liveItem = progressByRequestID.get(item.request_id)
-    return liveItem ? { ...item, ...liveItem } : item
-  })
-  const concurrentValue = formatNumber(
-    progress?.concurrent ?? snapshot?.concurrent ?? null
-  )
-  const totalInputValue = formatNumber(
-    progress?.total_input_tokens ?? snapshot?.total_input_tokens ?? null
-  )
+  const fromStream = snapshot != null && snapshot === stream.snapshot
+  const items = snapshot?.items ?? EMPTY_ITEMS
+  const concurrentValue = formatNumber(snapshot?.concurrent ?? null)
+  const totalInputValue = formatNumber(snapshot?.total_input_tokens ?? null)
+  const nodeName = snapshot?.node_name
+  const clockOffset =
+    snapshot == null
+      ? null
+      : snapshot.server_time -
+        (fromStream ? (stream.receivedAt ?? 0) : snapshotQuery.dataUpdatedAt)
+  const refreshing = snapshotQuery.isFetching
+
+  let liveLabel = t('Reconnecting to live stream')
+  if (stream.fallback) {
+    liveLabel = t('Auto refresh: {{seconds}}s', {
+      seconds: FALLBACK_POLL_INTERVAL_MS / 1000,
+    })
+  } else if (stream.connected) {
+    liveLabel = t('Live')
+  }
 
   let detail: ReactNode
-  if (logsQuery.isLoading) {
-    detail = <ConnectionLogsFrame>{t('Loading')}</ConnectionLogsFrame>
-  } else if (logsQuery.isError) {
-    detail = (
-      <ConnectionLogsFrame role='alert'>
-        {t('Failed to load logs')}
-      </ConnectionLogsFrame>
-    )
+  if (snapshot == null) {
+    if (snapshotQuery.isError) {
+      detail = (
+        <ConnectionLogsFrame role='alert'>
+          {t('Failed to load logs')}
+        </ConnectionLogsFrame>
+      )
+    } else if (!stream.connected && !stream.fallback) {
+      detail = (
+        <ConnectionLogsFrame>
+          {t('Reconnecting to live stream')}
+        </ConnectionLogsFrame>
+      )
+    } else {
+      detail = <ConnectionLogsFrame>{t('Loading')}</ConnectionLogsFrame>
+    }
   } else {
     detail = (
       <ConnectionLogsTable
         items={items}
         viewMode={viewMode}
-        // The five-second snapshot anchors the node clock; progress polls only
-        // refresh values, so the client keeps ticking from this offset.
-        clockOffset={
-          snapshot == null
-            ? null
-            : snapshot.server_time - logsQuery.dataUpdatedAt
-        }
+        // Each frame carries the node clock, so the client keeps ticking from
+        // the offset of the newest one.
+        clockOffset={clockOffset}
       />
     )
   }
@@ -246,13 +278,18 @@ export function ConnectionLogsPanel() {
     }
   }
 
+  const handleRefresh = () => {
+    void snapshotQuery.refetch()
+  }
+
   if (isMobile) {
     return (
       <Card className='h-full min-h-0 gap-0 overflow-hidden py-0'>
         <ConnectionLogsMobileHeader
-          nodeName={snapshot?.node_name}
-          refreshing={logsQuery.isFetching}
-          onRefresh={() => void logsQuery.refetch()}
+          nodeName={nodeName}
+          liveLabel={liveLabel}
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
           viewMode={viewMode}
           onViewModeChange={handleViewModeChange}
         />
@@ -279,11 +316,11 @@ export function ConnectionLogsPanel() {
           <Button
             variant='ghost'
             size='sm'
-            onClick={() => void logsQuery.refetch()}
-            disabled={logsQuery.isFetching}
+            onClick={handleRefresh}
+            disabled={refreshing}
           >
             <RefreshCw
-              className={cn('size-3.5', logsQuery.isFetching && 'animate-spin')}
+              className={cn('size-3.5', refreshing && 'animate-spin')}
               aria-hidden='true'
             />
             {t('Refresh')}
@@ -291,17 +328,13 @@ export function ConnectionLogsPanel() {
         </CardAction>
         <div className='text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs'>
           <span>{t('Live connections on this node')}</span>
-          {snapshot?.node_name ? (
-            <span className='font-mono'>{snapshot.node_name}</span>
-          ) : null}
+          {nodeName ? <span className='font-mono'>{nodeName}</span> : null}
           <span
             className='flex items-center gap-1'
             title={t('New connections enter on the right')}
           >
             <CircleDashed className='size-3.5' aria-hidden='true' />
-            {t('Auto refresh: {{seconds}}s', {
-              seconds: REFRESH_INTERVAL_MS / 1000,
-            })}
+            {liveLabel}
           </span>
         </div>
       </CardHeader>
